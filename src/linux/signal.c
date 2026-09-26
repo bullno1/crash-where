@@ -1,0 +1,98 @@
+/**
+ * @file linux/signal.c
+ * Crash signal handlers for the game process.
+ *
+ * The handler copies what the watcher needs into the shared region,
+ * sends one message, waits for the watcher to finish, then lets the
+ * signal kill the process. It uses no heap, no locks, and no library
+ * calls beyond `memcpy` and raw syscalls.
+ */
+#include <signal.h>
+#include <stdatomic.h>
+#include <stdbool.h>
+#include <stdint.h>
+#include <string.h>
+#include <unistd.h>
+
+#include "linux/platform.h"
+
+#define CW_ALT_STACK_SIZE (64u * 1024u)
+#define CW_UNKNOWN_STACK  (64u * 1024u)
+#define CW_REPLY_TIMEOUT  30000
+
+static uint8_t alt_stack[CW_ALT_STACK_SIZE];
+
+static const int signals[] = { SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT, SIGTRAP };
+
+static uintptr_t
+context_sp(const ucontext_t* uc) {
+#if defined(__x86_64__)
+	return (uintptr_t)uc->uc_mcontext.gregs[REG_RSP];
+#elif defined(__aarch64__)
+	return (uintptr_t)uc->uc_mcontext.sp;
+#else
+#error "unsupported architecture"
+#endif
+}
+
+static void
+on_signal(int signo, siginfo_t* si, void* ctx) {
+	cw_crash_t* crash = &cw_linux.region->crash;
+
+	/* A second crashing thread parks here; the first one owns the record. */
+	uint32_t expected = 0;
+	if (!atomic_compare_exchange_strong(&crash->state, &expected, 2)) {
+		for (;;) {
+			pause();
+		}
+	}
+
+	crash->signo = signo;
+	crash->tid = gettid();
+	memcpy(&crash->si, si, sizeof(*si));
+	memcpy(&crash->uc, ctx, sizeof(ucontext_t));
+
+	/*
+	 * Copy [sp, top). The main thread's bounds are known from init. For
+	 * any other thread the prototype copies a fixed amount and accepts
+	 * that reading past the top of a small stack kills the process here;
+	 * per-thread bounds are a later addition.
+	 */
+	uintptr_t sp = context_sp(&crash->uc);
+	bool on_main_stack = sp >= cw_linux.main_stack_lo && sp < cw_linux.main_stack_hi;
+	uintptr_t top = on_main_stack ? cw_linux.main_stack_hi : sp + CW_UNKNOWN_STACK;
+	size_t len = top - sp;
+	if (len > CW_STACK_CAP) {
+		len = CW_STACK_CAP;
+	}
+	memcpy(crash->stack, (const void*)sp, len);
+	crash->sp = sp;
+	crash->stack_top = top;
+	crash->stack_len = len;
+	atomic_store(&crash->state, 1);
+
+	/* A failed send means the watcher is gone; do not wait for a reply. */
+	if (cw_send_msg(cw_linux.sock, CW_MSG_CRASH, 0)) {
+		cw_msg_t reply;
+		cw_recv_msg(cw_linux.sock, &reply, CW_REPLY_TIMEOUT);
+	}
+
+	struct sigaction dfl = { .sa_handler = SIG_DFL };
+	sigaction(signo, &dfl, NULL);
+	raise(signo);
+}
+
+void
+cw_signal_install(void) {
+	stack_t ss = { .ss_sp = alt_stack, .ss_size = sizeof(alt_stack) };
+	struct sigaction sa = {
+		.sa_sigaction = on_signal,
+		.sa_flags = SA_SIGINFO | SA_ONSTACK,
+	};
+
+	sigaltstack(&ss, NULL);
+	sigemptyset(&sa.sa_mask);
+	for (size_t i = 0; i < sizeof(signals) / sizeof(signals[0]); ++i) {
+		sigaction(signals[i], &sa, NULL);
+	}
+}
