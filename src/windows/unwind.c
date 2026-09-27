@@ -164,7 +164,7 @@ exception_name(DWORD code) {
 	case EXCEPTION_FLT_INVALID_OPERATION: return "EXCEPTION_FLT_INVALID_OPERATION";
 	case EXCEPTION_NONCONTINUABLE_EXCEPTION: return "EXCEPTION_NONCONTINUABLE_EXCEPTION";
 	case CW_STATUS_CPP_EXCEPTION:         return "CPP_EXCEPTION";
-	case CW_STATUS_ABORT:                 return "SIGABRT";
+	case CW_STATUS_ABORT:                 return "ABORT";
 	default:                              return NULL;
 	}
 }

@@ -14,7 +14,7 @@
 
 #include "internal.h"
 
-/** Status a fast-fail `abort` ends the process with; reported as "SIGABRT". */
+/** Status a fast-fail `abort` ends the process with; reported as "ABORT". */
 #define CW_STATUS_ABORT         STATUS_STACK_BUFFER_OVERRUN
 /** Exception code of a C++ `throw` in MSVC-compiled code. */
 #define CW_STATUS_CPP_EXCEPTION 0xE06D7363u

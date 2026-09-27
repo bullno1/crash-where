@@ -21,11 +21,12 @@
 #if defined(_WIN32)
 #	define TEST_EXC_SEGV           "EXCEPTION_ACCESS_VIOLATION"
 #	define TEST_EXC_STACK_OVERFLOW "EXCEPTION_STACK_OVERFLOW"
+#	define TEST_EXC_ABORT          "ABORT"
 #else
 #	define TEST_EXC_SEGV           "SIGSEGV"
 #	define TEST_EXC_STACK_OVERFLOW "SIGSEGV"
+#	define TEST_EXC_ABORT          "SIGABRT"
 #endif
-#define TEST_EXC_ABORT "SIGABRT"
 
 /**
  * How a child process ended.
