@@ -111,7 +111,8 @@ typedef struct {
 /**
  * Upload transport hooks.
  *
- * Optional; a `NULL` cw_config_t::uploader selects the built-in transport.
+ * Optional; with a `NULL` cw_config_t::uploader every report stays in the
+ * report directory and nothing is sent.
  *
  * The callbacks run in a process owned by the library, never in the game
  * process. They cannot rely on anything the game initialized, and the
@@ -178,7 +179,7 @@ typedef struct {
 	const char* report_dir;  /**< Directory for pending reports, or `NULL` for the platform default. */
 
 	const cw_auth_t* auth;         /**< Storefront authentication, or `NULL` for unauthenticated reports. */
-	const cw_uploader_t* uploader; /**< Upload transport, or `NULL` for the built-in one. */
+	const cw_uploader_t* uploader; /**< Upload transport, or `NULL` to keep reports on disk unsent. */
 
 	/**
 	 * Diagnostic log sink.

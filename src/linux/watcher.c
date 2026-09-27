@@ -61,17 +61,22 @@ resolve_report_dir(char* out, size_t cap) {
 	return len > 0 && (size_t)len < cap;
 }
 
-static void
-write_crash_report(pid_t game, const char* report_dir) {
+/**
+ * @param path  Receives the envelope path on success.
+ * @return `true` when the envelope was written.
+ */
+static bool
+write_crash_report(pid_t game, const char* report_dir, char* path, size_t cap) {
 	static cw_crash_info_t info;
 	info = (cw_crash_info_t){ .main_module = -1 };
 	if (!cw_unwind(game, &cw_linux.region->crash, &info)) {
 		cw_log(CW_LOG_WARN, "unwind produced no frames");
 	}
-	char path[CW_STR_CAP + 64];
-	if (cw_write_envelope(report_dir, &info, &cw_linux.region->common, path, sizeof(path))) {
-		cw_log(CW_LOG_INFO, "report written to %s", path);
+	if (!cw_write_envelope(report_dir, &info, &cw_linux.region->common, path, cap)) {
+		return false;
 	}
+	cw_log(CW_LOG_INFO, "report written to %s", path);
+	return true;
 }
 
 /**
@@ -88,6 +93,7 @@ write_killed_report(const char* report_dir) {
 	char path[CW_STR_CAP + 64];
 	if (cw_write_envelope(report_dir, &info, &cw_linux.region->common, path, sizeof(path))) {
 		cw_log(CW_LOG_INFO, "report written to %s", path);
+		cw_upload_report(path);
 	}
 }
 
@@ -118,11 +124,17 @@ cw_watch(pid_t game, int sock, const char* report_dir) {
 			cw_msg_t msg;
 			if (read(sock, &msg, sizeof(msg)) == (ssize_t)sizeof(msg)) {
 				switch (msg.type) {
-				case CW_MSG_CRASH:
-					write_crash_report(game, report_dir);
+				case CW_MSG_CRASH: {
+					/* Reply first: the game is parked until it hears back. */
+					char path[CW_STR_CAP + 64];
+					bool written = write_crash_report(game, report_dir, path, sizeof(path));
 					crashed = true;
 					cw_send_msg(sock, CW_MSG_DONE, 0);
+					if (written) {
+						cw_upload_report(path);
+					}
 					break;
+				}
 				case CW_MSG_SHUTDOWN:
 					shutdown = true;
 					result = msg.value;

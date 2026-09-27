@@ -1,6 +1,7 @@
 add_library(cw STATIC
 	core.c
 	envelope.c
+	upload.c
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	target_sources(cw PRIVATE

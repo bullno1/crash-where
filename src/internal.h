@@ -73,6 +73,7 @@ typedef struct {
 	char channel[64];
 	char endpoint[CW_STR_CAP];
 	char report_dir[CW_STR_CAP];
+	cw_uploader_t uploader;    /**< Copy of the caller's uploader; `cfg.uploader` points here or is `NULL`. */
 	cw_shared_t* shared;       /**< Mapped region, or `NULL` when inactive. */
 	bool initialized;          /**< cw_init() has run, whatever the outcome. */
 	bool active;               /**< Capture is armed in this process. */
@@ -162,5 +163,15 @@ cw_write_envelope(
 	const char* report_dir, const cw_crash_info_t* info,
 	const cw_shared_t* shared, char* out_path, size_t cap
 );
+
+/**
+ * Hand one written envelope to the uploader.
+ *
+ * Delivered and rejected envelopes are deleted; failed ones stay in
+ * `pending/`. Without an uploader the file is left where it is and a
+ * warning is logged.
+ */
+void
+cw_upload_report(const char* path);
 
 #endif /* CW_INTERNAL_H */

@@ -92,6 +92,10 @@ cw_init(const cw_config_t* cfg) {
 	cw_ctx.cfg.channel = cw_ctx.channel;
 	cw_ctx.cfg.endpoint = cw_ctx.endpoint;
 	cw_ctx.cfg.report_dir = cfg->report_dir != NULL ? cw_ctx.report_dir : NULL;
+	if (cfg->uploader != NULL) {
+		cw_ctx.uploader = *cfg->uploader;
+		cw_ctx.cfg.uploader = &cw_ctx.uploader;
+	}
 
 	const char* disable = getenv("CW_DISABLE");
 	if (disable != NULL && strcmp(disable, "1") == 0) {

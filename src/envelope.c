@@ -249,7 +249,9 @@ cw_write_envelope(
 	const char* exe_build_id = info->main_module >= 0 ? info->modules[info->main_module].build_id : "";
 	uint64_t fp = fingerprint(info);
 	long long now = (long long)time(NULL);
-	snprintf(out_path, cap, "%s/pending/%lld_%016" PRIx64 ".json", report_dir, now, fp);
+	char uuid[37];
+	make_uuid(uuid);
+	snprintf(out_path, cap, "%s/pending/%lld_%016" PRIx64 "_%s.json", report_dir, now, fp, uuid);
 	char tmp_path[CW_STR_CAP + 64];
 	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", out_path);
 
@@ -258,8 +260,6 @@ cw_write_envelope(
 		cw_log(CW_LOG_ERROR, "cannot open %s", tmp_path);
 		return false;
 	}
-	char uuid[37];
-	make_uuid(uuid);
 
 	fputs("{\"schema\":2,\"report_id\":", f);
 	put_str(f, uuid, sizeof(uuid));
