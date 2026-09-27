@@ -86,6 +86,15 @@ CW_SCENARIO(null_write) {
 	level_three(write_null);
 }
 
+CW_SCENARIO(null_write_displaced) {
+	cw_set_state("mode", "null_write_displaced");
+	record_addr("base", test_image_base());
+	record_addr("fn0", (uintptr_t)write_null);
+	test_displace_crash_handler();
+	cw_heartbeat();
+	level_three(write_null);
+}
+
 CW_SCENARIO(null_write_leaf) {
 	cw_set_state("mode", "null_write_leaf");
 	record_addr("base", test_image_base());
@@ -260,6 +269,20 @@ BTEST(crash, null_write) {
 	char path[512];
 	pending_path(run, ev, path, sizeof(path));
 	BTEST_EXPECT_EX(!file_exists(path), "%s still exists after a successful upload", path);
+}
+
+BTEST(crash, null_write_displaced) {
+	if (!test_displace_crash_handler()) {
+		BLOG_WARN("skipped: no crash handler recovery on this platform");
+		return;
+	}
+	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(null_write_displaced));
+	BTEST_ASSERT(run != NULL);
+	BTEST_EXPECT(run->exit.signaled);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	yyjson_doc* ev = run->events[0];
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), TEST_EXC_SEGV) == 0);
+	check_frames(ev, true);
 }
 
 BTEST(crash, null_write_leaf) {

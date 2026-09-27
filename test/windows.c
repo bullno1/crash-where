@@ -132,3 +132,15 @@ bool
 test_under_wine(void) {
 	return GetProcAddress(GetModuleHandleA("ntdll.dll"), "wine_get_version") != NULL;
 }
+
+static LONG WINAPI
+inert_filter(EXCEPTION_POINTERS* ep) {
+	(void)ep;
+	return EXCEPTION_CONTINUE_SEARCH;
+}
+
+bool
+test_displace_crash_handler(void) {
+	SetUnhandledExceptionFilter(inert_filter);
+	return true;
+}

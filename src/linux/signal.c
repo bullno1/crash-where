@@ -7,6 +7,7 @@
  * signal kill the process. It uses no heap, no locks, and no library
  * calls beyond `memcpy` and raw syscalls.
  */
+#include <dlfcn.h>
 #include <errno.h>
 #include <signal.h>
 #include <stdatomic.h>
@@ -25,6 +26,19 @@
 static uint8_t alt_stack[CW_ALT_STACK_SIZE];
 
 static const int signals[] = { SIGSEGV, SIGBUS, SIGFPE, SIGILL, SIGABRT, SIGTRAP };
+
+const char*
+cw_signal_name(int signo) {
+	switch (signo) {
+	case SIGSEGV: return "SIGSEGV";
+	case SIGBUS:  return "SIGBUS";
+	case SIGFPE:  return "SIGFPE";
+	case SIGILL:  return "SIGILL";
+	case SIGABRT: return "SIGABRT";
+	case SIGTRAP: return "SIGTRAP";
+	default:      return "SIGNAL";
+	}
+}
 
 static uintptr_t
 context_sp(const ucontext_t* uc) {
@@ -127,5 +141,30 @@ cw_install_signal_handler(void) {
 	sigemptyset(&sa.sa_mask);
 	for (size_t i = 0; i < sizeof(signals) / sizeof(signals[0]); ++i) {
 		sigaction(signals[i], &sa, NULL);
+	}
+}
+
+/**
+ * Detection only. A managed runtime installs its own SIGSEGV handler
+ * on top of ours and chains to it for faults outside managed code, so
+ * putting ours back would turn its exceptions into crash reports.
+ */
+void
+cw_platform_check_handlers(void) {
+	for (size_t i = 0; i < sizeof(signals) / sizeof(signals[0]); ++i) {
+		struct sigaction cur;
+		if (sigaction(signals[i], NULL, &cur) != 0) {
+			continue;
+		}
+		bool ours = (cur.sa_flags & SA_SIGINFO) && cur.sa_sigaction == on_signal;
+		if (ours) {
+			continue;
+		}
+		void* handler = (cur.sa_flags & SA_SIGINFO) ? (void*)cur.sa_sigaction : (void*)cur.sa_handler;
+		Dl_info info;
+		const char* by = handler != NULL && handler != (void*)SIG_IGN && dladdr(handler, &info) && info.dli_fname != NULL
+			? info.dli_fname
+			: "unknown module";
+		cw_log(CW_LOG_WARN, "%s handler was replaced by %s", cw_signal_name(signals[i]), by);
 	}
 }

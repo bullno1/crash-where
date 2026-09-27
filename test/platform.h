@@ -71,4 +71,14 @@ test_image_base(void);
 bool
 test_under_wine(void);
 
+/**
+ * Replace the library's crash handler with an inert one, as a middleware
+ * SDK would.
+ *
+ * @return `false` when the platform has no way to recover from that,
+ *         in which case a test relying on recovery should skip.
+ */
+bool
+test_displace_crash_handler(void);
+
 #endif /* CW_TEST_PLATFORM_H */

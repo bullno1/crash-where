@@ -86,6 +86,10 @@ cw_recv_msg(int sock, cw_msg_t* msg, int timeout_ms);
 void
 cw_install_signal_handler(void);
 
+/** Name of a crash signal such as "SIGSEGV", or "SIGNAL" for any other. */
+const char*
+cw_signal_name(int signo);
+
 /**
  * Build the module table and frame list for a parked child.
  *

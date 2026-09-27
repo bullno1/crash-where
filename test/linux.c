@@ -112,3 +112,8 @@ bool
 test_under_wine(void) {
 	return false;
 }
+
+bool
+test_displace_crash_handler(void) {
+	return false;
+}

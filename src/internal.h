@@ -156,6 +156,14 @@ cw_platform_tid(void);
 void
 cw_platform_shutdown(int result);
 
+/**
+ * Check that the crash handlers installed at init are still in place;
+ * log a warning naming the module that replaced one. Called once, from
+ * the first cw_heartbeat().
+ */
+void
+cw_platform_check_handlers(void);
+
 /* Implemented by the core. */
 
 void

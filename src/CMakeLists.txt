@@ -12,6 +12,7 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 		linux/unwind.c
 		linux/watcher.c
 	)
+	target_link_libraries(cw PRIVATE ${CMAKE_DL_LIBS})
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 	target_sources(cw PRIVATE
 		windows/exception.c

@@ -197,19 +197,6 @@ add_frame(cw_crash_info_t* info, uint64_t addr) {
 	}
 }
 
-static const char*
-signal_name(int signo) {
-	switch (signo) {
-	case SIGSEGV: return "SIGSEGV";
-	case SIGBUS:  return "SIGBUS";
-	case SIGFPE:  return "SIGFPE";
-	case SIGILL:  return "SIGILL";
-	case SIGABRT: return "SIGABRT";
-	case SIGTRAP: return "SIGTRAP";
-	default:      return "SIGNAL";
-	}
-}
-
 bool
 cw_unwind(pid_t pid, const cw_crash_t* crash, cw_crash_info_t* out) {
 	read_maps(pid, out);
@@ -217,7 +204,7 @@ cw_unwind(pid_t pid, const cw_crash_t* crash, cw_crash_info_t* out) {
 		read_build_id(out->modules[i].path, out->modules[i].build_id, sizeof(out->modules[i].build_id));
 	}
 
-	snprintf(out->type, sizeof(out->type), "%s", signal_name(crash->signo));
+	snprintf(out->type, sizeof(out->type), "%s", cw_signal_name(crash->signo));
 	out->fault_addr = (uint64_t)(uintptr_t)crash->si.si_addr;
 	out->tid = (uint32_t)crash->tid;
 	snprintf(

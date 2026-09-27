@@ -121,6 +121,11 @@ cw_heartbeat(void) {
 	if (!cw_ctx.active) {
 		return;
 	}
+	/* The first tick is the earliest point where every middleware has had its say. */
+	static _Atomic bool handler_checked;
+	if (!atomic_exchange_explicit(&handler_checked, true, memory_order_relaxed)) {
+		cw_platform_check_handlers();
+	}
 	atomic_fetch_add_explicit(&cw_ctx.shared->heartbeat, 1, memory_order_relaxed);
 }
 

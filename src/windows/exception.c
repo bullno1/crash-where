@@ -6,10 +6,15 @@
  * watcher needs into the shared region, set one event, wait for the
  * watcher to finish, then end the process. They use no heap and no
  * locks; after a stack overflow they run with a single page of stack.
+ *
+ * A vectored handler keeps the filter installed: it runs before the
+ * frame search on every exception and puts the filter back if another
+ * module has taken the slot since init.
  */
 #include <intrin.h>
 #include <signal.h>
 #include <stdatomic.h>
+#include <stdio.h>
 #include <stdlib.h>
 
 #include "windows/platform.h"
@@ -51,6 +56,45 @@ on_exception(EXCEPTION_POINTERS* ep) {
 }
 
 /**
+ * Name the module containing `addr` into `out`, or "unknown module".
+ */
+static void
+module_name(const void* addr, char* out, size_t cap) {
+	HMODULE mod;
+	DWORD flags = GET_MODULE_HANDLE_EX_FLAG_FROM_ADDRESS | GET_MODULE_HANDLE_EX_FLAG_UNCHANGED_REFCOUNT;
+	if (addr == NULL || !GetModuleHandleExA(flags, addr, &mod) || GetModuleFileNameA(mod, out, (DWORD)cap) == 0) {
+		snprintf(out, cap, "unknown module");
+	}
+}
+
+/**
+ * Runs first on every exception and only puts the filter back, so it is
+ * in place if this exception turns out to be unhandled. Whoever took the
+ * slot in the meantime is evicted; nothing is decided here.
+ *
+ * The first eviction is logged, once. The log sink may itself raise an
+ * exception, for example through `OutputDebugString`, which would land
+ * here again.
+ */
+static LONG CALLBACK
+on_first_chance(EXCEPTION_POINTERS* ep) {
+	(void)ep;
+	cw_platform_check_handlers();
+	return EXCEPTION_CONTINUE_SEARCH;
+}
+
+void
+cw_platform_check_handlers(void) {
+	static _Atomic bool warned;
+	LPTOP_LEVEL_EXCEPTION_FILTER prev = SetUnhandledExceptionFilter(on_exception);
+	if (prev != on_exception && !atomic_exchange(&warned, true)) {
+		char name[MAX_PATH];
+		module_name((const void*)prev, name, sizeof(name));
+		cw_log(CW_LOG_WARN, "exception filter was replaced by %s, restored", name);
+	}
+}
+
+/**
  * `abort` ends the process with a fast-fail that no user-mode handler
  * sees, so it is caught one step earlier, in the CRT's SIGABRT handler.
  */
@@ -70,6 +114,7 @@ on_abort(int sig) {
 void
 cw_install_exception_handler(void) {
 	SetUnhandledExceptionFilter(on_exception);
+	AddVectoredExceptionHandler(1, on_first_chance);
 	signal(SIGABRT, on_abort);
 	/* No error dialogs: the filter must run unattended. */
 	SetErrorMode(SetErrorMode(0) | SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
