@@ -216,6 +216,13 @@ cw_platform_run_game(void) {
 	cw_ctx.shared = &region->common;
 	cw_install_exception_handler();
 	cw_log(CW_LOG_INFO, "watcher pid %lu ready", GetProcessId(watcher));
+	/* Paths pass through the ANSI code page; only UTF-8 survives into the report intact. */
+	if (GetACP() != CP_UTF8) {
+		cw_log(
+			CW_LOG_WARN, "code page %u is not UTF-8, non-ASCII paths will be misreported;"
+			" declare activeCodePage UTF-8 in the application manifest", GetACP()
+		);
+	}
 	fail = NULL;
 
 end:
