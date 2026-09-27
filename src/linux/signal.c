@@ -7,11 +7,13 @@
  * signal kill the process. It uses no heap, no locks, and no library
  * calls beyond `memcpy` and raw syscalls.
  */
+#include <errno.h>
 #include <signal.h>
 #include <stdatomic.h>
 #include <stdbool.h>
 #include <stdint.h>
 #include <string.h>
+#include <sys/uio.h>
 #include <unistd.h>
 
 #include "linux/platform.h"
@@ -35,6 +37,45 @@ context_sp(const ucontext_t* uc) {
 #endif
 }
 
+/**
+ * Copy `[sp, top)` into the record.
+ *
+ * `process_vm_readv` stops at the first unreadable page instead of
+ * faulting, which matters twice: the copy of a small thread stack may
+ * run past its top, and a stack overflow leaves `sp` inside the guard
+ * page, in which case the copy restarts at the next page boundary where
+ * the frames that matter still are. If the call is unavailable, a plain
+ * copy from `sp` is the best that can be done.
+ */
+static void
+copy_stack(cw_crash_t* crash, uintptr_t sp, uintptr_t top) {
+	uintptr_t page = cw_linux.page_size;
+	uintptr_t start = sp;
+	size_t len = 0;
+	for (int attempt = 0; attempt < 4 && start < top; ++attempt) {
+		size_t want = top - start;
+		if (want > CW_STACK_CAP) {
+			want = CW_STACK_CAP;
+		}
+		struct iovec local = { .iov_base = crash->stack, .iov_len = want };
+		struct iovec remote = { .iov_base = (void*)start, .iov_len = want };
+		ssize_t n = process_vm_readv(getpid(), &local, 1, &remote, 1, 0);
+		if (n > 0) {
+			len = (size_t)n;
+			break;
+		}
+		if (n < 0 && errno != EFAULT) {
+			memcpy(crash->stack, (const void*)start, want);
+			len = want;
+			break;
+		}
+		start = (start + page) & ~(page - 1);
+	}
+	crash->sp = len > 0 ? start : sp;
+	crash->stack_top = top;
+	crash->stack_len = len;
+}
+
 static void
 on_signal(int signo, siginfo_t* si, void* ctx) {
 	cw_crash_t* crash = &cw_linux.region->crash;
@@ -53,22 +94,14 @@ on_signal(int signo, siginfo_t* si, void* ctx) {
 	memcpy(&crash->uc, ctx, sizeof(ucontext_t));
 
 	/*
-	 * Copy [sp, top). The main thread's bounds are known from init. For
-	 * any other thread the prototype copies a fixed amount and accepts
-	 * that reading past the top of a small stack kills the process here;
-	 * per-thread bounds are a later addition.
+	 * The main thread's bounds are known from init. For any other thread
+	 * the prototype copies a fixed amount; per-thread bounds are a later
+	 * addition.
 	 */
 	uintptr_t sp = context_sp(&crash->uc);
 	bool on_main_stack = sp >= cw_linux.main_stack_lo && sp < cw_linux.main_stack_hi;
 	uintptr_t top = on_main_stack ? cw_linux.main_stack_hi : sp + CW_UNKNOWN_STACK;
-	size_t len = top - sp;
-	if (len > CW_STACK_CAP) {
-		len = CW_STACK_CAP;
-	}
-	memcpy(crash->stack, (const void*)sp, len);
-	crash->sp = sp;
-	crash->stack_top = top;
-	crash->stack_len = len;
+	copy_stack(crash, sp, top);
 	atomic_store(&crash->state, 1);
 
 	/* A failed send means the watcher is gone; do not wait for a reply. */
@@ -84,6 +117,9 @@ on_signal(int signo, siginfo_t* si, void* ctx) {
 
 void
 cw_signal_install(void) {
+	long page = sysconf(_SC_PAGESIZE);
+	cw_linux.page_size = page > 0 ? (size_t)page : 4096;
+
 	stack_t ss = { .ss_sp = alt_stack, .ss_size = sizeof(alt_stack) };
 	struct sigaction sa = {
 		.sa_sigaction = on_signal,

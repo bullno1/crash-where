@@ -1,0 +1,343 @@
+/**
+ * @file crash.c
+ * Crash handling: each scenario dies in a child and the suite checks
+ * the report the watcher produced.
+ */
+#include <inttypes.h>
+#include <signal.h>
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#include "btest.h"
+#include "cw.h"
+#include "scenario.h"
+
+/* Scenarios (child side) {{{ */
+
+/**
+ * Upper bound on the size of a crashing marker function. The child can
+ * record where such a function starts but not where it ends, so frame 0
+ * is checked to lie within this many bytes of the start.
+ */
+#define MARKER_MAX_BYTES 256
+
+static volatile int sink;
+
+/* Resolved at run time so the compiler cannot prove the store undefined and delete it. */
+static int* volatile null_ptr;
+
+/**
+ * Record an address in a state slot, so it reaches the runner inside
+ * the envelope for comparison against the recorded frames.
+ */
+static void
+record_addr(const char* key, uintptr_t addr) {
+	char buf[24];
+	snprintf(buf, sizeof(buf), "%" PRIxPTR, addr);
+	cw_set_state(key, buf);
+}
+
+/* The `sink++` after each call keeps it from becoming a tail jump. */
+
+TEST_NOINLINE static void
+write_null(void) {
+	record_addr("ret1", TEST_RETURN_ADDRESS());
+	*null_ptr = 1;
+	sink++;
+}
+
+/* Makes no calls, so GCC may omit its frame pointer. */
+TEST_NOINLINE static void
+write_null_leaf(void) {
+	*null_ptr = 1;
+	sink++;
+}
+
+TEST_NOINLINE static void
+level_two(void (*crash)(void)) {
+	record_addr("ret2", TEST_RETURN_ADDRESS());
+	crash();
+	sink++;
+}
+
+TEST_NOINLINE static void
+level_three(void (*crash)(void)) {
+	record_addr("ret3", TEST_RETURN_ADDRESS());
+	level_two(crash);
+	sink++;
+}
+
+TEST_NOINLINE static int
+recurse(int depth) {
+	volatile char pad[1024];
+	pad[0] = (char)depth;
+	if (sink < 0) {
+		return depth; /* Never taken; keeps the compiler from proving the recursion infinite. */
+	}
+	return recurse(depth + 1) + pad[0];
+}
+
+CW_SCENARIO(null_write) {
+	cw_breadcrumb("test", "about to crash");
+	cw_set_state("mode", "null_write");
+	record_addr("base", test_image_base());
+	record_addr("fn0", (uintptr_t)write_null);
+	level_three(write_null);
+}
+
+CW_SCENARIO(null_write_leaf) {
+	cw_set_state("mode", "null_write_leaf");
+	record_addr("base", test_image_base());
+	record_addr("fn0", (uintptr_t)write_null_leaf);
+	level_three(write_null_leaf);
+}
+
+CW_SCENARIO(abort) {
+	cw_set_state("mode", "abort");
+	abort();
+}
+
+CW_SCENARIO(stack_overflow) {
+	cw_set_state("mode", "stack_overflow");
+	sink = recurse(0);
+}
+
+CW_SCENARIO(clean_exit) {
+	cw_set_state("mode", "clean_exit");
+	cw_shutdown(0);
+}
+
+CW_SCENARIO(exit_without_shutdown) {
+	cw_set_state("mode", "exit_without_shutdown");
+	_Exit(3);
+}
+
+/* }}} */
+
+/* Checks (runner side) {{{ */
+
+static btest_suite_t crash = {
+	.name = "crash",
+	.cleanup_per_test = test_run_cleanup,
+};
+
+static uintptr_t
+state_hex(yyjson_doc* ev, const char* key) {
+	char ptr[64];
+	snprintf(ptr, sizeof(ptr), "/envelope/state/%s", key);
+	const char* s = test_json_str(ev, ptr);
+	return s != NULL ? (uintptr_t)strtoull(s, NULL, 16) : 0;
+}
+
+/**
+ * Module entry whose recorded base is `base`, or `NULL`.
+ */
+static yyjson_val*
+find_module(yyjson_doc* ev, uintptr_t base) {
+	yyjson_val* modules = test_json_get(ev, "/envelope/modules");
+	size_t idx;
+	size_t max;
+	yyjson_val* m;
+	yyjson_arr_foreach(modules, idx, max, m) {
+		const char* s = yyjson_get_str(yyjson_obj_get(m, "base"));
+		if (s != NULL && strtoull(s, NULL, 16) == base) {
+			return m;
+		}
+	}
+	return NULL;
+}
+
+/**
+ * Absolute address of frame `i`, or 0 when it is outside the main module.
+ */
+static uintptr_t
+frame_addr(yyjson_doc* ev, size_t i, const char* main_name, uintptr_t base) {
+	char ptr[64];
+	snprintf(ptr, sizeof(ptr), "/envelope/frames/%zu", i);
+	yyjson_val* fr = test_json_get(ev, ptr);
+	const char* name = yyjson_get_str(yyjson_obj_get(fr, "module"));
+	if (fr == NULL || name == NULL || strcmp(name, main_name) != 0) {
+		return 0;
+	}
+	return base + (uintptr_t)yyjson_get_uint(yyjson_obj_get(fr, "offset"));
+}
+
+/**
+ * Check the module base against the image start the child recorded,
+ * then each frame against the return addresses it recorded.
+ *
+ * With `exact`, frames 1 to 3 must be precisely the three return
+ * addresses. Otherwise they only have to appear in order, which is what
+ * a frame-pointer walk can promise when the crashing function is a leaf.
+ */
+static void
+check_frames(yyjson_doc* ev, bool exact) {
+	uintptr_t base = state_hex(ev, "base");
+	BTEST_ASSERT(base != 0);
+	yyjson_val* main_module = find_module(ev, base);
+	BTEST_ASSERT_EX(main_module != NULL, "no module at base %" PRIxPTR, base);
+	const char* main_name = yyjson_get_str(yyjson_obj_get(main_module, "name"));
+	BTEST_ASSERT(main_name != NULL);
+
+	size_t num_frames = yyjson_arr_size(test_json_get(ev, "/envelope/frames"));
+	BTEST_ASSERT_RELATION("%zu", num_frames, >=, 2);
+
+	uintptr_t fn0 = state_hex(ev, "fn0");
+	uintptr_t pc = frame_addr(ev, 0, main_name, base);
+	BTEST_EXPECT_EX(
+		pc >= fn0 && pc < fn0 + MARKER_MAX_BYTES,
+		"frame 0 at %" PRIxPTR ", crashing function at %" PRIxPTR, pc, fn0
+	);
+
+	static const char* const keys[] = { "ret1", "ret2", "ret3" };
+	size_t next = 1;
+	for (size_t k = 0; k < 3; ++k) {
+		uintptr_t want = state_hex(ev, keys[k]);
+		if (want == 0) {
+			continue;
+		}
+		want -= 1; /* The unwinder points inside the call instruction. */
+		if (exact) {
+			uintptr_t got = frame_addr(ev, next, main_name, base);
+			BTEST_EXPECT_EX(got == want, "frame %zu is %" PRIxPTR ", want %" PRIxPTR, next, got, want);
+			++next;
+		} else {
+			while (next < num_frames && frame_addr(ev, next, main_name, base) != want) {
+				++next;
+			}
+			BTEST_EXPECT_EX(next < num_frames, "return address %" PRIxPTR " (%s) missing", want, keys[k]);
+			++next;
+		}
+	}
+}
+
+/**
+ * Path of the pending envelope, rebuilt from fields the child reported.
+ */
+static void
+pending_path(const test_run_t* run, yyjson_doc* ev, char* out, size_t cap) {
+	snprintf(
+		out, cap, "%s/report/pending/%" PRIu64 "_%s_%s.json",
+		run->dir,
+		yyjson_get_uint(test_json_get(ev, "/envelope/sent_at")),
+		test_json_str(ev, "/envelope/client_fp"),
+		test_json_str(ev, "/id")
+	);
+}
+
+static bool
+file_exists(const char* path) {
+	FILE* f = fopen(path, "rb");
+	if (f != NULL) {
+		fclose(f);
+	}
+	return f != NULL;
+}
+
+BTEST(crash, null_write) {
+	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(null_write));
+	BTEST_ASSERT(run != NULL);
+	BTEST_EXPECT(run->exit.signaled);
+	BTEST_EXPECT_EQUAL("%d", run->exit.code, SIGSEGV);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+
+	yyjson_doc* ev = run->events[0];
+	BTEST_ASSERT(strcmp(test_json_str(ev, "/call"), "envelope") == 0);
+	BTEST_EXPECT_EQUAL("%d", (int)yyjson_get_int(test_json_get(ev, "/attempts")), 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/report_id"), test_json_str(ev, "/id")) == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/app/name"), "cw-test") == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), "SIGSEGV") == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/state/mode"), "null_write") == 0);
+
+	yyjson_val* crumbs = test_json_get(ev, "/envelope/breadcrumbs");
+	BTEST_ASSERT_EQUAL("%zu", yyjson_arr_size(crumbs), (size_t)1);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/breadcrumbs/0/c"), "test") == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/breadcrumbs/0/m"), "about to crash") == 0);
+
+	check_frames(ev, true);
+
+	char path[512];
+	pending_path(run, ev, path, sizeof(path));
+	BTEST_EXPECT_EX(!file_exists(path), "%s still exists after a successful upload", path);
+}
+
+BTEST(crash, null_write_leaf) {
+	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(null_write_leaf));
+	BTEST_ASSERT(run != NULL);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	yyjson_doc* ev = run->events[0];
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), "SIGSEGV") == 0);
+	check_frames(ev, false);
+}
+
+BTEST(crash, abort) {
+	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(abort));
+	BTEST_ASSERT(run != NULL);
+	BTEST_EXPECT(run->exit.signaled);
+	BTEST_EXPECT_EQUAL("%d", run->exit.code, SIGABRT);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	yyjson_doc* ev = run->events[0];
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), "SIGABRT") == 0);
+	BTEST_EXPECT_RELATION("%zu", yyjson_arr_size(test_json_get(ev, "/envelope/frames")), >=, 1);
+}
+
+BTEST(crash, stack_overflow) {
+	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(stack_overflow));
+	BTEST_ASSERT(run != NULL);
+	BTEST_EXPECT(run->exit.signaled);
+	BTEST_EXPECT_EQUAL("%d", run->exit.code, SIGSEGV);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	yyjson_doc* ev = run->events[0];
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), "SIGSEGV") == 0);
+	BTEST_EXPECT_RELATION("%zu", yyjson_arr_size(test_json_get(ev, "/envelope/frames")), >=, 2);
+}
+
+BTEST(crash, clean_exit) {
+	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(clean_exit));
+	BTEST_ASSERT(run != NULL);
+	BTEST_EXPECT(!run->exit.signaled);
+	BTEST_EXPECT_EQUAL("%d", run->exit.code, 0);
+	BTEST_EXPECT_EQUAL("%d", run->num_events, 0);
+}
+
+BTEST(crash, exit_without_shutdown) {
+	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(exit_without_shutdown));
+	BTEST_ASSERT(run != NULL);
+	BTEST_EXPECT(!run->exit.signaled);
+	BTEST_EXPECT_EQUAL("%d", run->exit.code, 3);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	yyjson_doc* ev = run->events[0];
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), "KILLED") == 0);
+	/* The region outlives the game, so state is still there. */
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/state/mode"), "exit_without_shutdown") == 0);
+	BTEST_EXPECT_EQUAL("%zu", yyjson_arr_size(test_json_get(ev, "/envelope/frames")), (size_t)0);
+}
+
+BTEST(crash, disabled) {
+	const test_run_t* run = RUN_SCENARIO_WITH(SCENARIO_REF(null_write), .disable = true);
+	BTEST_ASSERT(run != NULL);
+	BTEST_EXPECT(run->exit.signaled);
+	BTEST_EXPECT_EQUAL("%d", run->exit.code, SIGSEGV);
+	BTEST_EXPECT_EQUAL("%d", run->num_events, 0);
+}
+
+BTEST(crash, upload_retry_keeps_report) {
+	const test_run_t* run = RUN_SCENARIO_WITH(SCENARIO_REF(null_write), .status = "retry");
+	BTEST_ASSERT(run != NULL);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	char path[512];
+	pending_path(run, run->events[0], path, sizeof(path));
+	BTEST_EXPECT_EX(file_exists(path), "%s missing after a failed upload", path);
+}
+
+BTEST(crash, upload_drop_deletes_report) {
+	const test_run_t* run = RUN_SCENARIO_WITH(SCENARIO_REF(null_write), .status = "drop");
+	BTEST_ASSERT(run != NULL);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	char path[512];
+	pending_path(run, run->events[0], path, sizeof(path));
+	BTEST_EXPECT_EX(!file_exists(path), "%s still exists after a rejected upload", path);
+}
+
+/* }}} */

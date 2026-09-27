@@ -66,6 +66,7 @@ typedef struct {
 	pid_t watcher;
 	uintptr_t main_stack_lo;
 	uintptr_t main_stack_hi;
+	size_t page_size;          /**< Cached at init; the handler must not call `sysconf`. */
 } cw_linux_t;
 
 extern cw_linux_t cw_linux;

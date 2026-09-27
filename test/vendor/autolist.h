@@ -1,0 +1,220 @@
+#ifndef AUTOLIST_H
+#define AUTOLIST_H
+
+/**
+ * @file
+ * @brief A list of items collected from all compilation units.
+ *
+ * For when you have a list of things (test cases, metadata...) spread around
+ * in different compilation units and you need to iterate over all of them.
+ *
+ * Any compilation unit can add an entry to a list with @ref AUTOLIST_ENTRY.
+ * Exactly one compilation unit defines the list with @ref AUTOLIST_DEFINE
+ * (or @ref AUTOLIST_DECLARE and @ref AUTOLIST_IMPL separately) and every
+ * unit that includes the declaration can iterate over the collected entries
+ * with @ref AUTOLIST_FOREACH.
+ *
+ * Entries are collected by the linker into a dedicated section so there is
+ * no runtime registration.
+ */
+
+#include <stddef.h>
+
+/**
+ * Define a variable and register it as an entry of a list.
+ *
+ * @param LIST_NAME name of the list
+ * @param ITEM_TYPE type of the variable
+ * @param ITEM_NAME name of the variable
+ *
+ * @hideinitializer
+ */
+#define AUTOLIST_ENTRY(LIST_NAME, ITEM_TYPE, ITEM_NAME) \
+	AUTOLIST_ENTRY_EX(LIST_NAME, ITEM_TYPE, ITEM_NAME, ITEM_NAME)
+
+/**
+ * Same as @ref AUTOLIST_ENTRY but the variable and entry names can differ.
+ *
+ * @param LIST_NAME name of the list
+ * @param ITEM_TYPE type of the variable
+ * @param ITEM_NAME name of the entry
+ * @param VAR_NAME name of the variable
+ *
+ * @hideinitializer
+ */
+#define AUTOLIST_ENTRY_EX(LIST_NAME, ITEM_TYPE, ITEM_NAME, VAR_NAME) \
+	extern ITEM_TYPE VAR_NAME; \
+	AUTOLIST_ADD_ENTRY(LIST_NAME, ITEM_NAME, VAR_NAME) \
+	ITEM_TYPE VAR_NAME
+
+/**
+ * Register an existing variable as an entry of a list.
+ *
+ * @param LIST_NAME name of the list
+ * @param ITEM_NAME name of the entry
+ * @param VAR_NAME name of the variable
+ *
+ * @hideinitializer
+ */
+#define AUTOLIST_ADD_ENTRY(LIST_NAME, ITEM_NAME, VAR_NAME) \
+	const autolist_entry_t AUTOLIST__CONCAT4(LIST_NAME, _, ITEM_NAME, _entry) = { \
+		.name = #ITEM_NAME, \
+		.name_length = sizeof(AUTOLIST__STRINGIFY(ITEM_NAME)) - 1, \
+		.value_addr = (void*)&VAR_NAME, \
+		.value_size = sizeof(VAR_NAME), \
+	}; \
+	AUTOLIST__SECTION_BEGIN(LIST_NAME) \
+	const autolist_entry_t* const AUTOLIST__CONCAT4(LIST_NAME, _, ITEM_NAME, _info_ptr) = \
+		&AUTOLIST__CONCAT4(LIST_NAME, _, ITEM_NAME, _entry); \
+	AUTOLIST__SECTION_END(AUTOLIST__CONCAT4(LIST_NAME, _, ITEM_NAME, _info_ptr))
+
+/**
+ * Iterate over all entries of a list.
+ *
+ * @param ITR name of the iterator variable, of type `const autolist_entry_t*`
+ * @param LIST_NAME name of the list
+ *
+ * @hideinitializer
+ */
+#define AUTOLIST_FOREACH(ITR, LIST_NAME) \
+	for ( \
+		const autolist_entry_t* const* autolist__itr = AUTOLIST_BEGIN(LIST_NAME); \
+		autolist__itr != AUTOLIST_END(LIST_NAME); \
+		++autolist__itr \
+	) \
+		for (const autolist_entry_t* ITR = *autolist__itr; ITR != NULL; ITR = NULL)
+
+#define AUTOLIST__CONCAT3(A, B, C) AUTOLIST__CONCAT(AUTOLIST__CONCAT(A, B), C)
+#define AUTOLIST__CONCAT4(A, B, C, D) AUTOLIST__CONCAT(AUTOLIST__CONCAT(A, B), AUTOLIST__CONCAT(C, D))
+#define AUTOLIST__CONCAT(A, B) AUTOLIST__CONCAT_(A, B)
+#define AUTOLIST__CONCAT_(A, B) A##B
+#define AUTOLIST__STRINGIFY(X) AUTOLIST__STRINGIFY_(X)
+#define AUTOLIST__STRINGIFY_(X) #X
+
+#if defined(_MSC_VER)
+#	define AUTOLIST__SECTION_BEGIN(NAME) \
+	__pragma(data_seg(push)); \
+	__pragma(section(AUTOLIST__STRINGIFY(AUTOLIST__CONCAT(NAME, $data)), read)); \
+	__declspec(allocate(AUTOLIST__STRINGIFY(AUTOLIST__CONCAT(NAME, $data))))
+#elif defined(__APPLE__)
+#	define AUTOLIST__SECTION_BEGIN(NAME) __attribute__((retain, used, section("__DATA,autolist_" AUTOLIST__STRINGIFY(NAME))))
+#elif defined(__unix__)
+#	define AUTOLIST__SECTION_BEGIN(NAME) __attribute__((retain, used, section("autolist_" AUTOLIST__STRINGIFY(NAME))))
+#else
+#	error Unsupported compiler
+#endif
+
+#if defined(_MSC_VER)
+#	define AUTOLIST__SECTION_END(INFO_PTR) \
+	__pragma(data_seg(pop)); \
+	__pragma(comment(linker, "/INCLUDE:" AUTOLIST__STRINGIFY(INFO_PTR)));
+#elif defined(__APPLE__)
+#	define AUTOLIST__SECTION_END(INFO_PTR)
+#elif defined(__unix__)
+#	define AUTOLIST__SECTION_END(INFO_PTR)
+#endif
+
+/*! An entry of a list */
+typedef struct {
+	/*! Name of the entry */
+	const char* name;
+	/*! Length of @ref autolist_entry_t.name */
+	size_t name_length;
+	/*! Address of the registered variable */
+	void* value_addr;
+	/*! Size of the registered variable */
+	size_t value_size;
+} autolist_entry_t;
+
+#if defined(DOXYGEN)
+/**
+ * Declare a list so that it can be iterated in the current compilation unit.
+ *
+ * @param NAME name of the list
+ *
+ * @see AUTOLIST_IMPL
+ * @hideinitializer
+ */
+#	define AUTOLIST_DECLARE(NAME)
+/**
+ * Provide the storage for a list.
+ *
+ * This must be done in exactly one compilation unit.
+ *
+ * @param NAME name of the list
+ *
+ * @see AUTOLIST_DECLARE
+ * @hideinitializer
+ */
+#	define AUTOLIST_IMPL(NAME)
+#elif defined(_MSC_VER)
+#	define AUTOLIST_DECLARE(NAME) \
+	extern const autolist_entry_t* const AUTOLIST__CONCAT3(autolist_, NAME, _begin); \
+	extern const autolist_entry_t* const AUTOLIST__CONCAT3(autolist_, NAME, _end);
+#	define AUTOLIST_IMPL(NAME) \
+	__pragma(section(AUTOLIST__STRINGIFY(AUTOLIST__CONCAT(NAME, $begin)), read)); \
+	__pragma(section(AUTOLIST__STRINGIFY(AUTOLIST__CONCAT(NAME, $data)), read)); \
+	__pragma(section(AUTOLIST__STRINGIFY(AUTOLIST__CONCAT(NAME, $end)), read)); \
+	__declspec(allocate(AUTOLIST__STRINGIFY(AUTOLIST__CONCAT(NAME, $begin)))) \
+		extern const autolist_entry_t* const AUTOLIST__CONCAT3(autolist_, NAME, _begin) = NULL; \
+	__declspec(allocate(AUTOLIST__STRINGIFY(AUTOLIST__CONCAT(NAME, $end)))) \
+		extern const autolist_entry_t* const AUTOLIST__CONCAT3(autolist_, NAME, _end) = NULL;
+#elif defined(__APPLE__)
+#	define AUTOLIST_DECLARE(NAME) \
+	extern const autolist_entry_t* const AUTOLIST__CONCAT(__start_, NAME) \
+	__asm("section$start$__DATA$autolist_" AUTOLIST__STRINGIFY(NAME)); \
+	extern const autolist_entry_t* const AUTOLIST__CONCAT(__stop_, NAME) \
+	__asm("section$end$__DATA$autolist_" AUTOLIST__STRINGIFY(NAME));
+#	define AUTOLIST_IMPL(NAME) \
+	__attribute__((retain, used, section("__DATA,autolist_" AUTOLIST__STRINGIFY(NAME)))) \
+		const autolist_entry_t* const AUTOLIST__CONCAT3(autolist_, NAME, __dummy) = NULL;
+#elif defined(__unix__)
+#	define AUTOLIST_DECLARE(NAME) \
+	extern const autolist_entry_t* const AUTOLIST__CONCAT(__start_autolist_, NAME); \
+	extern const autolist_entry_t* const AUTOLIST__CONCAT(__stop_autolist_, NAME);
+#	define AUTOLIST_IMPL(NAME) \
+	__attribute__((retain, used, section("autolist_" AUTOLIST__STRINGIFY(NAME)))) \
+		const autolist_entry_t* const AUTOLIST__CONCAT3(autolist_, NAME, __dummy) = NULL;
+#endif
+
+/**
+ * Define a list.
+ *
+ * This must be done in exactly one compilation unit.
+ *
+ * @param NAME name of the list
+ *
+ * @hideinitializer
+ */
+#define AUTOLIST_DEFINE(NAME) \
+	AUTOLIST_DECLARE(NAME) \
+	AUTOLIST_IMPL(NAME)
+
+#if defined(DOXYGEN)
+/**
+ * Pointer to the first entry pointer of a list, of type `const autolist_entry_t* const*`.
+ *
+ * @param NAME name of the list
+ *
+ * @see AUTOLIST_FOREACH
+ * @hideinitializer
+ */
+#	define AUTOLIST_BEGIN(NAME)
+/**
+ * Pointer past the last entry pointer of a list.
+ *
+ * @param NAME name of the list
+ *
+ * @see AUTOLIST_BEGIN
+ * @hideinitializer
+ */
+#	define AUTOLIST_END(NAME)
+#elif defined(_MSC_VER)
+#	define AUTOLIST_BEGIN(NAME) (&AUTOLIST__CONCAT3(autolist_, NAME, _begin) + 1)
+#	define AUTOLIST_END(NAME) (&AUTOLIST__CONCAT3(autolist_, NAME, _end))
+#elif defined(__unix__) || defined(__APPLE__)
+#	define AUTOLIST_BEGIN(NAME) (&AUTOLIST__CONCAT(__start_autolist_, NAME))
+#	define AUTOLIST_END(NAME) (&AUTOLIST__CONCAT(__stop_autolist_, NAME))
+#endif
+
+#endif

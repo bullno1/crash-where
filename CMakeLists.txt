@@ -11,4 +11,6 @@ if(NOT CMAKE_BUILD_TYPE)
 endif()
 
 add_subdirectory(src)
+add_subdirectory(samples)
+enable_testing()
 add_subdirectory(test)
