@@ -17,6 +17,16 @@
 #	define TEST_RETURN_ADDRESS() ((uintptr_t)__builtin_return_address(0))
 #endif
 
+/* Exception types the library reports for the scenarios. */
+#if defined(_WIN32)
+#	define TEST_EXC_SEGV           "EXCEPTION_ACCESS_VIOLATION"
+#	define TEST_EXC_STACK_OVERFLOW "EXCEPTION_STACK_OVERFLOW"
+#else
+#	define TEST_EXC_SEGV           "SIGSEGV"
+#	define TEST_EXC_STACK_OVERFLOW "SIGSEGV"
+#endif
+#define TEST_EXC_ABORT "SIGABRT"
+
 /**
  * How a child process ended.
  */
@@ -51,5 +61,13 @@ test_mkdir(const char* path);
  */
 uintptr_t
 test_image_base(void);
+
+/**
+ * Whether this is a Windows build running under Wine, which kills a
+ * process instead of dispatching an exception once its stack is nearly
+ * exhausted.
+ */
+bool
+test_under_wine(void);
 
 #endif /* CW_TEST_PLATFORM_H */

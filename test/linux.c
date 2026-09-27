@@ -107,3 +107,8 @@ uintptr_t
 test_image_base(void) {
 	return (uintptr_t)&__executable_start;
 }
+
+bool
+test_under_wine(void) {
+	return false;
+}

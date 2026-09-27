@@ -202,7 +202,7 @@ static void
 put_module_name(FILE* f, const cw_module_t* m) {
 	size_t len = strnlen(m->path, sizeof(m->path));
 	size_t start = len;
-	while (start > 0 && m->path[start - 1] != '/') {
+	while (start > 0 && m->path[start - 1] != '/' && m->path[start - 1] != '\\') {
 		--start;
 	}
 	put_str(f, m->path + start, len - start);

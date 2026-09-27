@@ -247,7 +247,7 @@ BTEST(crash, null_write) {
 	BTEST_EXPECT_EQUAL("%d", (int)yyjson_get_int(test_json_get(ev, "/attempts")), 0);
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/report_id"), test_json_str(ev, "/id")) == 0);
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/app/name"), "cw-test") == 0);
-	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), "SIGSEGV") == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), TEST_EXC_SEGV) == 0);
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/state/mode"), "null_write") == 0);
 
 	yyjson_val* crumbs = test_json_get(ev, "/envelope/breadcrumbs");
@@ -267,7 +267,7 @@ BTEST(crash, null_write_leaf) {
 	BTEST_ASSERT(run != NULL);
 	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
 	yyjson_doc* ev = run->events[0];
-	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), "SIGSEGV") == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), TEST_EXC_SEGV) == 0);
 	check_frames(ev, false);
 }
 
@@ -278,18 +278,22 @@ BTEST(crash, abort) {
 	BTEST_EXPECT_EQUAL("%d", run->exit.code, SIGABRT);
 	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
 	yyjson_doc* ev = run->events[0];
-	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), "SIGABRT") == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), TEST_EXC_ABORT) == 0);
 	BTEST_EXPECT_RELATION("%zu", yyjson_arr_size(test_json_get(ev, "/envelope/frames")), >=, 1);
 }
 
 BTEST(crash, stack_overflow) {
+	if (test_under_wine()) {
+		BLOG_WARN("skipped: Wine cannot deliver a stack overflow to the filter");
+		return;
+	}
 	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(stack_overflow));
 	BTEST_ASSERT(run != NULL);
 	BTEST_EXPECT(run->exit.signaled);
 	BTEST_EXPECT_EQUAL("%d", run->exit.code, SIGSEGV);
 	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
 	yyjson_doc* ev = run->events[0];
-	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), "SIGSEGV") == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), TEST_EXC_STACK_OVERFLOW) == 0);
 	BTEST_EXPECT_RELATION("%zu", yyjson_arr_size(test_json_get(ev, "/envelope/frames")), >=, 2);
 }
 

@@ -26,6 +26,15 @@
 #define CW_ENV_WATCHER    "CW_WATCHER" /**< Set by the game on the watcher: `<pid>,<platform handles>`. */
 
 /**
+ * Lifecycle of the platform's crash-time record.
+ */
+typedef enum {
+	CW_CRASH_IDLE    = 0,      /**< Nothing recorded. */
+	CW_CRASH_DONE    = 1,      /**< A handler has completed the record. */
+	CW_CRASH_WRITING = 2,      /**< A handler owns the record and is filling it. */
+} cw_crash_state_t;
+
+/**
  * One breadcrumb ring entry.
  *
  * `seq` is 0 while the entry is being written and the publish sequence

@@ -12,6 +12,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 		linux/unwind.c
 		linux/watcher.c
 	)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+	target_sources(cw PRIVATE
+		windows/exception.c
+		windows/game.c
+		windows/platform.c
+		windows/unwind.c
+		windows/watcher.c
+	)
+	target_link_libraries(cw PRIVATE bcrypt dbghelp)
 endif()
 target_include_directories(cw
 	PUBLIC ${PROJECT_SOURCE_DIR}/include

@@ -81,8 +81,8 @@ on_signal(int signo, siginfo_t* si, void* ctx) {
 	cw_crash_t* crash = &cw_linux.region->crash;
 
 	/* A second crashing thread parks here; the first one owns the record. */
-	uint32_t expected = 0;
-	if (!atomic_compare_exchange_strong(&crash->state, &expected, 2)) {
+	uint32_t expected = CW_CRASH_IDLE;
+	if (!atomic_compare_exchange_strong(&crash->state, &expected, CW_CRASH_WRITING)) {
 		for (;;) {
 			pause();
 		}
@@ -102,7 +102,7 @@ on_signal(int signo, siginfo_t* si, void* ctx) {
 	bool on_main_stack = sp >= cw_linux.main_stack_lo && sp < cw_linux.main_stack_hi;
 	uintptr_t top = on_main_stack ? cw_linux.main_stack_hi : sp + CW_UNKNOWN_STACK;
 	copy_stack(crash, sp, top);
-	atomic_store(&crash->state, 1);
+	atomic_store(&crash->state, CW_CRASH_DONE);
 
 	/* A failed send means the watcher is gone; do not wait for a reply. */
 	if (cw_send_msg(cw_linux.sock, CW_MSG_CRASH, 0)) {

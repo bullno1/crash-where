@@ -7,9 +7,17 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
-#include <unistd.h>
 
 #include "cw.h"
+
+#if defined(_WIN32)
+#	include <process.h>
+#	define getpid _getpid
+#	define NOINLINE __declspec(noinline)
+#else
+#	include <unistd.h>
+#	define NOINLINE __attribute__((noinline))
+#endif
 
 static volatile int sink;
 
@@ -22,19 +30,19 @@ log_to_stderr(cw_log_level_t level, const char* msg) {
 	fprintf(stderr, "[cw %s] %s\n", names[level], msg);
 }
 
-__attribute__((noinline)) static void
+NOINLINE static void
 crash_here(void) {
 	*null_ptr = 42;
 	sink++;
 }
 
-__attribute__((noinline)) static void
+NOINLINE static void
 level_two(void) {
 	crash_here();
 	sink++;
 }
 
-__attribute__((noinline)) static void
+NOINLINE static void
 level_three(void) {
 	level_two();
 	sink++;

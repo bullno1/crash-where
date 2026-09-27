@@ -20,8 +20,7 @@
  * Crash-time record written by the signal handler in the game and
  * read by the supervisor.
  *
- * `state` is 0 while idle, 2 while a handler is filling the record, and
- * 1 once it is complete.
+ * `state` holds a cw_crash_state_t.
  */
 typedef struct {
 	_Atomic uint32_t state;
