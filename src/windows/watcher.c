@@ -78,6 +78,9 @@ write_crash_report(const char* report_dir, char* path, size_t cap) {
 
 /**
  * Report a game that vanished without a crash or a shutdown.
+ *
+ * The exit status tells a fast-fail such as `0xC0000409` from a launcher
+ * kill or a bare `_exit`.
  */
 static void
 write_killed_report(const char* report_dir) {
@@ -87,6 +90,10 @@ write_killed_report(const char* report_dir) {
 		.message_raw = "game ended without cw_shutdown",
 		.main_module = -1,
 	};
+	DWORD code;
+	if (GetExitCodeProcess(cw_win.h.game, &code)) {
+		snprintf(info.message_raw, sizeof(info.message_raw), "game ended without cw_shutdown, exit code 0x%lx", code);
+	}
 	char path[CW_STR_CAP + 64];
 	if (cw_write_envelope(report_dir, &info, &cw_win.region->common, path, sizeof(path))) {
 		cw_log(CW_LOG_INFO, "report written to %s", path);
