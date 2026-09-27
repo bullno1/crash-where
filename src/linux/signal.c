@@ -116,10 +116,7 @@ on_signal(int signo, siginfo_t* si, void* ctx) {
 }
 
 void
-cw_signal_install(void) {
-	long page = sysconf(_SC_PAGESIZE);
-	cw_linux.page_size = page > 0 ? (size_t)page : 4096;
-
+cw_install_signal_handler(void) {
 	stack_t ss = { .ss_sp = alt_stack, .ss_size = sizeof(alt_stack) };
 	struct sigaction sa = {
 		.sa_sigaction = on_signal,

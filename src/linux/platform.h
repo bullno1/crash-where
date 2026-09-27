@@ -85,7 +85,7 @@ cw_recv_msg(int sock, cw_msg_t* msg, int timeout_ms);
 
 /** Install the crash signal handlers in the game process. */
 void
-cw_signal_install(void);
+cw_install_signal_handler(void);
 
 /**
  * Build the module table and frame list for a parked child.

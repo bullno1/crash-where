@@ -26,7 +26,7 @@ log_from_cw(cw_log_level_t level, const char* msg) {
 		[CW_LOG_INFO]  = BLOG_LEVEL_INFO,
 		[CW_LOG_DEBUG] = BLOG_LEVEL_DEBUG,
 	};
-	BLOG_WRITE(levels[level], "cw: %s", msg);
+	BLOG_WRITE(levels[level], "%s", msg);
 }
 
 static cw_status_t

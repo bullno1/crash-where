@@ -218,7 +218,10 @@ cw_platform_run_game(void) {
 	cw_linux.sock = sock[0];
 	cw_linux.watcher = pid;
 	cw_ctx.shared = &region->common;
-	cw_signal_install();
+	long page_size = sysconf(_SC_PAGESIZE);
+	cw_linux.page_size = page_size > 0 ? (size_t)page_size : 4096;
+
+	cw_install_signal_handler();
 	cw_log(CW_LOG_INFO, "watcher pid %d ready", (int)pid);
 	fail = NULL;
 
