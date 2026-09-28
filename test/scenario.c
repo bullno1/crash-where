@@ -163,7 +163,6 @@ test_fixture_main(const char* name) {
 		.send_attachment = send_attachment,
 	};
 	cw_config_t cfg = {
-		.size = sizeof(cfg),
 		.app = "cw-test",
 		.version = "0.0.1",
 		.channel = "test",

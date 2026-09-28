@@ -67,10 +67,7 @@ cw_init(const cw_config_t* cfg) {
 	}
 	cw_ctx.initialized = true;
 
-	if (cfg == NULL || cfg->size != sizeof(cw_config_t)) {
-		if (cfg != NULL && cfg->log != NULL) {
-			cfg->log(CW_LOG_ERROR, "cw_config_t size mismatch, library inactive");
-		}
+	if (cfg == NULL) {
 		return;
 	}
 

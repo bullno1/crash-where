@@ -52,7 +52,6 @@ int
 main(int argc, char** argv) {
 	const char* mode = argc > 1 ? argv[1] : "null";
 	cw_config_t cfg = {
-		.size = sizeof(cfg),
 		.app = "crashme",
 		.version = "0.0.1",
 		.channel = "dev",
