@@ -111,6 +111,14 @@ cw_init(const cw_config_t* cfg) {
 	cw_ctx.active = cw_platform_run_game();
 }
 
+void
+cw_attach_thread(void) {
+	if (!cw_ctx.active) {
+		return;
+	}
+	cw_platform_attach_thread();
+}
+
 cw_status_t
 cw_auth_refresh(void) {
 	return CW_DROP;

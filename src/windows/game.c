@@ -224,6 +224,7 @@ cw_platform_run_game(void) {
 	cw_win.watcher = watcher;
 	cw_ctx.shared = &region->common;
 	cw_install_exception_handler();
+	cw_platform_attach_thread();
 	cw_log(CW_LOG_INFO, "watcher pid %lu ready", GetProcessId(watcher));
 	/* Paths pass through the ANSI code page; only UTF-8 survives into the report intact. */
 	if (GetACP() != CP_UTF8) {

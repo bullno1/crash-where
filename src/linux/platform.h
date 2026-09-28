@@ -14,7 +14,18 @@
 
 #include "internal.h"
 
-#define CW_STACK_CAP (256u * 1024u)
+#define CW_STACK_CAP   (256u * 1024u)
+#define CW_MAX_THREADS 256
+
+/**
+ * Stack bounds of an attached thread, for the signal handler's copy.
+ * `tid` is 0 while the slot is free.
+ */
+typedef struct {
+	_Atomic uint32_t tid;
+	uintptr_t lo;
+	uintptr_t hi;
+} cw_thread_t;
 
 /**
  * Crash-time record written by the signal handler in the game and
@@ -39,6 +50,7 @@ typedef struct {
  */
 typedef struct {
 	cw_shared_t common;
+	cw_thread_t threads[CW_MAX_THREADS];
 	cw_crash_t crash;
 } cw_region_t;
 
@@ -63,8 +75,6 @@ typedef struct {
 	cw_region_t* region;
 	int sock;                  /**< Game's end of the socketpair. */
 	pid_t watcher;
-	uintptr_t main_stack_lo;
-	uintptr_t main_stack_hi;
 	size_t page_size;          /**< Cached at init; the handler must not call `sysconf`. */
 } cw_linux_t;
 

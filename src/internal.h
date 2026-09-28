@@ -206,6 +206,12 @@ void
 cw_platform_shutdown(int result);
 
 /**
+ * Attach the calling thread.
+ */
+void
+cw_platform_attach_thread(void);
+
+/**
  * Check that the crash handlers installed at init are still in place;
  * log a warning naming the module that replaced one. Called once, from
  * the first cw_heartbeat().

@@ -120,6 +120,28 @@ test_spawn_self(const char* const* env, test_exit_t* out) {
 	return true;
 }
 
+typedef struct {
+	void (*fn)(void);
+} thread_arg_t;
+
+static DWORD WINAPI
+thread_main(void* arg) {
+	((thread_arg_t*)arg)->fn();
+	return 0;
+}
+
+bool
+test_run_thread(void (*fn)(void)) {
+	thread_arg_t arg = { .fn = fn };
+	HANDLE thread = CreateThread(NULL, 0, thread_main, &arg, 0, NULL);
+	if (thread == NULL) {
+		return false;
+	}
+	WaitForSingleObject(thread, INFINITE);
+	CloseHandle(thread);
+	return true;
+}
+
 bool
 test_sockets_init(void) {
 	WSADATA data;

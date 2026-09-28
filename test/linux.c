@@ -3,6 +3,7 @@
  * Linux implementation of the test platform functions.
  */
 #include <errno.h>
+#include <pthread.h>
 #include <signal.h>
 #include <spawn.h>
 #include <stdio.h>
@@ -97,6 +98,27 @@ test_spawn_self(const char* const* env, test_exit_t* out) {
 	} else {
 		*out = (test_exit_t){ .code = WEXITSTATUS(status) };
 	}
+	return true;
+}
+
+typedef struct {
+	void (*fn)(void);
+} thread_arg_t;
+
+static void*
+thread_main(void* arg) {
+	((thread_arg_t*)arg)->fn();
+	return NULL;
+}
+
+bool
+test_run_thread(void (*fn)(void)) {
+	thread_arg_t arg = { .fn = fn };
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, thread_main, &arg) != 0) {
+		return false;
+	}
+	pthread_join(thread, NULL);
 	return true;
 }
 

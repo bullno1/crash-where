@@ -4,7 +4,6 @@
  */
 #include <errno.h>
 #include <fcntl.h>
-#include <pthread.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -204,16 +203,6 @@ cw_platform_run_game(void) {
 		goto end;
 	}
 
-	pthread_attr_t attr;
-	if (pthread_getattr_np(pthread_self(), &attr) == 0) {
-		void* stack_addr;
-		size_t stack_size;
-		if (pthread_attr_getstack(&attr, &stack_addr, &stack_size) == 0) {
-			cw_linux.main_stack_lo = (uintptr_t)stack_addr;
-			cw_linux.main_stack_hi = (uintptr_t)stack_addr + stack_size;
-		}
-		pthread_attr_destroy(&attr);
-	}
 	cw_linux.region = region;
 	cw_linux.sock = sock[0];
 	cw_linux.watcher = pid;
@@ -222,6 +211,7 @@ cw_platform_run_game(void) {
 	cw_linux.page_size = page_size > 0 ? (size_t)page_size : 4096;
 
 	cw_install_signal_handler();
+	cw_platform_attach_thread();
 	cw_log(CW_LOG_INFO, "watcher pid %d ready", (int)pid);
 	fail = NULL;
 

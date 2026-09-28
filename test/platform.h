@@ -51,6 +51,15 @@ bool
 test_spawn_self(const char* const* env, test_exit_t* out);
 
 /**
+ * Run `fn` on a new thread with the platform's default stack and wait
+ * for it to return.
+ *
+ * @return `false` when the thread could not be started.
+ */
+bool
+test_run_thread(void (*fn)(void));
+
+/**
  * Make sockets usable in this process. Safe to call repeatedly.
  *
  * @return `false` when the socket layer is unavailable.

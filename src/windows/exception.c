@@ -113,16 +113,27 @@ on_abort(int sig) {
 	report_and_die(CW_STATUS_ABORT, &record, &context, 0);
 }
 
+/**
+ * By default an overflowing thread keeps one page, which the exception
+ * dispatch alone can use up before the filter runs; the process then
+ * dies unreported. The guarantee only ever grows, so a repeated call
+ * changes nothing.
+ */
+void
+cw_platform_attach_thread(void) {
+	ULONG current = 0;
+	SetThreadStackGuarantee(&current);
+	if (current >= CW_STACK_GUARANTEE) {
+		return;
+	}
+	ULONG guarantee = CW_STACK_GUARANTEE;
+	if (!SetThreadStackGuarantee(&guarantee)) {
+		cw_log(CW_LOG_WARN, "thread %lu not attached: SetThreadStackGuarantee failed (error %lu)", GetCurrentThreadId(), GetLastError());
+	}
+}
+
 void
 cw_install_exception_handler(void) {
-	/*
-	 * By default an overflowing thread keeps one page, which the
-	 * exception dispatch alone can use up before the filter runs; the
-	 * process then dies unreported. The guarantee is per thread, so
-	 * only the thread calling cw_init gets it.
-	 */
-	ULONG guarantee = CW_STACK_GUARANTEE;
-	SetThreadStackGuarantee(&guarantee);
 	SetUnhandledExceptionFilter(on_exception);
 	AddVectoredExceptionHandler(1, on_first_chance);
 	signal(SIGABRT, on_abort);

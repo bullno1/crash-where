@@ -213,6 +213,25 @@ void
 cw_init(const cw_config_t* cfg);
 
 /**
+ * Attach the calling thread to crash reporting.
+ *
+ * A crash on any thread can already be reported.
+ * Howver, a stackoverflow can only be reliably reported from an attached thread.
+ *
+ * On Linux, only an attached thread's stack is captured in full.
+ *
+ * The thread that calls @ref cw_init is already attached.
+ *
+ * Call once per thread, before doing any work.
+ * At most 256 threads can be attached at once; a further call logs a warning
+ * and does nothing.
+ *
+ * There is no need to detach.
+ */
+void
+cw_attach_thread(void);
+
+/**
  * Run storefront authentication again.
  *
  * Call after the storefront SDK is initialized, which usually happens

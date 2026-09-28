@@ -113,6 +113,32 @@ CW_SCENARIO(stack_overflow) {
 	sink = recurse(0);
 }
 
+static void
+attached_overflow(void) {
+	cw_attach_thread();
+	sink = recurse(0);
+}
+
+/* The breadcrumb records the main thread's id, to tell the crashing thread from it. */
+CW_SCENARIO(thread_stack_overflow) {
+	cw_set_state("mode", "thread_stack_overflow");
+	cw_breadcrumb("test", "starting thread");
+	test_run_thread(attached_overflow);
+}
+
+static void
+unattached_null_write(void) {
+	level_three(write_null);
+}
+
+CW_SCENARIO(thread_null_write) {
+	cw_set_state("mode", "thread_null_write");
+	record_addr("base", test_image_base());
+	record_addr("fn0", (uintptr_t)write_null);
+	cw_breadcrumb("test", "starting thread");
+	test_run_thread(unattached_null_write);
+}
+
 CW_SCENARIO(clean_exit) {
 	cw_set_state("mode", "clean_exit");
 	cw_shutdown(0);
@@ -270,6 +296,43 @@ BTEST(crash, stack_overflow) {
 	yyjson_doc* ev = run->events[0];
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), TEST_EXC_STACK_OVERFLOW) == 0);
 	BTEST_EXPECT_RELATION("%zu", yyjson_arr_size(test_json_get(ev, "/envelope/frames")), >=, 2);
+}
+
+/** The crashing thread is not the one that left the breadcrumb. */
+static void
+expect_other_thread(yyjson_doc* ev) {
+	uint64_t crashed = yyjson_get_uint(test_json_get(ev, "/envelope/exception/thread"));
+	uint64_t main_tid = yyjson_get_uint(test_json_get(ev, "/envelope/breadcrumbs/0/th"));
+	BTEST_EXPECT_EX(main_tid != 0 && crashed != main_tid, "crashed on thread %" PRIu64 ", main is %" PRIu64, crashed, main_tid);
+}
+
+BTEST(crash, thread_stack_overflow) {
+	if (test_under_wine()) {
+		BLOG_WARN("skipped: Wine cannot deliver a stack overflow to the filter");
+		return;
+	}
+	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(thread_stack_overflow));
+	BTEST_ASSERT(run != NULL);
+	BTEST_EXPECT(run->exit.signaled);
+	BTEST_EXPECT_EQUAL("%d", run->exit.code, SIGSEGV);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	yyjson_doc* ev = run->events[0];
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), TEST_EXC_STACK_OVERFLOW) == 0);
+	BTEST_EXPECT_RELATION("%zu", yyjson_arr_size(test_json_get(ev, "/envelope/frames")), >=, 2);
+	expect_other_thread(ev);
+}
+
+/** An unattached thread still reports with its frames. */
+BTEST(crash, thread_null_write) {
+	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(thread_null_write));
+	BTEST_ASSERT(run != NULL);
+	BTEST_EXPECT(run->exit.signaled);
+	BTEST_EXPECT_EQUAL("%d", run->exit.code, SIGSEGV);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	yyjson_doc* ev = run->events[0];
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), TEST_EXC_SEGV) == 0);
+	expect_other_thread(ev);
+	check_frames(ev);
 }
 
 BTEST(crash, clean_exit) {
