@@ -205,14 +205,7 @@ typedef struct {
  * Call as early as possible in `main`, before any window, GPU, or audio
  * initialization.
  *
- * Starts the watcher and returns once it is ready. The watcher is this
- * program started again with the same command line; it runs `main` up to
- * this call and never returns from it. Do not modify the argument strings
- * before calling.
- *
- * The game always runs. If the watcher cannot be started, or if
- * `CW_DISABLE=1` is set, the call returns with the library inactive and
- * every other function becomes a no-op. A second call is a no-op.
+ * From this point onwards, all crashes will be reported.
  *
  * @param cfg  Configuration. Copied; the caller may discard it after the call.
  */

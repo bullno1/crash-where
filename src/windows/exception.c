@@ -5,7 +5,8 @@
  * The unhandled exception filter and the abort handler copy what the
  * watcher needs into the shared region, set one event, wait for the
  * watcher to finish, then end the process. They use no heap and no
- * locks; after a stack overflow they run with a single page of stack.
+ * locks; after a stack overflow they run on the stack the thread's
+ * guarantee set aside.
  *
  * A vectored handler keeps the filter installed: it runs before the
  * frame search on every exception and puts the filter back if another
@@ -19,7 +20,9 @@
 
 #include "windows/platform.h"
 
-#define CW_REPLY_TIMEOUT 30000
+#define CW_REPLY_TIMEOUT   30000
+/** Stack kept free for the exception dispatch and the filter after a stack overflow. */
+#define CW_STACK_GUARANTEE (64 * 1024)
 
 /**
  * Publish the record, hand over to the watcher, end the process.
@@ -112,6 +115,14 @@ on_abort(int sig) {
 
 void
 cw_install_exception_handler(void) {
+	/*
+	 * By default an overflowing thread keeps one page, which the
+	 * exception dispatch alone can use up before the filter runs; the
+	 * process then dies unreported. The guarantee is per thread, so
+	 * only the thread calling cw_init gets it.
+	 */
+	ULONG guarantee = CW_STACK_GUARANTEE;
+	SetThreadStackGuarantee(&guarantee);
 	SetUnhandledExceptionFilter(on_exception);
 	AddVectoredExceptionHandler(1, on_first_chance);
 	signal(SIGABRT, on_abort);

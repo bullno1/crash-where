@@ -1,2 +1,6 @@
 *.bat text eol=crlf
 *.exe binary
+
+# Golden fixtures are compared byte for byte; no line ending conversion on any checkout.
+*.dump text eol=lf
+*.cwsym binary

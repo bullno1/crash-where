@@ -567,8 +567,13 @@ walk_compilands(reader_t* r, IDiaSymbol* global) {
 	IDiaSymbol* compiland;
 	ULONG fetched;
 	while (!r->stopped && IDiaEnumSymbols_Next(compilands, 1, &compiland, &fetched) == S_OK && fetched == 1) {
+		/* The compiland's name is its object file; the source file is what DWARF records, so the unit stem agrees across readers. */
 		BSTR wunit = NULL;
-		IDiaSymbol_get_name(compiland, &wunit);
+		if (IDiaSymbol_get_sourceFileName(compiland, &wunit) != S_OK || wunit == NULL || wunit[0] == L'\0') {
+			SysFreeString(wunit);
+			wunit = NULL;
+			IDiaSymbol_get_name(compiland, &wunit);
+		}
 		char* unit = take_bstr(wunit);
 		IDiaEnumSymbols* functions = NULL;
 		if (SUCCEEDED(IDiaSymbol_findChildren(compiland, SymTagFunction, NULL, nsNone, &functions)) && functions != NULL) {
