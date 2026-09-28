@@ -39,6 +39,10 @@
 #include <gelf.h>
 #include <libelf.h>
 
+#define BARRAY_API static inline
+#define BARRAY_IMPLEMENTATION
+#include "vendor/barray.h"
+
 #define MAX_SCOPE 64
 #define PAGE_MASK ((uint64_t)0xfff) /**< The kernel maps the first segment down to a page boundary. */
 
@@ -228,9 +232,7 @@ typedef struct {
 	bool warned_scope;        /**< The scope stack overflowed once; said so. */
 	bool warned_range;        /**< A range did not fit the table; said so. */
 
-	range_t* ranges;          /**< Every DWARF function range, for the `.symtab` pass. */
-	size_t range_count;
-	size_t range_cap;
+	barray(range_t) ranges;   /**< Every DWARF function range, for the `.symtab` pass. */
 
 	/* The compilation unit being walked. */
 	const char* unit;
@@ -253,21 +255,6 @@ to_module(reader_t* r, Dwarf_Addr start, Dwarf_Addr end, range_t* out) {
 		return false;
 	}
 	*out = (range_t){ .start = (uint32_t)(start - r->base), .end = (uint32_t)(end - r->base) };
-	return true;
-}
-
-static bool
-remember_range(reader_t* r, range_t range) {
-	if (r->range_count == r->range_cap) {
-		size_t cap = r->range_cap != 0 ? r->range_cap * 2 : 1024;
-		range_t* grown = realloc(r->ranges, cap * sizeof(*grown));
-		if (grown == NULL) {
-			return false;
-		}
-		r->ranges = grown;
-		r->range_cap = cap;
-	}
-	r->ranges[r->range_count++] = range;
 	return true;
 }
 
@@ -505,12 +492,7 @@ visit_subprogram(reader_t* r, Dwarf_Die* die) {
 			continue;
 		}
 		any = true;
-		if (!remember_range(r, range)) {
-			cwsym_logf(r->log, "%s: out of memory", r->path);
-			r->stopped = true;
-			free(display);
-			return;
-		}
+		barray_push(r->ranges, range, NULL);
 		cwsym_symbol_t sym = {
 			.start = range.start,
 			.size = range.end - range.start,
@@ -724,8 +706,9 @@ typedef enum {
 static coverage_t
 coverage(const reader_t* r, uint32_t start, uint32_t end) {
 	/* First range starting at or after `start`; the one before it may still reach in. */
+	size_t count = barray_len(r->ranges);
 	size_t lo = 0;
-	size_t hi = r->range_count;
+	size_t hi = count;
 	while (lo < hi) {
 		size_t mid = lo + (hi - lo) / 2;
 		if (r->ranges[mid].start < start) {
@@ -735,7 +718,7 @@ coverage(const reader_t* r, uint32_t start, uint32_t end) {
 		}
 	}
 	coverage_t result = COVER_NONE;
-	for (size_t i = lo > 0 ? lo - 1 : 0; i < r->range_count && r->ranges[i].start < end; ++i) {
+	for (size_t i = lo > 0 ? lo - 1 : 0; i < count && r->ranges[i].start < end; ++i) {
 		const range_t* g = &r->ranges[i];
 		if (g->end <= start) {
 			continue;
@@ -766,11 +749,9 @@ section_end(reader_t* r, unsigned shndx) {
  */
 static void
 emit_symtab(reader_t* r) {
-	qsort(r->ranges, r->range_count, sizeof(r->ranges[0]), compare_ranges);
+	qsort(r->ranges, barray_len(r->ranges), sizeof(r->ranges[0]), compare_ranges);
 
-	symtab_sym_t* syms = NULL;
-	size_t count = 0;
-	size_t cap = 0;
+	barray(symtab_sym_t) syms = NULL;
 	for (Elf_Scn* scn = NULL; (scn = dw.elf_nextscn(r->elf, scn)) != NULL;) {
 		GElf_Shdr shdr;
 		if (dw.gelf_getshdr(scn, &shdr) == NULL || shdr.sh_type != SHT_SYMTAB) {
@@ -792,26 +773,17 @@ emit_symtab(reader_t* r) {
 			if (name == NULL || name[0] == '\0') {
 				continue;
 			}
-			if (count == cap) {
-				size_t grown_cap = cap != 0 ? cap * 2 : 1024;
-				symtab_sym_t* grown = realloc(syms, grown_cap * sizeof(*grown));
-				if (grown == NULL) {
-					cwsym_logf(r->log, "%s: out of memory", r->path);
-					free(syms);
-					return;
-				}
-				syms = grown;
-				cap = grown_cap;
-			}
-			syms[count++] = (symtab_sym_t){
+			symtab_sym_t entry = {
 				.addr = sym.st_value,
 				.size = sym.st_size,
 				.name = name,
 				.shndx = sym.st_shndx,
 				.local = GELF_ST_BIND(sym.st_info) == STB_LOCAL,
 			};
+			barray_push(syms, entry, NULL);
 		}
 	}
+	size_t count = barray_len(syms);
 	qsort(syms, count, sizeof(syms[0]), compare_syms);
 
 	for (size_t i = 0; i < count && !r->stopped; ++i) {
@@ -860,7 +832,7 @@ emit_symtab(reader_t* r) {
 			r->stopped = true;
 		}
 	}
-	free(syms);
+	barray_free(syms, NULL);
 }
 
 /* }}} */
@@ -1007,7 +979,7 @@ cwsym_read_elf(
 	}
 
 done:
-	free(r.ranges);
+	barray_free(r.ranges, NULL);
 	if (r.dwarf != NULL) {
 		dw.dwarf_end(r.dwarf);
 	}
