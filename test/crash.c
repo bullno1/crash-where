@@ -131,47 +131,6 @@ static btest_suite_t crash = {
 	.cleanup_per_test = test_run_cleanup,
 };
 
-static uintptr_t
-state_hex(yyjson_doc* ev, const char* key) {
-	char ptr[64];
-	snprintf(ptr, sizeof(ptr), "/envelope/state/%s", key);
-	const char* s = test_json_str(ev, ptr);
-	return s != NULL ? (uintptr_t)strtoull(s, NULL, 16) : 0;
-}
-
-/**
- * Module entry whose recorded base is `base`, or `NULL`.
- */
-static yyjson_val*
-find_module(yyjson_doc* ev, uintptr_t base) {
-	yyjson_val* modules = test_json_get(ev, "/envelope/modules");
-	size_t idx;
-	size_t max;
-	yyjson_val* m;
-	yyjson_arr_foreach(modules, idx, max, m) {
-		const char* s = yyjson_get_str(yyjson_obj_get(m, "base"));
-		if (s != NULL && strtoull(s, NULL, 16) == base) {
-			return m;
-		}
-	}
-	return NULL;
-}
-
-/**
- * Absolute address of frame `i`, or 0 when it is outside the main module.
- */
-static uintptr_t
-frame_addr(yyjson_doc* ev, size_t i, const char* main_name, uintptr_t base) {
-	char ptr[64];
-	snprintf(ptr, sizeof(ptr), "/envelope/frames/%zu", i);
-	yyjson_val* fr = test_json_get(ev, ptr);
-	const char* name = yyjson_get_str(yyjson_obj_get(fr, "module"));
-	if (fr == NULL || name == NULL || strcmp(name, main_name) != 0) {
-		return 0;
-	}
-	return base + (uintptr_t)yyjson_get_uint(yyjson_obj_get(fr, "offset"));
-}
-
 /**
  * Check the module base against the image start the child recorded,
  * then each frame against the return addresses it recorded.
@@ -182,18 +141,14 @@ frame_addr(yyjson_doc* ev, size_t i, const char* main_name, uintptr_t base) {
  */
 static void
 check_frames(yyjson_doc* ev, bool exact) {
-	uintptr_t base = state_hex(ev, "base");
+	uintptr_t base = test_state_hex(ev, "base");
 	BTEST_ASSERT(base != 0);
-	yyjson_val* main_module = find_module(ev, base);
-	BTEST_ASSERT_EX(main_module != NULL, "no module at base %" PRIxPTR, base);
-	const char* main_name = yyjson_get_str(yyjson_obj_get(main_module, "name"));
-	BTEST_ASSERT(main_name != NULL);
-
 	size_t num_frames = yyjson_arr_size(test_json_get(ev, "/envelope/frames"));
 	BTEST_ASSERT_RELATION("%zu", num_frames, >=, 2);
 
-	uintptr_t fn0 = state_hex(ev, "fn0");
-	uintptr_t pc = frame_addr(ev, 0, main_name, base);
+	uintptr_t fn0 = test_state_hex(ev, "fn0");
+	uintptr_t pc = test_frame_addr(ev, 0);
+	BTEST_ASSERT_EX(pc != 0, "frame 0 is not in the module at base %" PRIxPTR, base);
 	BTEST_EXPECT_EX(
 		pc >= fn0 && pc < fn0 + MARKER_MAX_BYTES,
 		"frame 0 at %" PRIxPTR ", crashing function at %" PRIxPTR, pc, fn0
@@ -202,17 +157,17 @@ check_frames(yyjson_doc* ev, bool exact) {
 	static const char* const keys[] = { "ret1", "ret2", "ret3" };
 	size_t next = 1;
 	for (size_t k = 0; k < 3; ++k) {
-		uintptr_t want = state_hex(ev, keys[k]);
+		uintptr_t want = test_state_hex(ev, keys[k]);
 		if (want == 0) {
 			continue;
 		}
 		want -= 1; /* The unwinder points inside the call instruction. */
 		if (exact) {
-			uintptr_t got = frame_addr(ev, next, main_name, base);
+			uintptr_t got = test_frame_addr(ev, next);
 			BTEST_EXPECT_EX(got == want, "frame %zu is %" PRIxPTR ", want %" PRIxPTR, next, got, want);
 			++next;
 		} else {
-			while (next < num_frames && frame_addr(ev, next, main_name, base) != want) {
+			while (next < num_frames && test_frame_addr(ev, next) != want) {
 				++next;
 			}
 			BTEST_EXPECT_EX(next < num_frames, "return address %" PRIxPTR " (%s) missing", want, keys[k]);

@@ -93,6 +93,9 @@ cw_init(const cw_config_t* cfg) {
 		cw_ctx.uploader = *cfg->uploader;
 		cw_ctx.cfg.uploader = &cw_ctx.uploader;
 	}
+	if (cw_ctx.cfg.hang_timeout_ms == 0) {
+		cw_ctx.cfg.hang_timeout_ms = CW_HANG_DEFAULT_MS;
+	}
 
 	const char* disable = getenv("CW_DISABLE");
 	if (disable != NULL && strcmp(disable, "1") == 0) {
@@ -123,6 +126,7 @@ cw_heartbeat(void) {
 	if (!atomic_exchange_explicit(&handler_checked, true, memory_order_relaxed)) {
 		cw_platform_check_handlers();
 	}
+	atomic_store_explicit(&cw_ctx.shared->heartbeat_tid, cw_platform_tid(), memory_order_relaxed);
 	atomic_fetch_add_explicit(&cw_ctx.shared->heartbeat, 1, memory_order_relaxed);
 }
 

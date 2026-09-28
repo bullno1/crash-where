@@ -2,6 +2,7 @@
  * @file windows/watcher.c
  * Watcher side: adopt the section and events, watch the game, write reports.
  */
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -95,7 +96,98 @@ write_killed_report(const char* report_dir) {
 }
 
 /**
- * Wait for events until the game is gone.
+ * Suspend one thread of the game, walk its stack from its current
+ * context, and let it run again.
+ *
+ * @return `true` when `info` was filled from a usable context.
+ */
+static bool
+snapshot_thread(HANDLE game, DWORD tid, cw_crash_info_t* info) {
+	HANDLE thread = OpenThread(THREAD_SUSPEND_RESUME | THREAD_GET_CONTEXT | THREAD_QUERY_INFORMATION, FALSE, tid);
+	if (thread == NULL) {
+		cw_log(CW_LOG_WARN, "cannot open thread %lu (error %lu)", tid, GetLastError());
+		return false;
+	}
+	bool ok = false;
+	if (SuspendThread(thread) != (DWORD)-1) {
+		static cw_crash_t snap;
+		snap = (cw_crash_t){ .tid = tid, .context = { .ContextFlags = CONTEXT_CONTROL | CONTEXT_INTEGER } };
+		if (GetThreadContext(thread, &snap.context)) {
+			ok = true;
+			if (!cw_unwind(game, &snap, info)) {
+				cw_log(CW_LOG_WARN, "unwind produced no frames");
+			}
+		}
+		ResumeThread(thread);
+	}
+	CloseHandle(thread);
+	return ok;
+}
+
+/**
+ * Report a game whose heartbeat has been silent for `silent_ms`.
+ *
+ * @param path  Receives the envelope path on success.
+ * @return `true` when the envelope was written.
+ */
+static bool
+write_hang_report(const char* report_dir, uint64_t silent_ms, char* path, size_t cap) {
+	static cw_crash_info_t info;
+	info = (cw_crash_info_t){ .main_module = -1 };
+	DWORD tid = atomic_load_explicit(&cw_win.region->common.heartbeat_tid, memory_order_relaxed);
+	snapshot_thread(cw_win.handles.game, tid, &info);
+	snprintf(info.type, sizeof(info.type), "HANG");
+	snprintf(info.message_raw, sizeof(info.message_raw), "no heartbeat for %" PRIu64 " ms", silent_ms);
+	info.fault_addr = 0;
+	info.tid = tid;
+	if (!cw_write_envelope(report_dir, &info, &cw_win.region->common, path, cap)) {
+		return false;
+	}
+	cw_log(CW_LOG_INFO, "report written to %s", path);
+	return true;
+}
+
+/**
+ * Whether a debugger holds the game.
+ */
+static bool
+game_stopped(void) {
+	BOOL present = FALSE;
+	return CheckRemoteDebuggerPresent(cw_win.handles.game, &present) && present;
+}
+
+/**
+ * Sample the heartbeat once and act on what the detector says.
+ */
+static void
+check_hang(cw_hang_t* hang, const char* report_dir) {
+	uint64_t now = cw_platform_now_ms();
+	uint64_t count = atomic_load_explicit(&cw_win.region->common.heartbeat, memory_order_relaxed);
+	if (count == hang->count && game_stopped()) {
+		cw_hang_reset(hang, now);
+		return;
+	}
+	switch (cw_hang_step(hang, count, now, cw_ctx.cfg.hang_timeout_ms)) {
+	case CW_HANG_REPORT: {
+		uint64_t silent_ms = now - hang->since_ms;
+		cw_log(CW_LOG_WARN, "no heartbeat for %" PRIu64 " ms", silent_ms);
+		char path[CW_STR_CAP + 64];
+		if (write_hang_report(report_dir, silent_ms, path, sizeof(path))) {
+			cw_upload_report(path);
+		}
+		break;
+	}
+	case CW_HANG_RECOVERED:
+		cw_log(CW_LOG_INFO, "heartbeat resumed");
+		break;
+	case CW_HANG_NONE:
+		break;
+	}
+}
+
+/**
+ * Wait for events until the game is gone, sampling the heartbeat at a
+ * quarter of the hang timeout in between.
  *
  * The game sets an event before it ends, and a wait that finds several
  * objects signaled reports the lowest index, so the events come first.
@@ -105,10 +197,18 @@ cw_watch(const char* report_dir) {
 	bool crashed = false;
 	bool shutdown = false;
 	int result = 0;
+	cw_hang_t hang = { 0 };
+	DWORD interval_ms = (DWORD)cw_hang_poll_ms(cw_ctx.cfg.hang_timeout_ms);
 
 	for (;;) {
 		HANDLE objects[3] = { cw_win.handles.ev_crash, cw_win.handles.ev_shutdown, cw_win.handles.game };
-		DWORD which = WaitForMultipleObjects(3, objects, FALSE, INFINITE);
+		DWORD which = WaitForMultipleObjects(3, objects, FALSE, crashed ? INFINITE : interval_ms);
+		if (!crashed) {
+			check_hang(&hang, report_dir);
+		}
+		if (which == WAIT_TIMEOUT) {
+			continue;
+		}
 		if (which == WAIT_OBJECT_0) {
 			/* Reply first: the game is parked until it hears back. */
 			char path[CW_STR_CAP + 64];

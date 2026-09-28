@@ -3,12 +3,14 @@
  * Linux implementation of the test platform functions.
  */
 #include <errno.h>
+#include <signal.h>
 #include <spawn.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
+#include <time.h>
 #include <unistd.h>
 
 #include "platform.h"
@@ -101,6 +103,43 @@ test_spawn_self(const char* const* env, test_exit_t* out) {
 bool
 test_mkdir(const char* path) {
 	return mkdir(path, 0777) == 0 || errno == EEXIST;
+}
+
+void
+test_sleep_ms(unsigned ms) {
+	struct timespec ts = { .tv_sec = ms / 1000, .tv_nsec = (long)(ms % 1000) * 1000000L };
+	while (nanosleep(&ts, &ts) != 0 && errno == EINTR) {
+	}
+}
+
+long
+test_file_size(const char* path) {
+	struct stat st;
+	return stat(path, &st) == 0 ? (long)st.st_size : -1;
+}
+
+int
+test_stop_helper_main(const char* spec) {
+	(void)spec;
+	return 2; /* Never spawned: the fork below stands in for a helper. */
+}
+
+bool
+test_stop_self(unsigned ms) {
+	/* A forked helper resumes us, since a stopped process cannot resume itself. */
+	pid_t helper = fork();
+	if (helper < 0) {
+		return false;
+	}
+	if (helper == 0) {
+		test_sleep_ms(ms);
+		kill(getppid(), SIGCONT);
+		_exit(0);
+	}
+	raise(SIGSTOP);
+	while (waitpid(helper, NULL, 0) < 0 && errno == EINTR) {
+	}
+	return true;
 }
 
 uintptr_t

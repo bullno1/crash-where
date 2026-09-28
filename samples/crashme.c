@@ -2,7 +2,7 @@
  * @file crashme.c
  * Test program: initialize the library, then crash on request.
  *
- * Usage: crashme [null|abort|none] [report_dir]
+ * Usage: crashme [null|abort|hang|none] [report_dir]
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -75,6 +75,12 @@ main(int argc, char** argv) {
 	}
 	if (strcmp(mode, "abort") == 0) {
 		abort();
+	}
+	if (strcmp(mode, "hang") == 0) {
+		/* Ticked once above, so the watcher reports this after the default timeout. */
+		for (;;) {
+			sink++;
+		}
 	}
 	level_three();
 	return 0;

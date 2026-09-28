@@ -2,7 +2,9 @@
  * @file linux/watcher.c
  * Watcher side: adopt the region and socket, watch the game, write reports.
  */
+#include <elf.h>
 #include <errno.h>
+#include <inttypes.h>
 #include <poll.h>
 #include <signal.h>
 #include <stdio.h>
@@ -10,7 +12,11 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/pidfd.h>
+#include <sys/ptrace.h>
 #include <sys/stat.h>
+#include <sys/uio.h>
+#include <sys/user.h>
+#include <sys/wait.h>
 #include <unistd.h>
 
 #include "linux/platform.h"
@@ -98,7 +104,182 @@ write_killed_report(const char* report_dir) {
 }
 
 /**
- * Wait for messages until the game is gone.
+ * End of the mapping that holds `addr` in the game, or 0 when unknown.
+ */
+static uint64_t
+mapping_end(pid_t game, uint64_t addr) {
+	char proc[64];
+	snprintf(proc, sizeof(proc), "/proc/%d/maps", (int)game);
+	FILE* f = fopen(proc, "r");
+	if (f == NULL) {
+		return 0;
+	}
+	uint64_t end = 0;
+	char line[CW_STR_CAP + 128];
+	while (fgets(line, sizeof(line), f) != NULL) {
+		unsigned long start;
+		unsigned long stop;
+		if (sscanf(line, "%lx-%lx", &start, &stop) == 2 && addr >= start && addr < stop) {
+			end = stop;
+			break;
+		}
+	}
+	fclose(f);
+	return end;
+}
+
+static void
+regs_to_context(const struct user_regs_struct* regs, ucontext_t* uc) {
+	*uc = (ucontext_t){ 0 };
+#if defined(__x86_64__)
+	uc->uc_mcontext.gregs[REG_RIP] = (greg_t)regs->rip;
+	uc->uc_mcontext.gregs[REG_RSP] = (greg_t)regs->rsp;
+	uc->uc_mcontext.gregs[REG_RBP] = (greg_t)regs->rbp;
+#elif defined(__aarch64__)
+	uc->uc_mcontext.pc = regs->pc;
+	uc->uc_mcontext.sp = regs->sp;
+	uc->uc_mcontext.regs[29] = regs->regs[29];
+#else
+#error "unsupported architecture"
+#endif
+}
+
+/**
+ * Stop one thread of the game under ptrace, copy its registers and
+ * stack into `snap`, and let it run again.
+ *
+ * @return `true` when `snap` holds a usable snapshot.
+ */
+static bool
+snapshot_thread(pid_t game, pid_t tid, cw_crash_t* snap) {
+	if (ptrace(PTRACE_SEIZE, tid, NULL, NULL) != 0) {
+		cw_log(CW_LOG_WARN, "cannot attach to thread %d (%s)", (int)tid, strerror(errno));
+		return false;
+	}
+	bool ok = false;
+	int sig = 0;
+	if (ptrace(PTRACE_INTERRUPT, tid, NULL, NULL) == 0) {
+		int status;
+		pid_t w;
+		while ((w = waitpid(tid, &status, __WALL)) < 0 && errno == EINTR) {
+		}
+		if (w == tid && WIFSTOPPED(status)) {
+			/* A signal that arrived first must be delivered on detach, not swallowed. */
+			sig = (status >> 16) == PTRACE_EVENT_STOP ? 0 : WSTOPSIG(status);
+			struct user_regs_struct regs;
+			struct iovec iov = { .iov_base = &regs, .iov_len = sizeof(regs) };
+			if (ptrace(PTRACE_GETREGSET, tid, (void*)NT_PRSTATUS, &iov) == 0) {
+				*snap = (cw_crash_t){ .tid = tid };
+				regs_to_context(&regs, &snap->uc);
+#if defined(__x86_64__)
+				uint64_t sp = regs.rsp;
+#else
+				uint64_t sp = regs.sp;
+#endif
+				uint64_t top = mapping_end(game, sp);
+				if (top == 0 || top - sp > CW_STACK_CAP) {
+					top = sp + CW_STACK_CAP;
+				}
+				struct iovec local = { .iov_base = snap->stack, .iov_len = top - sp };
+				struct iovec remote = { .iov_base = (void*)(uintptr_t)sp, .iov_len = top - sp };
+				ssize_t n = process_vm_readv(game, &local, 1, &remote, 1, 0);
+				snap->sp = sp;
+				snap->stack_top = top;
+				snap->stack_len = n > 0 ? (size_t)n : 0;
+				ok = true;
+			}
+		}
+	}
+	ptrace(PTRACE_DETACH, tid, NULL, (void*)(intptr_t)sig);
+	return ok;
+}
+
+/**
+ * Report a game whose heartbeat has been silent for `silent_ms`.
+ *
+ * @param path  Receives the envelope path on success.
+ * @return `true` when the envelope was written.
+ */
+static bool
+write_hang_report(pid_t game, const char* report_dir, uint64_t silent_ms, char* path, size_t cap) {
+	static cw_crash_info_t info;
+	static cw_crash_t snap;
+	info = (cw_crash_info_t){ .main_module = -1 };
+	pid_t tid = (pid_t)atomic_load_explicit(&cw_linux.region->common.heartbeat_tid, memory_order_relaxed);
+	if (snapshot_thread(game, tid, &snap) && !cw_unwind(game, &snap, &info)) {
+		cw_log(CW_LOG_WARN, "unwind produced no frames");
+	}
+	snprintf(info.type, sizeof(info.type), "HANG");
+	snprintf(info.message_raw, sizeof(info.message_raw), "no heartbeat for %" PRIu64 " ms", silent_ms);
+	info.fault_addr = 0;
+	info.tid = (uint32_t)tid;
+	if (!cw_write_envelope(report_dir, &info, &cw_linux.region->common, path, cap)) {
+		return false;
+	}
+	cw_log(CW_LOG_INFO, "report written to %s", path);
+	return true;
+}
+
+/**
+ * Whether the game is in a job-control or tracing stop, where it cannot
+ * tick through no fault of its own.
+ */
+static bool
+game_stopped(pid_t game) {
+	char proc[64];
+	snprintf(proc, sizeof(proc), "/proc/%d/status", (int)game);
+	FILE* f = fopen(proc, "r");
+	if (f == NULL) {
+		return false;
+	}
+	bool stopped = false;
+	char line[128];
+	while (fgets(line, sizeof(line), f) != NULL) {
+		if (strncmp(line, "State:", 6) == 0) {
+			const char* state = line + 6;
+			while (*state == ' ' || *state == '\t') {
+				++state;
+			}
+			stopped = *state == 'T' || *state == 't';
+			break;
+		}
+	}
+	fclose(f);
+	return stopped;
+}
+
+/**
+ * Sample the heartbeat once and act on what the detector says.
+ */
+static void
+check_hang(pid_t game, cw_hang_t* hang, const char* report_dir) {
+	uint64_t now = cw_platform_now_ms();
+	uint64_t count = atomic_load_explicit(&cw_linux.region->common.heartbeat, memory_order_relaxed);
+	if (count == hang->count && game_stopped(game)) {
+		cw_hang_reset(hang, now);
+		return;
+	}
+	switch (cw_hang_step(hang, count, now, cw_ctx.cfg.hang_timeout_ms)) {
+	case CW_HANG_REPORT: {
+		uint64_t silent_ms = now - hang->since_ms;
+		cw_log(CW_LOG_WARN, "no heartbeat for %" PRIu64 " ms", silent_ms);
+		char path[CW_STR_CAP + 64];
+		if (write_hang_report(game, report_dir, silent_ms, path, sizeof(path))) {
+			cw_upload_report(path);
+		}
+		break;
+	}
+	case CW_HANG_RECOVERED:
+		cw_log(CW_LOG_INFO, "heartbeat resumed");
+		break;
+	case CW_HANG_NONE:
+		break;
+	}
+}
+
+/**
+ * Wait for messages until the game is gone, sampling the heartbeat at
+ * a quarter of the hang timeout in between.
  */
 static void
 cw_watch(pid_t game, int sock, const char* report_dir) {
@@ -107,18 +288,26 @@ cw_watch(pid_t game, int sock, const char* report_dir) {
 	bool shutdown = false;
 	int result = 0;
 	bool game_gone = false;
+	cw_hang_t hang = { 0 };
+	int interval_ms = cw_hang_poll_ms(cw_ctx.cfg.hang_timeout_ms);
 
 	while (!game_gone) {
 		struct pollfd fds[2] = {
 			{ .fd = sock, .events = POLLIN },
 			{ .fd = pidfd, .events = POLLIN },
 		};
-		int n = poll(fds, pidfd >= 0 ? 2 : 1, -1);
+		int n = poll(fds, pidfd >= 0 ? 2 : 1, crashed ? -1 : interval_ms);
 		if (n < 0) {
 			if (errno == EINTR) {
 				continue;
 			}
 			break;
+		}
+		if (!crashed) {
+			check_hang(game, &hang, report_dir);
+		}
+		if (n == 0) {
+			continue;
 		}
 		if (fds[0].revents & POLLIN) {
 			cw_msg_t msg;

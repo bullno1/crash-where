@@ -14,6 +14,11 @@
 
 int
 main(int argc, const char* argv[]) {
+	/* Set by a scenario on the helper that stops it from outside; it inherits the scenario variable too. */
+	const char* stop = getenv("CW_TEST_STOP");
+	if (stop != NULL) {
+		return test_stop_helper_main(stop);
+	}
 	/* Set by the runner on the child; the watcher inherits it and never returns from cw_init. */
 	const char* scenario = getenv("CW_TEST_SCENARIO");
 	if (scenario != NULL) {

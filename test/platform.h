@@ -57,6 +57,37 @@ bool
 test_mkdir(const char* path);
 
 /**
+ * Sleep for `ms` milliseconds.
+ */
+void
+test_sleep_ms(unsigned ms);
+
+/**
+ * Size of a file in bytes, or -1 when it cannot be read.
+ */
+long
+test_file_size(const char* path);
+
+/**
+ * Stop this process the way a job-control stop or a debugger break
+ * would, and resume it after `ms` milliseconds.
+ *
+ * @return `false` when the stop could not be arranged.
+ */
+bool
+test_stop_self(unsigned ms);
+
+/**
+ * Entry point of the helper process that test_stop_self() spawns on
+ * platforms where only another process can stop this one.
+ *
+ * @param spec  Value of `CW_TEST_STOP` in the helper's environment.
+ * @return The helper's exit status; 0 when the stop and resume happened.
+ */
+int
+test_stop_helper_main(const char* spec);
+
+/**
  * Load address of this executable: the base a symbolizer subtracts
  * from an absolute address to get a module offset.
  */

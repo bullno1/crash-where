@@ -9,6 +9,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/stat.h>
 
 #include "platform.h"
 
@@ -121,6 +122,62 @@ test_spawn_self(const char* const* env, test_exit_t* out) {
 bool
 test_mkdir(const char* path) {
 	return CreateDirectoryA(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
+}
+
+void
+test_sleep_ms(unsigned ms) {
+	Sleep(ms);
+}
+
+long
+test_file_size(const char* path) {
+	struct _stat64 st;
+	return _stat64(path, &st) == 0 ? (long)st.st_size : -1;
+}
+
+int
+test_stop_helper_main(const char* spec) {
+	unsigned long pid;
+	unsigned ms;
+	if (sscanf(spec, "%lu,%u", &pid, &ms) != 2) {
+		return 2;
+	}
+	/* Attaching queues a debug event that is never continued, so the target stays frozen. */
+	if (!DebugActiveProcess(pid)) {
+		return 3;
+	}
+	DebugSetProcessKillOnExit(FALSE);
+	Sleep(ms);
+	return DebugActiveProcessStop(pid) ? 0 : 3;
+}
+
+bool
+test_stop_self(unsigned ms) {
+	/* A helper attaches as our debugger; a process cannot break itself from outside. */
+	char spec[64];
+	snprintf(spec, sizeof(spec), "CW_TEST_STOP=%lu,%u", GetCurrentProcessId(), ms);
+	const char* extra[] = { spec, NULL };
+	char* block = build_env(extra);
+	if (block == NULL) {
+		return false;
+	}
+	char exe[MAX_PATH];
+	DWORD exe_len = GetModuleFileNameA(NULL, exe, sizeof(exe));
+	char cmdline[] = "cw_test";
+	STARTUPINFOA si = { .cb = sizeof(si) };
+	PROCESS_INFORMATION pi = { 0 };
+	bool ok = exe_len > 0 && exe_len < sizeof(exe)
+		&& CreateProcessA(exe, cmdline, NULL, NULL, FALSE, 0, block, NULL, &si, &pi);
+	free(block);
+	if (!ok) {
+		return false;
+	}
+	CloseHandle(pi.hThread);
+	WaitForSingleObject(pi.hProcess, INFINITE);
+	DWORD code = 1;
+	GetExitCodeProcess(pi.hProcess, &code);
+	CloseHandle(pi.hProcess);
+	return code == 0;
 }
 
 uintptr_t

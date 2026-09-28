@@ -175,6 +175,15 @@ typedef struct {
 	const char* endpoint;    /**< Base URL of the ingest service, without a trailing slash. */
 	const char* report_dir;  /**< Directory for pending reports, or `NULL` for the platform default. */
 
+	/**
+	 * Heartbeat silence reported as a hang, in milliseconds.
+	 *
+	 * 0 selects the default of 10 seconds. Detection starts with the
+	 * first cw_heartbeat() call; a game that never calls it is never
+	 * reported as hung.
+	 */
+	uint32_t hang_timeout_ms;
+
 	const cw_auth_t* auth;         /**< Storefront authentication, or `NULL` for unauthenticated reports. */
 	const cw_uploader_t* uploader; /**< Upload transport, or `NULL` to keep reports on disk unsent. */
 
@@ -226,8 +235,12 @@ cw_auth_refresh(void);
 /**
  * Mark the game alive.
  *
- * Call once per frame or tick. A hang is reported when hearbeat stops for
- * several seconds.
+ * Call once per frame or tick. When the calls stop for
+ * @ref cw_config_t::hang_timeout_ms a hang report is submitted and the game
+ * is left running. A later stall is reported again once the calls have
+ * resumed.
+ *
+ * The report describes the thread that called this function last.
  */
 void
 cw_heartbeat(void);

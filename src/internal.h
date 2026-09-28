@@ -66,6 +66,7 @@ typedef struct {
 typedef struct {
 	uint32_t magic;            /**< Guards against a wrong fd number in the environment. */
 	_Atomic uint64_t heartbeat;
+	_Atomic uint32_t heartbeat_tid; /**< Thread of the last cw_heartbeat() call. */
 	_Atomic uint64_t crumb_next;
 	_Atomic uint64_t state_seq;
 	cw_crumb_t crumbs[CW_CRUMB_COUNT];
@@ -89,6 +90,54 @@ typedef struct {
 } cw_ctx_t;
 
 extern cw_ctx_t cw_ctx;
+
+#define CW_HANG_DEFAULT_MS  10000u
+#define CW_HANG_MAX_REPORTS 3
+
+/**
+ * Hang detector, driven by the watcher from heartbeat readings.
+ *
+ * Arms on the first change of the heartbeat, files one report per
+ * stall, and re-arms once the heartbeat moves again. Holds no clock of
+ * its own; every step takes the current time as an argument.
+ */
+typedef struct {
+	uint64_t count;            /**< Heartbeat value at the last change. */
+	uint64_t since_ms;         /**< When the heartbeat last changed. */
+	bool armed;                /**< A heartbeat has been seen. */
+	bool reported;             /**< The current stall has been reported. */
+	int reports;               /**< Reports filed this session. */
+} cw_hang_t;
+
+typedef enum {
+	CW_HANG_NONE,
+	CW_HANG_REPORT,            /**< The heartbeat has been silent for the timeout. */
+	CW_HANG_RECOVERED,         /**< The heartbeat resumed after a report. */
+} cw_hang_event_t;
+
+/**
+ * Feed one heartbeat reading to the detector.
+ *
+ * @param count       Current heartbeat value.
+ * @param now_ms      Current monotonic time.
+ * @param timeout_ms  Silence that counts as a hang.
+ */
+cw_hang_event_t
+cw_hang_step(cw_hang_t* hang, uint64_t count, uint64_t now_ms, uint64_t timeout_ms);
+
+/**
+ * Restart the silence clock without changing the armed state, for a
+ * game that is stopped or under a debugger and cannot tick.
+ */
+void
+cw_hang_reset(cw_hang_t* hang, uint64_t now_ms);
+
+/**
+ * How often the watcher samples the heartbeat for `timeout_ms`: a
+ * quarter of it, between 10 ms and 1 s.
+ */
+int
+cw_hang_poll_ms(uint64_t timeout_ms);
 
 /**
  * One loaded module as seen at crash time.

@@ -3,6 +3,7 @@
  * Runner side of the harness, plus the child's entry point and the
  * test uploader that runs inside the watcher.
  */
+#include <inttypes.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -162,12 +163,14 @@ test_fixture_main(const char* name) {
 		.send_envelope = send_envelope,
 		.send_attachment = send_attachment,
 	};
+	const char* hang_ms = getenv("CW_TEST_HANG_MS");
 	cw_config_t cfg = {
 		.app = "cw-test",
 		.version = "0.0.1",
 		.channel = "test",
 		.endpoint = "http://127.0.0.1:9",
 		.report_dir = report_dir,
+		.hang_timeout_ms = hang_ms != NULL ? (uint32_t)strtoul(hang_ms, NULL, 10) : 0,
 		.uploader = &uploader,
 		.log = log_from_cw,
 	};
@@ -269,13 +272,15 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
 	char e_report[512];
 	char e_status[64];
 	char e_want[64];
+	char e_hang[64];
 	snprintf(e_scenario, sizeof(e_scenario), "CW_TEST_SCENARIO=%s", scenario->name);
 	snprintf(e_out, sizeof(e_out), "CW_TEST_OUT=%s", run->dir);
 	snprintf(e_report, sizeof(e_report), "CW_TEST_REPORT_DIR=%s/report", run->dir);
 	snprintf(e_status, sizeof(e_status), "CW_TEST_STATUS=%s", o.status != NULL ? o.status : "ok");
 	snprintf(e_want, sizeof(e_want), "CW_TEST_WANT_ATTACHMENTS=%d", o.want_attachments ? 1 : 0);
+	snprintf(e_hang, sizeof(e_hang), "CW_TEST_HANG_MS=%" PRIu32, o.hang_timeout_ms);
 	const char* env[] = {
-		e_scenario, e_out, e_report, e_status, e_want,
+		e_scenario, e_out, e_report, e_status, e_want, e_hang,
 		/* A sanitizer build must let the crash reach the library's handlers. */
 		"ASAN_OPTIONS=handle_segv=0:handle_abort=0:handle_sigbus=0:handle_sigfpe=0:handle_sigill=0",
 		o.disable ? "CW_DISABLE=1" : NULL,
@@ -288,6 +293,39 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
 	}
 	read_events(run);
 	return run;
+}
+
+uintptr_t
+test_state_hex(yyjson_doc* ev, const char* key) {
+	char ptr[64];
+	snprintf(ptr, sizeof(ptr), "/envelope/state/%s", key);
+	const char* s = test_json_str(ev, ptr);
+	return s != NULL ? (uintptr_t)strtoull(s, NULL, 16) : 0;
+}
+
+uintptr_t
+test_frame_addr(yyjson_doc* ev, size_t i) {
+	uintptr_t base = test_state_hex(ev, "base");
+	const char* main_name = NULL;
+	yyjson_val* modules = test_json_get(ev, "/envelope/modules");
+	size_t idx;
+	size_t max;
+	yyjson_val* m;
+	yyjson_arr_foreach(modules, idx, max, m) {
+		const char* s = yyjson_get_str(yyjson_obj_get(m, "base"));
+		if (s != NULL && strtoull(s, NULL, 16) == base) {
+			main_name = yyjson_get_str(yyjson_obj_get(m, "name"));
+			break;
+		}
+	}
+	char ptr[64];
+	snprintf(ptr, sizeof(ptr), "/envelope/frames/%zu", i);
+	yyjson_val* fr = test_json_get(ev, ptr);
+	const char* name = yyjson_get_str(yyjson_obj_get(fr, "module"));
+	if (base == 0 || main_name == NULL || name == NULL || strcmp(name, main_name) != 0) {
+		return 0;
+	}
+	return base + (uintptr_t)yyjson_get_uint(yyjson_obj_get(fr, "offset"));
 }
 
 /* }}} */

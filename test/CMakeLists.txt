@@ -2,6 +2,7 @@ add_executable(cw_test
 	main.c
 	scenario.c
 	crash.c
+	hang.c
 	vendor/yyjson.c
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -11,13 +12,14 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 endif()
 target_include_directories(cw_test PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}
+	${PROJECT_SOURCE_DIR}/src
 	${CMAKE_CURRENT_SOURCE_DIR}/vendor
 )
 target_link_libraries(cw_test PRIVATE cw)
 
 if(MSVC)
 	target_compile_definitions(cw_test PRIVATE _CRT_SECURE_NO_WARNINGS)
-	target_compile_options(cw_test PRIVATE /W4)
+	target_compile_options(cw_test PRIVATE /W4 /experimental:c11atomics)
 else()
 	target_compile_definitions(cw_test PRIVATE _GNU_SOURCE)
 	target_compile_options(cw_test PRIVATE -Wall -Wextra)

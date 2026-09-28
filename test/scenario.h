@@ -52,6 +52,7 @@ typedef struct {
 	const char* status;    /**< Status the test uploader returns: "ok", "retry", or "drop". `NULL` means "ok". */
 	bool want_attachments; /**< Value the test uploader reports for `want_attachments`. */
 	bool disable;          /**< Run the child with `CW_DISABLE=1`. */
+	uint32_t hang_timeout_ms; /**< Passed to cw_config_t::hang_timeout_ms; 0 keeps the library default. */
 } test_run_opts_t;
 
 #define TEST_MAX_EVENTS 8
@@ -99,6 +100,20 @@ test_run_cleanup(void);
  */
 int
 test_fixture_main(const char* name);
+
+/**
+ * Address the child recorded in a state slot as hex, or 0 when absent.
+ */
+uintptr_t
+test_state_hex(yyjson_doc* ev, const char* key);
+
+/**
+ * Absolute address of frame `i`, or 0 when it is not inside the main
+ * module. The main module is the one whose base matches the `base` the
+ * child recorded in a state slot.
+ */
+uintptr_t
+test_frame_addr(yyjson_doc* ev, size_t i);
 
 /**
  * String at a JSON pointer, or `NULL` when absent or not a string.
