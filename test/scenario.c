@@ -226,6 +226,12 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
 		BLOG_ERROR("cannot create %s", run->dir);
 		return NULL;
 	}
+	char report[512];
+	snprintf(report, sizeof(report), "%s/report", run->dir);
+	if (!o.keep && !test_remove_tree(report)) {
+		BLOG_ERROR("cannot clear %s", report);
+		return NULL;
+	}
 	char events[512];
 	snprintf(events, sizeof(events), "%s/events.jsonl", run->dir);
 	FILE* f = fopen(events, "w");
@@ -235,13 +241,13 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
 
 	char e_scenario[128];
 	char e_out[512];
-	char e_report[512];
+	char e_report[560];
 	char e_status[64];
 	char e_want[64];
 	char e_hang[64];
 	snprintf(e_scenario, sizeof(e_scenario), "CW_TEST_SCENARIO=%s", scenario->name);
 	snprintf(e_out, sizeof(e_out), "CW_TEST_OUT=%s", run->dir);
-	snprintf(e_report, sizeof(e_report), "CW_TEST_REPORT_DIR=%s/report", run->dir);
+	snprintf(e_report, sizeof(e_report), "CW_TEST_REPORT_DIR=%s", report);
 	snprintf(e_status, sizeof(e_status), "CW_TEST_STATUS=%s", o.status != NULL ? o.status : "ok");
 	snprintf(e_want, sizeof(e_want), "CW_TEST_WANT_ATTACHMENTS=%d", o.want_attachments ? 1 : 0);
 	snprintf(e_hang, sizeof(e_hang), "CW_TEST_HANG_MS=%" PRIu32, o.hang_timeout_ms);

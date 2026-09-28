@@ -74,6 +74,19 @@ bool
 test_mkdir(const char* path);
 
 /**
+ * Delete a directory with everything in it. Succeeds when it is absent.
+ */
+bool
+test_remove_tree(const char* path);
+
+/**
+ * Number of entries of a directory whose names end with `suffix`, or -1
+ * when it cannot be read.
+ */
+int
+test_count_files(const char* dir, const char* suffix);
+
+/**
  * Sleep for `ms` milliseconds.
  */
 void

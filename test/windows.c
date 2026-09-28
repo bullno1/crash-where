@@ -153,6 +153,53 @@ test_mkdir(const char* path) {
 	return CreateDirectoryA(path, NULL) || GetLastError() == ERROR_ALREADY_EXISTS;
 }
 
+bool
+test_remove_tree(const char* path) {
+	char pattern[1024];
+	snprintf(pattern, sizeof(pattern), "%s\\*", path);
+	WIN32_FIND_DATAA data;
+	HANDLE find = FindFirstFileA(pattern, &data);
+	if (find == INVALID_HANDLE_VALUE) {
+		return GetLastError() == ERROR_PATH_NOT_FOUND || GetLastError() == ERROR_FILE_NOT_FOUND;
+	}
+	bool ok = true;
+	do {
+		if (strcmp(data.cFileName, ".") == 0 || strcmp(data.cFileName, "..") == 0) {
+			continue;
+		}
+		char child[1024];
+		snprintf(child, sizeof(child), "%s\\%s", path, data.cFileName);
+		if (data.dwFileAttributes & FILE_ATTRIBUTE_DIRECTORY) {
+			ok = test_remove_tree(child) && ok;
+		} else {
+			ok = DeleteFileA(child) && ok;
+		}
+	} while (FindNextFileA(find, &data));
+	FindClose(find);
+	return RemoveDirectoryA(path) && ok;
+}
+
+int
+test_count_files(const char* path, const char* suffix) {
+	char pattern[1024];
+	snprintf(pattern, sizeof(pattern), "%s\\*", path);
+	WIN32_FIND_DATAA data;
+	HANDLE find = FindFirstFileA(pattern, &data);
+	if (find == INVALID_HANDLE_VALUE) {
+		return -1;
+	}
+	int count = 0;
+	size_t suffix_len = strlen(suffix);
+	do {
+		size_t len = strlen(data.cFileName);
+		if (len >= suffix_len && strcmp(data.cFileName + len - suffix_len, suffix) == 0) {
+			++count;
+		}
+	} while (FindNextFileA(find, &data));
+	FindClose(find);
+	return count;
+}
+
 void
 test_sleep_ms(unsigned ms) {
 	Sleep(ms);

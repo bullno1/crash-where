@@ -2,6 +2,7 @@
  * @file linux.c
  * Linux implementation of the test platform functions.
  */
+#include <dirent.h>
 #include <errno.h>
 #include <pthread.h>
 #include <signal.h>
@@ -130,6 +131,48 @@ test_sockets_init(void) {
 bool
 test_mkdir(const char* path) {
 	return mkdir(path, 0777) == 0 || errno == EEXIST;
+}
+
+bool
+test_remove_tree(const char* path) {
+	DIR* dir = opendir(path);
+	if (dir == NULL) {
+		return errno == ENOENT;
+	}
+	bool ok = true;
+	for (struct dirent* e = readdir(dir); e != NULL; e = readdir(dir)) {
+		if (strcmp(e->d_name, ".") == 0 || strcmp(e->d_name, "..") == 0) {
+			continue;
+		}
+		char child[1024];
+		snprintf(child, sizeof(child), "%s/%s", path, e->d_name);
+		struct stat st;
+		if (lstat(child, &st) == 0 && S_ISDIR(st.st_mode)) {
+			ok = test_remove_tree(child) && ok;
+		} else {
+			ok = unlink(child) == 0 && ok;
+		}
+	}
+	closedir(dir);
+	return rmdir(path) == 0 && ok;
+}
+
+int
+test_count_files(const char* path, const char* suffix) {
+	DIR* dir = opendir(path);
+	if (dir == NULL) {
+		return -1;
+	}
+	int count = 0;
+	size_t suffix_len = strlen(suffix);
+	for (struct dirent* e = readdir(dir); e != NULL; e = readdir(dir)) {
+		size_t len = strlen(e->d_name);
+		if (len >= suffix_len && strcmp(e->d_name + len - suffix_len, suffix) == 0) {
+			++count;
+		}
+	}
+	closedir(dir);
+	return count;
 }
 
 void
