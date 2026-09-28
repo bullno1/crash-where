@@ -44,6 +44,23 @@ else()
 	target_compile_options(cw PRIVATE -Wall -Wextra)
 endif()
 
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+	add_library(cw_http STATIC
+		http/http.c
+		http/curl.c
+	)
+	# Only the header is needed: libcurl is loaded at run time, never linked.
+	include(CheckIncludeFile)
+	check_include_file(curl/curl.h CW_HAVE_CURL_H)
+	if(NOT CW_HAVE_CURL_H)
+		message(FATAL_ERROR "curl/curl.h not found; install the libcurl development package")
+	endif()
+	target_link_libraries(cw_http PUBLIC cw PRIVATE ${CMAKE_DL_LIBS})
+	target_include_directories(cw_http PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+	target_compile_definitions(cw_http PRIVATE _GNU_SOURCE)
+	target_compile_options(cw_http PRIVATE -Wall -Wextra)
+endif()
+
 # What the watcher needs from the crashing binary; consumers inherit it.
 if(MSVC)
 	# The CodeView record with the PDB GUID and age is only written with /DEBUG;

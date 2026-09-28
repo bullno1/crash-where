@@ -9,3 +9,4 @@ Update by replacing the file and the line below.
 | `btest.h` | https://github.com/bullno1/libs | eb56fc8dcc6a (2026-09-23) | Unlicense (public domain) |
 | `blog.h` | https://github.com/bullno1/libs | eb56fc8dcc6a (2026-09-23) | Unlicense (public domain) |
 | `yyjson.h`, `yyjson.c` | https://github.com/ibireme/yyjson | b21c02904188 (0.9.0, 2024-04-08) | MIT |
+| `wby.h` | https://github.com/bullno1/slopnet (`src/wby.h`) | 5670f498fdb6 (2025-12-18) | BSD-2-Clause |

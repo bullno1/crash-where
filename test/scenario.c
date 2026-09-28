@@ -16,11 +16,8 @@ AUTOLIST_IMPL(test_scenarios)
 
 /* Child side {{{ */
 
-/**
- * Forward a library message to blog at the matching level.
- */
-static void
-log_from_cw(cw_log_level_t level, const char* msg) {
+void
+test_cw_log(cw_log_level_t level, const char* msg) {
 	static const blog_level_t levels[] = {
 		[CW_LOG_ERROR] = BLOG_LEVEL_ERROR,
 		[CW_LOG_WARN]  = BLOG_LEVEL_WARN,
@@ -141,7 +138,7 @@ test_fixture_main(const char* name) {
 		.report_dir = report_dir,
 		.hang_timeout_ms = hang_ms != NULL ? (uint32_t)strtoul(hang_ms, NULL, 10) : 0,
 		.transport = &transport,
-		.log = log_from_cw,
+		.log = test_cw_log,
 	};
 	cw_init(&cfg);
 

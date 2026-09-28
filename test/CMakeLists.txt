@@ -7,7 +7,8 @@ add_executable(cw_test
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	enable_language(ASM)
-	target_sources(cw_test PRIVATE linux.c cfi.c cfi_fixtures.S)
+	target_sources(cw_test PRIVATE linux.c cfi.c cfi_fixtures.S http.c http_server.c)
+	target_link_libraries(cw_test PRIVATE cw_http)
 	# The .eh_frame interpreter is checked against libdwfl; without the
 	# development package that test skips itself.
 	find_library(TEST_LIBDW dw)

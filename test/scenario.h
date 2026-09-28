@@ -15,6 +15,7 @@
 #include <stdint.h>
 
 #include "autolist.h"
+#include "cw.h"
 #include "platform.h"
 #include "yyjson.h"
 
@@ -92,6 +93,12 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
  */
 void
 test_run_cleanup(void);
+
+/**
+ * Library log sink that forwards to blog at the matching level.
+ */
+void
+test_cw_log(cw_log_level_t level, const char* msg);
 
 /**
  * Child side: initialize the library and run the named scenario.

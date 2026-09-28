@@ -10,6 +10,7 @@ Crash reporting should be as simple as:
 
 ```c
 #include <cw.h>  // The library
+#include <cw_http.h>
 
 int
 main(int argc, char** argv) {
@@ -18,6 +19,7 @@ main(int argc, char** argv) {
         .app = "my-app",  // Name of the application
         .version = "0.0.1",  // Version
         .endpoint = "http://localhost",  // Where to report
+        .transport = &cw_transport_http,  // How to reach it
     };
     cw_init(&cfg);
 
