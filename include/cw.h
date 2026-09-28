@@ -51,6 +51,15 @@ typedef enum {
 } cw_log_level_t;
 
 /**
+ * What a report describes.
+ */
+typedef enum {
+	CW_REPORT_CRASH,
+	CW_REPORT_HANG,
+	CW_REPORT_ABNORMAL_EXIT, /**< The game ended without cw_shutdown(). */
+} cw_report_kind_t;
+
+/**
  * Storefront authentication hooks.
  *
  * Authentication filters noise from pirated copies and bots; it is not a

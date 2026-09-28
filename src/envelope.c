@@ -251,7 +251,10 @@ cw_write_envelope(
 	long long now = (long long)time(NULL);
 	char uuid[37];
 	make_uuid(uuid);
-	snprintf(out_path, cap, "%s/pending/%lld_%016" PRIx64 "_%s.json", report_dir, now, fp, uuid);
+	snprintf(
+		out_path, cap, "%s/pending/%lld_%c_%016" PRIx64 "_%s.json",
+		report_dir, now, cw_report_kind_letter(info->kind), fp, uuid
+	);
 	char tmp_path[CW_STR_CAP + 64];
 	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", out_path);
 

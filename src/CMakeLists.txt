@@ -2,6 +2,7 @@ add_library(cw STATIC
 	core.c
 	envelope.c
 	hang.c
+	store.c
 	upload.c
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

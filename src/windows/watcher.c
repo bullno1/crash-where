@@ -16,7 +16,7 @@
 static bool
 write_crash_report(const char* report_dir, char* path, size_t cap) {
 	static cw_crash_info_t info;
-	info = (cw_crash_info_t){ .main_module = -1 };
+	info = (cw_crash_info_t){ .kind = CW_REPORT_CRASH, .main_module = -1 };
 	if (!cw_unwind(cw_win.handles.game, &cw_win.region->crash, &info)) {
 		cw_log(CW_LOG_WARN, "unwind produced no frames");
 	}
@@ -37,6 +37,7 @@ static void
 write_killed_report(const char* report_dir) {
 	static cw_crash_info_t info;
 	info = (cw_crash_info_t){
+		.kind = CW_REPORT_ABNORMAL_EXIT,
 		.type = "KILLED",
 		.message_raw = "game ended without cw_shutdown",
 		.main_module = -1,
@@ -90,7 +91,7 @@ snapshot_thread(HANDLE game, DWORD tid, cw_crash_info_t* info) {
 static bool
 write_hang_report(const char* report_dir, uint64_t silent_ms, char* path, size_t cap) {
 	static cw_crash_info_t info;
-	info = (cw_crash_info_t){ .main_module = -1 };
+	info = (cw_crash_info_t){ .kind = CW_REPORT_HANG, .main_module = -1 };
 	DWORD tid = atomic_load_explicit(&cw_win.region->common.heartbeat_tid, memory_order_relaxed);
 	snapshot_thread(cw_win.handles.game, tid, &info);
 	snprintf(info.type, sizeof(info.type), "HANG");

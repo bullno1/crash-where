@@ -38,13 +38,13 @@ read_file(const char* path, size_t* len) {
 }
 
 /**
- * Take the report id from an envelope path, `<ts>_<fp>_<id>.json`.
+ * Take the report id from an envelope name, `<ts>_<kind>_<fp>_<id>.json`.
  */
 static bool
-path_id(const char* path, char out[37]) {
+name_id(const char* name, char out[37]) {
 	static const char ext[] = ".json";
-	const char* end = strrchr(path, '.');
-	if (end == NULL || strcmp(end, ext) != 0 || end - path < 37 || end[-37] != '_') {
+	const char* end = strrchr(name, '.');
+	if (end == NULL || strcmp(end, ext) != 0 || end - name < 37 || end[-37] != '_') {
 		return false;
 	}
 	memcpy(out, end - 36, 36);
@@ -110,8 +110,10 @@ cw_upload_report(const char* path) {
 		return;
 	}
 
+	const char* name = strrchr(path, '/');
+	cw_pending_t p;
 	char id[37];
-	if (!path_id(path, id)) {
+	if (name == NULL || !cw_pending_parse(name + 1, &p) || !name_id(p.name, id)) {
 		cw_log(CW_LOG_ERROR, "unexpected report name %s", path);
 		return;
 	}
@@ -162,14 +164,14 @@ cw_upload_report(const char* path) {
 	switch (status) {
 	case CW_OK:
 		cw_log(CW_LOG_INFO, "report %s uploaded", id);
-		remove(path);
+		cw_pending_remove(&p);
 		break;
 	case CW_RETRY:
 		cw_log(CW_LOG_WARN, "upload of report %s failed, kept at %s", id, path);
 		break;
 	case CW_DROP:
 		cw_log(CW_LOG_WARN, "report %s rejected, deleted", id);
-		remove(path);
+		cw_pending_remove(&p);
 		break;
 	}
 }

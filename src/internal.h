@@ -163,6 +163,7 @@ typedef struct {
  * platform and consumed by cw_write_envelope().
  */
 typedef struct {
+	cw_report_kind_t kind;     /**< Names the file. */
 	char type[32];             /**< Exception type such as "SIGSEGV". */
 	char message_raw[128];
 	uint64_t fault_addr;
@@ -247,6 +248,33 @@ cw_write_envelope(
 	const char* report_dir, const cw_crash_info_t* info,
 	const cw_shared_t* shared, char* out_path, size_t cap
 );
+
+/* The pending store, `<report_dir>/pending/`. */
+
+/** File name letter of a report kind: `c`, `h`, or `a`. */
+char
+cw_report_kind_letter(cw_report_kind_t kind);
+
+/**
+ * One envelope in `pending/`, from its name alone.
+ */
+typedef struct {
+	char name[96];             /**< File name with the `.json` extension. */
+	int64_t ts;                /**< When it was written, Unix seconds. */
+	cw_report_kind_t kind;
+} cw_pending_t;
+
+/**
+ * Describe an envelope from its file name, `<ts>_<kind>_<fp>_<id>.json`.
+ *
+ * @return `false` when `name` is not an envelope.
+ */
+bool
+cw_pending_parse(const char* name, cw_pending_t* out);
+
+/** Delete an envelope together with its attachments. */
+void
+cw_pending_remove(const cw_pending_t* p);
 
 /**
  * Send one written envelope through the transport.
