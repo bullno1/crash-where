@@ -153,6 +153,11 @@ test_image_base(void) {
 }
 
 bool
+test_self_path(char* buf, size_t cap) {
+	return (size_t)snprintf(buf, cap, "/proc/self/exe") < cap;
+}
+
+bool
 test_under_wine(void) {
 	return false;
 }

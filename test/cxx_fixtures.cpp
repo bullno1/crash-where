@@ -7,8 +7,10 @@
 
 #if defined(_MSC_VER)
 #define KEEP __declspec(noinline)
+#define KEEP_LAMBDA
 #else
 #define KEEP __attribute__((noinline))
+#define KEEP_LAMBDA KEEP
 #endif
 
 namespace ns {
@@ -52,8 +54,21 @@ file_static(int x) {
 
 static KEEP int
 lambda_host(int x) {
-	auto add_one = [](int q) KEEP { return q + 1; };
+	/* A volatile round trip keeps the body from folding into the caller on every compiler. */
+	auto add_one = [](int q) KEEP_LAMBDA {
+		volatile int v = q;
+		return v + 1;
+	};
 	return add_one(x);
+}
+
+KEEP int
+lambda_host_ext(int x) {
+	auto add_two = [](int q) KEEP_LAMBDA {
+		volatile int v = q;
+		return v + 2;
+	};
+	return add_two(x);
 }
 
 /* Keeps the method, which has no address a C caller can take, out of line and present. */
@@ -68,5 +83,6 @@ test_cxx_fixtures(test_cxx_fixtures_t* out) {
 		reinterpret_cast<uintptr_t>(&ns::twice<int>),
 		reinterpret_cast<uintptr_t>(&file_static),
 		reinterpret_cast<uintptr_t>(&lambda_host),
+		reinterpret_cast<uintptr_t>(&lambda_host_ext),
 	};
 }

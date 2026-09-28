@@ -69,15 +69,50 @@ is_operator(const char* s, size_t len) {
 	return starts_with(s, len, "operator") && (len == 8 || !is_ident_char(s[8]));
 }
 
+/** A `` `2' `` block-scope number, as MSVC writes between a function and a local type. */
+static bool
+is_block_number(piece_t p) {
+	if (p.len < 3 || p.s[0] != '`' || p.s[p.len - 1] != '\'') {
+		return false;
+	}
+	for (size_t i = 1; i + 1 < p.len; ++i) {
+		if (p.s[i] < '0' || p.s[i] > '9') {
+			return false;
+		}
+	}
+	return true;
+}
+
+static int
+split(const char* comp, size_t len, piece_t* out, int n);
+
 /**
- * Cut one component at top-level `::`. From an `operator` piece on, the
- * rest is a single piece: an operator name is always the last one and
- * a conversion operator's type may itself be qualified. A leading `::`
- * (the global namespace) yields nothing.
+ * Add one piece. MSVC spells a function used as a scope as `` `name' ``,
+ * and the name inside is itself qualified, so the quotes come off and
+ * the inside is split again; block numbers and `` `anonymous namespace' ``
+ * stay whole for the rules to recognize.
  */
 static int
-split(const char* comp, piece_t* out, int n) {
-	size_t len = strlen(comp);
+add_piece(const char* s, size_t len, piece_t* out, int n) {
+	piece_t p = { .s = s, .len = len };
+	if (len >= 2 && s[0] == '`' && s[len - 1] == '\'' && !is_block_number(p) && !equals(p, "`anonymous namespace'")) {
+		return split(s + 1, len - 2, out, n);
+	}
+	if (n < MAX_PIECES) {
+		out[n++] = p;
+	}
+	return n;
+}
+
+/**
+ * Cut `comp` at top-level `::`, outside brackets and outside a quoted
+ * span. From an `operator` piece on, the rest is a single piece: an
+ * operator name is always the last one and a conversion operator's type
+ * may itself be qualified. A leading `::` (the global namespace) yields
+ * nothing.
+ */
+static int
+split(const char* comp, size_t len, piece_t* out, int n) {
 	if (len == 0) {
 		if (n < MAX_PIECES) {
 			out[n++] = (piece_t){ .s = comp, .len = 0, .unnamed = true };
@@ -86,18 +121,23 @@ split(const char* comp, piece_t* out, int n) {
 	}
 	size_t start = 0;
 	int depth = 0;
+	bool quoted = false;
 	for (size_t i = 0; i < len;) {
 		if (i == start && is_operator(comp + i, len - i)) {
 			break;
 		}
 		char c = comp[i];
-		if (c == '<' || c == '(' || c == '[') {
+		if (quoted) {
+			quoted = c != '\'';
+		} else if (c == '`') {
+			quoted = true;
+		} else if (c == '<' || c == '(' || c == '[') {
 			++depth;
 		} else if ((c == '>' || c == ')' || c == ']') && depth > 0) {
 			--depth;
 		} else if (depth == 0 && c == ':' && i + 1 < len && comp[i + 1] == ':') {
-			if (i > start && n < MAX_PIECES) {
-				out[n++] = (piece_t){ .s = comp + start, .len = i - start };
+			if (i > start) {
+				n = add_piece(comp + start, i - start, out, n);
 			}
 			i += 2;
 			start = i;
@@ -105,8 +145,8 @@ split(const char* comp, piece_t* out, int n) {
 		}
 		++i;
 	}
-	if (len > start && n < MAX_PIECES) {
-		out[n++] = (piece_t){ .s = comp + start, .len = len - start };
+	if (len > start) {
+		n = add_piece(comp + start, len - start, out, n);
 	}
 	return n;
 }
@@ -255,7 +295,7 @@ cwsym_normalize(const cwsym_symbol_t* sym, char* buf, size_t cap) {
 	piece_t pieces[MAX_PIECES];
 	int n = 0;
 	for (int i = 0; i < sym->scope_len; ++i) {
-		n = split(sym->scope[i], pieces, n);
+		n = split(sym->scope[i], strlen(sym->scope[i]), pieces, n);
 	}
 
 	if (sym->is_static && sym->unit != NULL && sym->unit[0] != '\0') {
@@ -265,10 +305,15 @@ cwsym_normalize(const cwsym_symbol_t* sym, char* buf, size_t cap) {
 			put(&o, ":", 1);
 		}
 	}
+	bool first = true;
 	for (int i = 0; i < n; ++i) {
-		if (i > 0) {
+		if (is_block_number(pieces[i])) {
+			continue;
+		}
+		if (!first) {
 			put(&o, "::", 2);
 		}
+		first = false;
 		bool next_is_call_operator = i + 2 == n && equals(pieces[i + 1], "operator()");
 		put_piece(&o, pieces[i], next_is_call_operator);
 	}

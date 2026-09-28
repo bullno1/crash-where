@@ -71,6 +71,8 @@ BTEST(normalize, rules) {
 		{ .scope = { "Game", "tick", "", "operator()" }, .want = "Game::tick::$lambda::operator()" },
 		{ .scope = { "Game", "tick", "$_0", "operator()" }, .want = "Game::tick::$lambda::operator()" },
 		{ .scope = { "Game", "tick", "", "helper" }, .want = "Game::tick::$anon::helper" },
+		{ .scope = { "`Game::tick'::`2'::<lambda_1>::operator()" }, .want = "Game::tick::$lambda::operator()" },
+		{ .scope = { "`load'::`12'::Local::run" }, .want = "load::Local::run" },
 		/* Keywords and tags. */
 		{ .scope = { "class Foo::bar" }, .want = "Foo::bar" },
 		{ .scope = { "Foo", "bar[abi:cxx11]" }, .want = "Foo::bar" },
@@ -119,7 +121,7 @@ BTEST(normalize, readers_agree) {
 		},
 		{
 			.elf = { .scope = { "Game", "tick", "", "operator()" } },
-			.pdb = { .scope = { "Game::tick::<lambda_8f3a2b>::operator()" } },
+			.pdb = { .scope = { "`Game::tick'::`2'::<lambda_1>::operator()" } },
 		},
 		{
 			.elf = { .scope = { "Foo", "operator<<" } },

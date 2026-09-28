@@ -3,6 +3,12 @@ set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../env.sh"
 
+# The image lays out MSVC, the SDK, and the DIA SDK under one root, the way
+# a Visual Studio install does; the build derives the DIA SDK from
+# VSINSTALLDIR, and the image sets the same variable for programs under Wine.
+: "${VSINSTALLDIR:=/opt/msvc}"
+export VSINSTALLDIR
+
 cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
 	--toolchain "$ROOT/cmake/msvc-wine.cmake" \
 	-DCMAKE_BUILD_TYPE="$BUILD_TYPE" \

@@ -26,9 +26,17 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 		target_link_libraries(cw_test PRIVATE ${TEST_LIBDW})
 	endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-	target_sources(cw_test PRIVATE windows.c cw_test.manifest)
+	enable_language(CXX)
+	target_sources(cw_test PRIVATE windows.c cw_test.manifest sym.c cxx_fixtures.cpp)
+	# The reader tests gate on the same header the PE reader does, from the same root.
+	target_include_directories(cw_test PRIVATE "$ENV{VSINSTALLDIR}/DIA SDK/include")
 	# The loopback server's sockets.
 	target_link_libraries(cw_test PRIVATE ws2_32)
+	# The reader tests take functions' addresses; an incremental link would
+	# hand them the jump thunks instead of the functions the PDB describes.
+	if(MSVC)
+		target_link_options(cw_test PRIVATE /INCREMENTAL:NO)
+	endif()
 endif()
 target_include_directories(cw_test PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}

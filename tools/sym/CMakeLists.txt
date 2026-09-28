@@ -19,6 +19,12 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	# libdw and libelf are loaded at run time, never linked; elf.c checks
 	# for their headers itself and falls back to a stub without them.
 	target_link_libraries(cw_sym PRIVATE ${CMAKE_DL_LIBS})
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+	if(NOT DEFINED ENV{VSINSTALLDIR})
+		message(WARNING "VSINSTALLDIR is not set; the PE reader will be disabled")
+	endif()
+	target_include_directories(cw_sym PRIVATE "$ENV{VSINSTALLDIR}/DIA SDK/include")
+	target_link_libraries(cw_sym PRIVATE oleaut32)
 endif()
 if(MSVC)
 	target_compile_definitions(cw_sym PRIVATE _CRT_SECURE_NO_WARNINGS)

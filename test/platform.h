@@ -103,6 +103,14 @@ uintptr_t
 test_image_base(void);
 
 /**
+ * Path of this executable, for tools that read it from disk.
+ *
+ * @return `false` when it does not fit `cap`.
+ */
+bool
+test_self_path(char* buf, size_t cap);
+
+/**
  * Whether this is a Windows build running under Wine, which kills a
  * process instead of dispatching an exception once its stack is nearly
  * exhausted.

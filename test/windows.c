@@ -193,6 +193,12 @@ test_image_base(void) {
 }
 
 bool
+test_self_path(char* buf, size_t cap) {
+	DWORD len = GetModuleFileNameA(NULL, buf, (DWORD)cap);
+	return len > 0 && len < cap;
+}
+
+bool
 test_under_wine(void) {
 	return GetProcAddress(GetModuleHandleA("ntdll.dll"), "wine_get_version") != NULL;
 }

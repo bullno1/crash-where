@@ -20,7 +20,8 @@ typedef struct {
 	uintptr_t anon_fn;       /**< `ns::<anonymous>::hidden`, internal linkage. */
 	uintptr_t template_fn;   /**< `ns::twice<int>`, external. */
 	uintptr_t file_static;   /**< `file_static`, internal linkage. */
-	uintptr_t lambda_host;   /**< `lambda_host`, whose body defines the lambda. */
+	uintptr_t lambda_host;   /**< `lambda_host`, a static whose body defines a lambda. */
+	uintptr_t lambda_host_ext; /**< `lambda_host_ext`, external, whose body defines a lambda. */
 } test_cxx_fixtures_t;
 
 #ifdef __cplusplus
