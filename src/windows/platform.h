@@ -49,7 +49,7 @@ typedef struct {
  * in CW_ENV_WATCHER and stay the same in the child.
  */
 typedef struct {
-	HANDLE section;
+	HANDLE section;            /**< Pagefile-backed section holding the cw_region_t. */
 	HANDLE game;               /**< The game process. */
 	HANDLE ev_crash;           /**< Game: crash record is complete. */
 	HANDLE ev_done;            /**< Watcher: report written, game may die. */
@@ -59,7 +59,7 @@ typedef struct {
 
 typedef struct {
 	cw_region_t* region;
-	cw_handles_t h;
+	cw_handles_t handles;
 	HANDLE watcher;            /**< Watcher process, game side only. */
 } cw_win_t;
 

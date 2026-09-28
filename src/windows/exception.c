@@ -24,7 +24,7 @@
 /**
  * Publish the record, hand over to the watcher, end the process.
  */
-static void
+_Noreturn static void
 report_and_die(DWORD status, const EXCEPTION_RECORD* record, const CONTEXT* context, uintptr_t pointers) {
 	cw_crash_t* crash = &cw_win.region->crash;
 
@@ -43,8 +43,8 @@ report_and_die(DWORD status, const EXCEPTION_RECORD* record, const CONTEXT* cont
 	atomic_store(&crash->state, CW_CRASH_DONE);
 
 	/* A failed signal means the watcher is gone; do not wait for a reply. */
-	if (SetEvent(cw_win.h.ev_crash)) {
-		WaitForSingleObject(cw_win.h.ev_done, CW_REPLY_TIMEOUT);
+	if (SetEvent(cw_win.handles.ev_crash)) {
+		WaitForSingleObject(cw_win.handles.ev_done, CW_REPLY_TIMEOUT);
 	}
 	TerminateProcess(GetCurrentProcess(), status);
 }
@@ -52,7 +52,6 @@ report_and_die(DWORD status, const EXCEPTION_RECORD* record, const CONTEXT* cont
 static LONG WINAPI
 on_exception(EXCEPTION_POINTERS* ep) {
 	report_and_die(ep->ExceptionRecord->ExceptionCode, ep->ExceptionRecord, ep->ContextRecord, (uintptr_t)ep);
-	return EXCEPTION_CONTINUE_SEARCH;
 }
 
 /**

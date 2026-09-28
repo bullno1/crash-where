@@ -161,7 +161,8 @@ cw_platform_run_game(void) {
 
 	/* What the watcher needs to wait on the game, read its memory, and dump it. */
 	DWORD access = PROCESS_QUERY_INFORMATION | PROCESS_VM_READ | PROCESS_DUP_HANDLE | SYNCHRONIZE;
-	if (!DuplicateHandle(GetCurrentProcess(), GetCurrentProcess(), GetCurrentProcess(), &h.game, access, TRUE, 0)) {
+	HANDLE current_process = GetCurrentProcess();
+	if (!DuplicateHandle(current_process, current_process, current_process, &h.game, access, TRUE, 0)) {
 		fail = "cannot duplicate process handle";
 		goto end;
 	}
@@ -210,8 +211,16 @@ cw_platform_run_game(void) {
 		goto end;
 	}
 
+	/* The watcher holds its own copies; the game keeps the mapping and the events it still signals or waits on. */
+	CloseHandle(h.section);
+	CloseHandle(h.game);
+	CloseHandle(h.ev_ready);
+	h.section = NULL;
+	h.game = NULL;
+	h.ev_ready = NULL;
+
 	cw_win.region = region;
-	cw_win.h = h;
+	cw_win.handles = h;
 	cw_win.watcher = watcher;
 	cw_ctx.shared = &region->common;
 	cw_install_exception_handler();
@@ -250,5 +259,5 @@ end:
 void
 cw_platform_shutdown(int result) {
 	cw_win.region->shutdown_result = result;
-	SetEvent(cw_win.h.ev_shutdown);
+	SetEvent(cw_win.handles.ev_shutdown);
 }

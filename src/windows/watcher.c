@@ -17,15 +17,8 @@ mkdir_p(const char* path) {
 	}
 	memcpy(buf, path, len + 1);
 
-	/* A drive or a UNC share is not a directory to create. */
-	size_t i = 1;
-	if (len >= 2 && buf[1] == ':') {
-		i = 3;
-	} else if (len >= 2 && buf[0] == '\\' && buf[1] == '\\') {
-		for (int seps = 0; i < len && seps < 2; ++i) {
-			seps += buf[i] == '\\' || buf[i] == '/';
-		}
-	}
+	/* A drive letter is not a directory to create. */
+	size_t i = len >= 2 && buf[1] == ':' ? 3 : 1;
 	for (; i <= len; ++i) {
 		if (buf[i] == '\\' || buf[i] == '/' || buf[i] == '\0') {
 			char saved = buf[i];
@@ -66,7 +59,7 @@ static bool
 write_crash_report(const char* report_dir, char* path, size_t cap) {
 	static cw_crash_info_t info;
 	info = (cw_crash_info_t){ .main_module = -1 };
-	if (!cw_unwind(cw_win.h.game, &cw_win.region->crash, &info)) {
+	if (!cw_unwind(cw_win.handles.game, &cw_win.region->crash, &info)) {
 		cw_log(CW_LOG_WARN, "unwind produced no frames");
 	}
 	if (!cw_write_envelope(report_dir, &info, &cw_win.region->common, path, cap)) {
@@ -91,7 +84,7 @@ write_killed_report(const char* report_dir) {
 		.main_module = -1,
 	};
 	DWORD code;
-	if (GetExitCodeProcess(cw_win.h.game, &code)) {
+	if (GetExitCodeProcess(cw_win.handles.game, &code)) {
 		snprintf(info.message_raw, sizeof(info.message_raw), "game ended without cw_shutdown, exit code 0x%lx", code);
 	}
 	char path[CW_STR_CAP + 64];
@@ -114,14 +107,14 @@ cw_watch(const char* report_dir) {
 	int result = 0;
 
 	for (;;) {
-		HANDLE objects[3] = { cw_win.h.ev_crash, cw_win.h.ev_shutdown, cw_win.h.game };
+		HANDLE objects[3] = { cw_win.handles.ev_crash, cw_win.handles.ev_shutdown, cw_win.handles.game };
 		DWORD which = WaitForMultipleObjects(3, objects, FALSE, INFINITE);
 		if (which == WAIT_OBJECT_0) {
 			/* Reply first: the game is parked until it hears back. */
 			char path[CW_STR_CAP + 64];
 			bool written = write_crash_report(report_dir, path, sizeof(path));
 			crashed = true;
-			SetEvent(cw_win.h.ev_done);
+			SetEvent(cw_win.handles.ev_done);
 			if (written) {
 				cw_upload_report(path);
 			}
@@ -157,7 +150,7 @@ cw_platform_run_watcher(const char* spec) {
 		cw_log(CW_LOG_ERROR, "malformed " CW_ENV_WATCHER);
 		exit(1);
 	}
-	cw_win.h = (cw_handles_t){
+	cw_win.handles = (cw_handles_t){
 		.section = (HANDLE)(uintptr_t)v[0],
 		.game = (HANDLE)(uintptr_t)v[1],
 		.ev_crash = (HANDLE)(uintptr_t)v[2],
@@ -166,8 +159,8 @@ cw_platform_run_watcher(const char* spec) {
 		.ev_shutdown = (HANDLE)(uintptr_t)v[5],
 	};
 
-	cw_region_t* region = MapViewOfFile(cw_win.h.section, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(cw_region_t));
-	CloseHandle(cw_win.h.section);
+	cw_region_t* region = MapViewOfFile(cw_win.handles.section, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(cw_region_t));
+	CloseHandle(cw_win.handles.section);
 	if (region == NULL) {
 		cw_log(CW_LOG_ERROR, "cannot map shared region");
 		exit(1);
@@ -192,7 +185,7 @@ cw_platform_run_watcher(const char* spec) {
 		exit(1);
 	}
 
-	SetEvent(cw_win.h.ev_ready);
+	SetEvent(cw_win.handles.ev_ready);
 	cw_log(CW_LOG_INFO, "watching game pid %lu", game);
 	cw_watch(report_dir);
 	exit(0);
