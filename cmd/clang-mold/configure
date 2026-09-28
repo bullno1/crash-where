@@ -4,6 +4,7 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../env.sh"
 
 cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
+	--toolchain "$ROOT/cmake/clang-mold.cmake" \
 	-DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
 	-DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$BIN_DIR" \
 	-DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$BIN_DIR" \
