@@ -20,7 +20,7 @@ jobs:
       - name: Install toolchain
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build clang
+          sudo apt-get install -y --no-install-recommends ninja-build clang libdw-dev
       - name: Install mold
         if: matrix.toolchain == 'clang-mold'
         uses: rui314/setup-mold@v1

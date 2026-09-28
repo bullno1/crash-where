@@ -6,7 +6,16 @@ add_executable(cw_test
 	vendor/yyjson.c
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-	target_sources(cw_test PRIVATE linux.c)
+	target_sources(cw_test PRIVATE linux.c cfi.c)
+	# The .eh_frame interpreter is checked against libdwfl; without the
+	# development package that test skips itself.
+	find_library(TEST_LIBDW dw)
+	find_path(TEST_LIBDW_INCLUDE elfutils/libdwfl.h)
+	if(TEST_LIBDW AND TEST_LIBDW_INCLUDE)
+		target_compile_definitions(cw_test PRIVATE TEST_HAVE_LIBDW)
+		target_include_directories(cw_test PRIVATE ${TEST_LIBDW_INCLUDE})
+		target_link_libraries(cw_test PRIVATE ${TEST_LIBDW})
+	endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 	target_sources(cw_test PRIVATE windows.c cw_test.manifest)
 endif()

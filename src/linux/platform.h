@@ -158,8 +158,11 @@ typedef struct {
 
 /**
  * Open the unwind tables of the file at `path`, which the game maps
- * at `map_start` from file offset `map_offset`, with `pc` inside that
- * mapping. On failure `m` is left unusable but must still be closed.
+ * at `map_start` from file offset `map_offset`. `pc` must be a code
+ * address inside that mapping: it selects the segment the load bias
+ * is taken from, and the first page of a mapping can be padding that
+ * belongs to another segment. On failure `m` is left unusable but
+ * must still be closed.
  */
 bool
 cw_eh_open(cw_eh_module_t* m, const char* path, uint64_t map_start, uint64_t map_offset, uint64_t pc);
