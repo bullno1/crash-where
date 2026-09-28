@@ -12,6 +12,11 @@
 #include <stdlib.h>
 #include <string.h>
 
+#if defined(__has_include)
+#if !__has_include(<curl/curl.h>)
+#error "curl/curl.h not found; install the libcurl development package"
+#endif
+#endif
 #include <curl/curl.h>
 
 #include "backend.h"

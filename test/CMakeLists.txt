@@ -9,7 +9,10 @@ add_executable(cw_test
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	enable_language(ASM)
-	target_sources(cw_test PRIVATE linux.c cfi.c cfi_fixtures.S)
+	# The reader tests need C++ names in the binary; the fixtures are the
+	# only C++ in the project and the test target is the only one built with it.
+	enable_language(CXX)
+	target_sources(cw_test PRIVATE linux.c cfi.c cfi_fixtures.S sym.c cxx_fixtures.cpp)
 	# The .eh_frame interpreter is checked against libdwfl; without the
 	# development package that test skips itself.
 	find_library(TEST_LIBDW dw)
@@ -29,7 +32,7 @@ target_include_directories(cw_test PRIVATE
 	${PROJECT_SOURCE_DIR}/src
 	${CMAKE_CURRENT_SOURCE_DIR}/vendor
 )
-target_link_libraries(cw_test PRIVATE cw cw_http)
+target_link_libraries(cw_test PRIVATE cw cw_http cw_sym)
 
 if(MSVC)
 	target_compile_definitions(cw_test PRIVATE _CRT_SECURE_NO_WARNINGS)

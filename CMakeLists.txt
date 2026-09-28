@@ -13,6 +13,7 @@ set(CMAKE_C_EXTENSIONS ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 
 add_subdirectory(src)
+add_subdirectory(tools/sym)
 add_subdirectory(samples)
 enable_testing()
 add_subdirectory(test)
