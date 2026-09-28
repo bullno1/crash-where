@@ -118,7 +118,7 @@ read_build_id(const char* path, char* out, size_t cap) {
 			break;
 		}
 		snprintf(
-			out, cap, "%08lx%04x%04x%02x%02x%02x%02x%02x%02x%02x%02x%lx",
+			out, cap, "%08lx%04x%04x%02x%02x%02x%02x%02x%02x%02x%02x%08lx",
 			cv.guid.Data1, cv.guid.Data2, cv.guid.Data3,
 			cv.guid.Data4[0], cv.guid.Data4[1], cv.guid.Data4[2], cv.guid.Data4[3],
 			cv.guid.Data4[4], cv.guid.Data4[5], cv.guid.Data4[6], cv.guid.Data4[7],

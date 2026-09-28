@@ -46,8 +46,9 @@ endif()
 
 # What the watcher needs from the crashing binary; consumers inherit it.
 if(MSVC)
-	# The CodeView record with the PDB GUID and age is only written with /DEBUG.
-	target_link_options(cw INTERFACE /DEBUG:FULL)
+	# The CodeView record with the PDB GUID and age is only written with /DEBUG;
+	# /Brepro derives the GUID from the output instead of a random value.
+	target_link_options(cw INTERFACE /DEBUG:FULL /Brepro)
 	if(CMAKE_SIZEOF_VOID_P EQUAL 4)
 		# The x86 walk follows the EBP chain and /O2 implies /Oy.
 		target_compile_options(cw INTERFACE /Oy-)
