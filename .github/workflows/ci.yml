@@ -31,6 +31,16 @@ jobs:
       - name: Build and test
         run: cmd/${{ matrix.toolchain }}/test
 
+  steamrt:
+    name: clang-mold (Steam Runtime 4)
+    runs-on: ubuntu-24.04
+    container:
+      image: registry.gitlab.steamos.cloud/steamrt/steamrt4/sdk:latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        run: cmd/steamrt/test
+
   msvc:
     name: msvc (Windows)
     runs-on: windows-latest
