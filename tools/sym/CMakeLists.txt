@@ -7,6 +7,7 @@ add_library(cw_sym STATIC
 	wasm.c
 	normalize.c
 	table.c
+	upload.c
 )
 target_include_directories(cw_sym
 	PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}

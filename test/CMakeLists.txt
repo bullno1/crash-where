@@ -7,6 +7,7 @@ add_executable(cw_test
 	http_server.c
 	normalize.c
 	table.c
+	upload.c
 	vendor/yyjson.c
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

@@ -22,7 +22,8 @@
  */
 typedef struct {
 	char method[16];
-	char uri[256];
+	char uri[256];           /**< Path, percent-decoded by the server. */
+	char query[256];         /**< Query string after `?`, as sent, or empty. */
 	char content_type[64];
 	char content_length[24];
 	char authorization[256];
