@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "cw.h"
+#include "cw_http.h"
 
 #if defined(_WIN32)
 #	include <process.h>
@@ -55,8 +56,9 @@ main(int argc, char** argv) {
 		.app = "crashme",
 		.version = "0.0.1",
 		.channel = "dev",
-		.endpoint = "http://localhost",
+		.endpoint = "http://localhost:8080",
 		.report_dir = argc > 2 ? argv[2] : NULL,
+		.transport = &cw_transport_http,
 		.log = log_to_stderr,
 	};
 
