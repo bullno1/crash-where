@@ -230,14 +230,14 @@ BTEST(sym, reads_this_executable) {
 
 	BTEST_ASSERT_EX(c.probe.found, "no function starts at %#x", c.probe.want);
 	BTEST_EXPECT_EX(strcmp(c.probe.name, "sym_probe") == 0, "name is %s", c.probe.name);
-	BTEST_EXPECT_EX(strstr(c.probe.unit, "sym.c") != NULL, "unit is %s", c.probe.unit);
+	BTEST_EXPECT_EX(ends_with(c.probe.unit, "sym.c"), "unit is %s", c.probe.unit);
 	BTEST_EXPECT(c.probe.is_static);
 	BTEST_EXPECT_EQUAL("%d", c.probe.scope_len, 1);
 	BTEST_EXPECT_RELATION("%u", c.probe.size, >, 0u);
 
 	BTEST_ASSERT_EX(c.external.found, "no function starts at %#x", c.external.want);
 	BTEST_EXPECT_EX(strcmp(c.external.name, "test_image_base") == 0, "name is %s", c.external.name);
-	BTEST_EXPECT_EX(strstr(c.external.unit, PLATFORM_UNIT) != NULL, "unit is %s", c.external.unit);
+	BTEST_EXPECT_EX(ends_with(c.external.unit, PLATFORM_UNIT), "unit is %s", c.external.unit);
 	BTEST_EXPECT(!c.external.is_static);
 
 	BTEST_EXPECT_EX(c.line_found, "no line row covers %#x", c.probe.want);
@@ -366,7 +366,7 @@ expect_cxx(const cxx_probe_t* p, bool is_static, const char* display_prefix, con
 	BTEST_ASSERT_EX(p->found, "no symbol for %s; seen:%s", p->want_name, seen);
 	BTEST_EXPECT_EX(strcmp(p->name, p->want_name) == 0, "%s: normalized as %s", p->want_name, p->name);
 	BTEST_EXPECT_EX(p->is_static == is_static, "%s: is_static is %d", p->want_name, p->is_static);
-	BTEST_EXPECT_EX(strstr(p->unit, "cxx_fixtures.cpp") != NULL, "%s: unit is %s", p->want_name, p->unit);
+	BTEST_EXPECT_EX(ends_with(p->unit, "cxx_fixtures.cpp"), "%s: unit is %s", p->want_name, p->unit);
 	if (p->has_display) {
 		BTEST_EXPECT_EX(strstr(p->display, display_prefix) != NULL, "%s: display is %s", p->want_name, p->display);
 	} else {

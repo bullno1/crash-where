@@ -40,6 +40,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <wchar.h>
 
 /*
  * The two DIA GUIDs the reader uses, as dia2.h spells them. Defined here
@@ -557,6 +558,45 @@ visit_function(reader_t* r, IDiaSymbol* fn, const char* unit) {
 	free(name);
 }
 
+/**
+ * The compiland's source file, so the unit stem agrees with the DWARF
+ * readers. A compiland's name is its object file, and its source file
+ * property is empty in PDBs the MSVC linker writes; the path cl.exe
+ * received is in the `src` entry of the compiland's environment. The
+ * object file name stands in for a compiland without one, such as
+ * import thunks and linker-made code.
+ */
+static char*
+compiland_unit(IDiaSymbol* compiland) {
+	char* unit = NULL;
+	IDiaEnumSymbols* envs = NULL;
+	if (SUCCEEDED(IDiaSymbol_findChildren(compiland, SymTagCompilandEnv, NULL, nsNone, &envs)) && envs != NULL) {
+		IDiaSymbol* env;
+		ULONG fetched;
+		while (unit == NULL && IDiaEnumSymbols_Next(envs, 1, &env, &fetched) == S_OK && fetched == 1) {
+			BSTR name = NULL;
+			IDiaSymbol_get_name(env, &name);
+			if (name != NULL && wcscmp(name, L"src") == 0) {
+				VARIANT value;
+				VariantInit(&value);
+				if (IDiaSymbol_get_value(env, &value) == S_OK && V_VT(&value) == VT_BSTR && V_BSTR(&value) != NULL && V_BSTR(&value)[0] != L'\0') {
+					unit = to_utf8(V_BSTR(&value));
+				}
+				VariantClear(&value);
+			}
+			SysFreeString(name);
+			IDiaSymbol_Release(env);
+		}
+		IDiaEnumSymbols_Release(envs);
+	}
+	if (unit == NULL) {
+		BSTR name = NULL;
+		IDiaSymbol_get_name(compiland, &name);
+		unit = take_bstr(name);
+	}
+	return unit;
+}
+
 /** Every function of every compiland. */
 static void
 walk_compilands(reader_t* r, IDiaSymbol* global) {
@@ -567,14 +607,7 @@ walk_compilands(reader_t* r, IDiaSymbol* global) {
 	IDiaSymbol* compiland;
 	ULONG fetched;
 	while (!r->stopped && IDiaEnumSymbols_Next(compilands, 1, &compiland, &fetched) == S_OK && fetched == 1) {
-		/* The compiland's name is its object file; the source file is what DWARF records, so the unit stem agrees across readers. */
-		BSTR wunit = NULL;
-		if (IDiaSymbol_get_sourceFileName(compiland, &wunit) != S_OK || wunit == NULL || wunit[0] == L'\0') {
-			SysFreeString(wunit);
-			wunit = NULL;
-			IDiaSymbol_get_name(compiland, &wunit);
-		}
-		char* unit = take_bstr(wunit);
+		char* unit = compiland_unit(compiland);
 		IDiaEnumSymbols* functions = NULL;
 		if (SUCCEEDED(IDiaSymbol_findChildren(compiland, SymTagFunction, NULL, nsNone, &functions)) && functions != NULL) {
 			IDiaSymbol* fn;
