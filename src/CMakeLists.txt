@@ -6,6 +6,7 @@ add_library(cw STATIC
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	target_sources(cw PRIVATE
+		linux/eh_frame.c
 		linux/game.c
 		linux/ipc.c
 		linux/platform.c
@@ -52,7 +53,6 @@ if(MSVC)
 		target_compile_options(cw INTERFACE /Oy-)
 	endif()
 else()
-	# The frame-pointer walk needs every frame built with a frame pointer.
 	target_compile_options(cw PUBLIC -fno-omit-frame-pointer)
 	if(CMAKE_SYSTEM_NAME MATCHES "^(Linux|Android)$")
 		# Linkers emit the ELF build id only when asked; sha1 keeps it at 20 bytes.

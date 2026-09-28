@@ -99,6 +99,7 @@ CW_SCENARIO(null_write_leaf) {
 	cw_set_state("mode", "null_write_leaf");
 	record_addr("base", test_image_base());
 	record_addr("fn0", (uintptr_t)write_null_leaf);
+	record_addr("fn1", (uintptr_t)level_two); /* The leaf cannot record its own return address. */
 	level_three(write_null_leaf);
 }
 
@@ -133,18 +134,16 @@ static btest_suite_t crash = {
 
 /**
  * Check the module base against the image start the child recorded,
- * then each frame against the return addresses it recorded.
- *
- * With `exact`, frames 1 to 3 must be precisely the three return
- * addresses. Otherwise they only have to appear in order, which is what
- * a frame-pointer walk can promise when the crashing function is a leaf.
+ * then frames 1 to 3 against the three return addresses. Where a
+ * scenario could not record `retN` it records `fnN`, the function
+ * that frame returns into, and the frame must lie inside it.
  */
 static void
-check_frames(yyjson_doc* ev, bool exact) {
+check_frames(yyjson_doc* ev) {
 	uintptr_t base = test_state_hex(ev, "base");
 	BTEST_ASSERT(base != 0);
 	size_t num_frames = yyjson_arr_size(test_json_get(ev, "/envelope/frames"));
-	BTEST_ASSERT_RELATION("%zu", num_frames, >=, 2);
+	BTEST_ASSERT_RELATION("%zu", num_frames, >=, 4);
 
 	uintptr_t fn0 = test_state_hex(ev, "fn0");
 	uintptr_t pc = test_frame_addr(ev, 0);
@@ -154,25 +153,23 @@ check_frames(yyjson_doc* ev, bool exact) {
 		"frame 0 at %" PRIxPTR ", crashing function at %" PRIxPTR, pc, fn0
 	);
 
-	static const char* const keys[] = { "ret1", "ret2", "ret3" };
-	size_t next = 1;
+	static const char* const rets[] = { "ret1", "ret2", "ret3" };
+	static const char* const fns[] = { "fn1", "fn2", "fn3" };
 	for (size_t k = 0; k < 3; ++k) {
-		uintptr_t want = test_state_hex(ev, keys[k]);
-		if (want == 0) {
+		size_t i = k + 1;
+		uintptr_t got = test_frame_addr(ev, i);
+		uintptr_t want = test_state_hex(ev, rets[k]);
+		if (want != 0) {
+			want -= 1; /* The unwinder points inside the call instruction. */
+			BTEST_EXPECT_EX(got == want, "frame %zu is %" PRIxPTR ", want %" PRIxPTR, i, got, want);
 			continue;
 		}
-		want -= 1; /* The unwinder points inside the call instruction. */
-		if (exact) {
-			uintptr_t got = test_frame_addr(ev, next);
-			BTEST_EXPECT_EX(got == want, "frame %zu is %" PRIxPTR ", want %" PRIxPTR, next, got, want);
-			++next;
-		} else {
-			while (next < num_frames && test_frame_addr(ev, next) != want) {
-				++next;
-			}
-			BTEST_EXPECT_EX(next < num_frames, "return address %" PRIxPTR " (%s) missing", want, keys[k]);
-			++next;
-		}
+		uintptr_t fn = test_state_hex(ev, fns[k]);
+		BTEST_ASSERT_EX(fn != 0, "scenario recorded neither %s nor %s", rets[k], fns[k]);
+		BTEST_EXPECT_EX(
+			got >= fn && got < fn + MARKER_MAX_BYTES,
+			"frame %zu at %" PRIxPTR ", want inside %s at %" PRIxPTR, i, got, fns[k], fn
+		);
 	}
 }
 
@@ -219,7 +216,7 @@ BTEST(crash, null_write) {
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/breadcrumbs/0/c"), "test") == 0);
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/breadcrumbs/0/m"), "about to crash") == 0);
 
-	check_frames(ev, true);
+	check_frames(ev);
 
 	char path[512];
 	pending_path(run, ev, path, sizeof(path));
@@ -237,7 +234,7 @@ BTEST(crash, null_write_displaced) {
 	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
 	yyjson_doc* ev = run->events[0];
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), TEST_EXC_SEGV) == 0);
-	check_frames(ev, true);
+	check_frames(ev);
 }
 
 BTEST(crash, null_write_leaf) {
@@ -246,7 +243,7 @@ BTEST(crash, null_write_leaf) {
 	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
 	yyjson_doc* ev = run->events[0];
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), TEST_EXC_SEGV) == 0);
-	check_frames(ev, false);
+	check_frames(ev);
 }
 
 BTEST(crash, abort) {

@@ -94,11 +94,94 @@ cw_signal_name(int signo);
  * Build the module table and frame list for a parked child.
  *
  * Reads `/proc/<pid>/maps` while the child is blocked in the crash
- * protocol and walks frame pointers over the copied stack.
+ * protocol and unwinds the copied stack with the `.eh_frame` of each
+ * module on disk, falling back to frame pointers where there is none.
  *
  * @return `true` when at least one frame was produced.
  */
 bool
 cw_unwind(pid_t pid, const cw_crash_t* crash, cw_crash_info_t* out);
+
+#define CW_REG_COUNT   32
+#define CW_EH_MAX_LOAD 16
+
+#if defined(__x86_64__)
+#	define CW_REG_SP 7
+#	define CW_REG_FP 6
+#elif defined(__aarch64__)
+#	define CW_REG_SP 31
+#	define CW_REG_FP 29
+#else
+#	error "unsupported architecture"
+#endif
+
+/**
+ * Register file of one frame, indexed by DWARF register number.
+ */
+typedef struct {
+	uint64_t regs[CW_REG_COUNT];
+	uint32_t valid;            /**< Bit `i` set when `regs[i]` is known. */
+} cw_regs_t;
+
+/**
+ * Stack bytes copied at crash time: `data` holds `[lo, lo + len)`.
+ */
+typedef struct {
+	const uint8_t* data;
+	uint64_t lo;
+	size_t len;
+} cw_stack_t;
+
+typedef struct {
+	uint64_t vaddr;
+	uint64_t offset;
+	uint64_t filesz;
+} cw_eh_load_t;
+
+/**
+ * Unwind tables of one ELF file, mapped read-only from disk.
+ */
+typedef struct {
+	int state;                 /**< 0 not opened, 1 usable, -1 unusable. */
+	const uint8_t* file;
+	size_t file_len;
+	uint64_t bias;             /**< Load address minus link-time address. */
+	cw_eh_load_t load[CW_EH_MAX_LOAD];
+	int load_count;
+	uint64_t hdr_vaddr;        /**< Link-time address of `.eh_frame_hdr`. */
+	const uint8_t* table;      /**< Sorted lookup table in the header, or NULL. */
+	uint64_t table_count;
+	uint8_t table_enc;
+	const uint8_t* eh_frame;   /**< Start of `.eh_frame`, or NULL when unknown. */
+	const uint8_t* eh_frame_end;
+} cw_eh_module_t;
+
+/**
+ * Open the unwind tables of the file at `path`, which the game maps
+ * at `map_start` from file offset `map_offset`, with `pc` inside that
+ * mapping. On failure `m` is left unusable but must still be closed.
+ */
+bool
+cw_eh_open(cw_eh_module_t* m, const char* path, uint64_t map_start, uint64_t map_offset, uint64_t pc);
+
+void
+cw_eh_close(cw_eh_module_t* m);
+
+/**
+ * Recover the caller's registers from the frame at `pc`.
+ *
+ * `pc` must already be adjusted into the call instruction for a
+ * return address. On success `ret` holds the return address, or 0 in
+ * the outermost frame, and `signal_frame` tells whether this frame is
+ * a signal trampoline, whose return address needs no adjustment.
+ *
+ * @return `false` when the module has no entry for `pc` or the rules
+ * need memory outside the copied stack; `regs` is then unchanged.
+ */
+bool
+cw_eh_step(
+	const cw_eh_module_t* m, const cw_stack_t* stack,
+	uint64_t pc, cw_regs_t* regs, uint64_t* ret, bool* signal_frame
+);
 
 #endif /* CW_LINUX_PLATFORM_H */

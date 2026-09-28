@@ -132,13 +132,30 @@ static void
 regs_to_context(const struct user_regs_struct* regs, ucontext_t* uc) {
 	*uc = (ucontext_t){ 0 };
 #if defined(__x86_64__)
-	uc->uc_mcontext.gregs[REG_RIP] = (greg_t)regs->rip;
-	uc->uc_mcontext.gregs[REG_RSP] = (greg_t)regs->rsp;
-	uc->uc_mcontext.gregs[REG_RBP] = (greg_t)regs->rbp;
+	greg_t* g = uc->uc_mcontext.gregs;
+	g[REG_RAX] = (greg_t)regs->rax;
+	g[REG_RDX] = (greg_t)regs->rdx;
+	g[REG_RCX] = (greg_t)regs->rcx;
+	g[REG_RBX] = (greg_t)regs->rbx;
+	g[REG_RSI] = (greg_t)regs->rsi;
+	g[REG_RDI] = (greg_t)regs->rdi;
+	g[REG_RBP] = (greg_t)regs->rbp;
+	g[REG_RSP] = (greg_t)regs->rsp;
+	g[REG_R8] = (greg_t)regs->r8;
+	g[REG_R9] = (greg_t)regs->r9;
+	g[REG_R10] = (greg_t)regs->r10;
+	g[REG_R11] = (greg_t)regs->r11;
+	g[REG_R12] = (greg_t)regs->r12;
+	g[REG_R13] = (greg_t)regs->r13;
+	g[REG_R14] = (greg_t)regs->r14;
+	g[REG_R15] = (greg_t)regs->r15;
+	g[REG_RIP] = (greg_t)regs->rip;
 #elif defined(__aarch64__)
-	uc->uc_mcontext.pc = regs->pc;
+	for (int i = 0; i < 31; ++i) {
+		uc->uc_mcontext.regs[i] = regs->regs[i];
+	}
 	uc->uc_mcontext.sp = regs->sp;
-	uc->uc_mcontext.regs[29] = regs->regs[29];
+	uc->uc_mcontext.pc = regs->pc;
 #else
 #error "unsupported architecture"
 #endif

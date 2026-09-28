@@ -1,7 +1,8 @@
 /**
  * @file linux/unwind.c
- * Module table from `/proc/<pid>/maps`, ELF build ids, and a
- * frame-pointer walk over the copied stack.
+ * Module table from `/proc/<pid>/maps`, ELF build ids, and the walk
+ * over the copied stack: `.eh_frame` rules per module, frame pointers
+ * where a module has none.
  */
 #include <elf.h>
 #include <inttypes.h>
@@ -25,6 +26,17 @@ typedef struct {
 
 static mapping_t maps[CW_MAX_MAPS];
 static int map_count;
+static cw_eh_module_t eh_modules[CW_MAX_MODULES];
+
+static const mapping_t*
+find_map(uint64_t addr) {
+	for (int i = 0; i < map_count; ++i) {
+		if (addr >= maps[i].start && addr < maps[i].end) {
+			return &maps[i];
+		}
+	}
+	return NULL;
+}
 
 static int
 find_module(const cw_crash_info_t* info, const char* path) {
@@ -165,19 +177,67 @@ read_build_id(const char* path, char* out, size_t cap) {
 	fclose(f);
 }
 
+/**
+ * Expose the instruction pointer where rules can read it: the return
+ * address column on x86_64 (the PLT rule inspects it); arm64 has no
+ * such register.
+ */
 static void
-context_regs(const ucontext_t* uc, uint64_t* pc, uint64_t* sp, uint64_t* fp) {
+set_pc_reg(cw_regs_t* regs, uint64_t pc) {
 #if defined(__x86_64__)
+	regs->regs[16] = pc;
+	regs->valid |= 1u << 16;
+#else
+	(void)regs;
+	(void)pc;
+#endif
+}
+
+static void
+context_regs(const ucontext_t* uc, cw_regs_t* regs, uint64_t* pc) {
+	*regs = (cw_regs_t){ 0 };
+#if defined(__x86_64__)
+	/* DWARF order: rax rdx rcx rbx rsi rdi rbp rsp r8-r15. */
+	static const int order[] = {
+		REG_RAX, REG_RDX, REG_RCX, REG_RBX, REG_RSI, REG_RDI, REG_RBP, REG_RSP,
+		REG_R8, REG_R9, REG_R10, REG_R11, REG_R12, REG_R13, REG_R14, REG_R15,
+	};
+	for (unsigned i = 0; i < sizeof(order) / sizeof(order[0]); ++i) {
+		regs->regs[i] = (uint64_t)uc->uc_mcontext.gregs[order[i]];
+		regs->valid |= 1u << i;
+	}
 	*pc = (uint64_t)uc->uc_mcontext.gregs[REG_RIP];
-	*sp = (uint64_t)uc->uc_mcontext.gregs[REG_RSP];
-	*fp = (uint64_t)uc->uc_mcontext.gregs[REG_RBP];
+	set_pc_reg(regs, *pc);
 #elif defined(__aarch64__)
+	for (unsigned i = 0; i < 31; ++i) {
+		regs->regs[i] = uc->uc_mcontext.regs[i];
+	}
+	regs->regs[CW_REG_SP] = uc->uc_mcontext.sp;
+	regs->valid = 0xffffffffu;
 	*pc = uc->uc_mcontext.pc;
-	*sp = uc->uc_mcontext.sp;
-	*fp = uc->uc_mcontext.regs[29];
 #else
 #error "unsupported architecture"
 #endif
+}
+
+/**
+ * Step one frame along the frame-pointer chain: the saved frame
+ * pointer and return address sit at `fp` and `fp + 8`.
+ */
+static bool
+fp_step(const cw_stack_t* stack, cw_regs_t* regs, uint64_t* ret) {
+	uint64_t fp = regs->regs[CW_REG_FP];
+	if ((regs->valid & (1u << CW_REG_FP)) == 0 || fp < stack->lo
+		|| fp - stack->lo > stack->len || stack->len - (fp - stack->lo) < 16) {
+		return false;
+	}
+	uint64_t next;
+	memcpy(&next, stack->data + (fp - stack->lo), sizeof(next));
+	memcpy(ret, stack->data + (fp - stack->lo) + 8, sizeof(*ret));
+	regs->regs[CW_REG_FP] = next;
+	regs->regs[CW_REG_SP] = fp + 16;
+	regs->valid |= (1u << CW_REG_FP) | (1u << CW_REG_SP);
+	return true;
 }
 
 static void
@@ -186,15 +246,11 @@ add_frame(cw_crash_info_t* info, uint64_t addr) {
 		return;
 	}
 	cw_frame_t* fr = &info->frames[info->frame_count++];
-	fr->module = -1;
-	fr->offset = addr;
-	for (int i = 0; i < map_count; ++i) {
-		if (addr >= maps[i].start && addr < maps[i].end) {
-			fr->module = maps[i].module;
-			fr->offset = addr - info->modules[maps[i].module].base;
-			return;
-		}
-	}
+	const mapping_t* map = find_map(addr);
+	*fr = (cw_frame_t){
+		.module = map != NULL ? map->module : -1,
+		.offset = map != NULL ? addr - info->modules[map->module].base : addr,
+	};
 }
 
 bool
@@ -212,27 +268,41 @@ cw_unwind(pid_t pid, const cw_crash_t* crash, cw_crash_info_t* out) {
 		"si_code %d addr 0x%" PRIx64, crash->si.si_code, out->fault_addr
 	);
 
+	cw_stack_t stack = { .data = crash->stack, .lo = crash->sp, .len = crash->stack_len };
+	cw_regs_t regs;
 	uint64_t pc;
-	uint64_t sp;
-	uint64_t fp;
-	context_regs(&crash->uc, &pc, &sp, &fp);
+	context_regs(&crash->uc, &regs, &pc);
 	add_frame(out, pc);
 
-	uint64_t lo = crash->sp;
-	uint64_t hi = crash->sp + crash->stack_len;
-	for (int depth = 0; fp >= lo && fp + 16 <= hi && depth < CW_MAX_DEPTH; ++depth) {
-		uint64_t next;
-		uint64_t ret;
-		memcpy(&next, crash->stack + (fp - lo), sizeof(next));
-		memcpy(&ret, crash->stack + (fp - lo) + 8, sizeof(ret));
-		if (ret == 0) {
+	/* `pc` is the lookup address: the fault itself, then each return
+	 * address moved back into its call unless a signal frame made it. */
+	for (int depth = 0; depth < CW_MAX_DEPTH; ++depth) {
+		uint64_t sp = regs.regs[CW_REG_SP];
+		uint64_t ret = 0;
+		bool signal_frame = false;
+		bool stepped = false;
+		const mapping_t* map = find_map(pc);
+		if (map != NULL) {
+			cw_eh_module_t* m = &eh_modules[map->module];
+			if (m->state == 0) {
+				cw_eh_open(m, out->modules[map->module].path, map->start, map->offset, pc);
+			}
+			stepped = cw_eh_step(m, &stack, pc, &regs, &ret, &signal_frame);
+		}
+		if (!stepped && !fp_step(&stack, &regs, &ret)) {
 			break;
 		}
-		add_frame(out, ret - 1);
-		if (next <= fp) {
+		uint64_t next_sp = regs.regs[CW_REG_SP];
+		if (ret == 0 || next_sp < sp || (next_sp == sp && depth > 0)) {
 			break;
 		}
-		fp = next;
+		set_pc_reg(&regs, ret);
+		pc = signal_frame ? ret : ret - 1;
+		add_frame(out, pc);
+	}
+
+	for (int i = 0; i < out->module_count; ++i) {
+		cw_eh_close(&eh_modules[i]);
 	}
 	return out->frame_count > 0;
 }
