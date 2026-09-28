@@ -82,7 +82,7 @@ typedef struct {
 	char version[64];
 	char channel[64];
 	char endpoint[CW_STR_CAP];
-	char report_dir[CW_STR_CAP];
+	char report_dir[CW_STR_CAP]; /**< Resolved report directory; empty until cw_init() accepted the config. */
 	cw_transport_t transport;  /**< Copy of the caller's transport; `cfg.transport` points here or is `NULL`. */
 	cw_shared_t* shared;       /**< Mapped region, or `NULL` when inactive. */
 	bool initialized;          /**< cw_init() has run, whatever the outcome. */
@@ -218,6 +218,18 @@ cw_platform_attach_thread(void);
  */
 void
 cw_platform_check_handlers(void);
+
+/**
+ * The platform's report directory for cw_ctx_t::app.
+ *
+ * @return `false` when the environment names no state directory.
+ */
+bool
+cw_platform_default_report_dir(char* out, size_t cap);
+
+/** Create a directory and every missing parent. Succeeds when it exists. */
+bool
+cw_platform_mkdir_p(const char* path);
 
 /* Implemented by the core. */
 

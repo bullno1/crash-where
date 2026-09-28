@@ -83,12 +83,10 @@ cw_init(const cw_config_t* cfg) {
 	copy_str(cw_ctx.version, sizeof(cw_ctx.version), cfg->version);
 	copy_str(cw_ctx.channel, sizeof(cw_ctx.channel), cfg->channel);
 	copy_str(cw_ctx.endpoint, sizeof(cw_ctx.endpoint), cfg->endpoint);
-	copy_str(cw_ctx.report_dir, sizeof(cw_ctx.report_dir), cfg->report_dir);
 	cw_ctx.cfg.app = cw_ctx.app;
 	cw_ctx.cfg.version = cw_ctx.version;
 	cw_ctx.cfg.channel = cw_ctx.channel;
 	cw_ctx.cfg.endpoint = cw_ctx.endpoint;
-	cw_ctx.cfg.report_dir = cfg->report_dir != NULL ? cw_ctx.report_dir : NULL;
 	if (cfg->transport != NULL) {
 		cw_ctx.transport = *cfg->transport;
 		cw_ctx.cfg.transport = &cw_ctx.transport;
@@ -96,6 +94,17 @@ cw_init(const cw_config_t* cfg) {
 	if (cw_ctx.cfg.hang_timeout_ms == 0) {
 		cw_ctx.cfg.hang_timeout_ms = CW_HANG_DEFAULT_MS;
 	}
+
+	/* Both processes need the directory: the game for its decision and token, the watcher for reports. */
+	bool have_dir = cfg->report_dir != NULL
+		? (size_t)snprintf(cw_ctx.report_dir, sizeof(cw_ctx.report_dir), "%s", cfg->report_dir) < sizeof(cw_ctx.report_dir)
+		: cw_platform_default_report_dir(cw_ctx.report_dir, sizeof(cw_ctx.report_dir));
+	if (!have_dir) {
+		cw_ctx.report_dir[0] = '\0';
+		cw_log(CW_LOG_ERROR, "cannot resolve the report directory, library inactive");
+		return;
+	}
+	cw_ctx.cfg.report_dir = cw_ctx.report_dir;
 
 	const char* disable = getenv("CW_DISABLE");
 	if (disable != NULL && strcmp(disable, "1") == 0) {

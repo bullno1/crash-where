@@ -21,52 +21,6 @@
 
 #include "linux/platform.h"
 
-static bool
-mkdir_p(const char* path) {
-	char buf[CW_STR_CAP];
-	size_t len = strnlen(path, sizeof(buf));
-	if (len == 0 || len >= sizeof(buf)) {
-		return false;
-	}
-	memcpy(buf, path, len + 1);
-	for (size_t i = 1; i <= len; ++i) {
-		if (buf[i] == '/' || buf[i] == '\0') {
-			char saved = buf[i];
-			buf[i] = '\0';
-			if (mkdir(buf, 0700) != 0 && errno != EEXIST) {
-				return false;
-			}
-			buf[i] = saved;
-		}
-	}
-	return true;
-}
-
-/**
- * Resolve the report directory: the configured one, or
- * `$XDG_STATE_HOME/<app>/crash` with the `~/.local/state` fallback.
- */
-static bool
-resolve_report_dir(char* out, size_t cap) {
-	if (cw_ctx.cfg.report_dir != NULL) {
-		int len = snprintf(out, cap, "%s", cw_ctx.cfg.report_dir);
-		return len > 0 && (size_t)len < cap;
-	}
-	const char* app = cw_ctx.cfg.app;
-	const char* xdg = getenv("XDG_STATE_HOME");
-	int len;
-	if (xdg != NULL && xdg[0] == '/') {
-		len = snprintf(out, cap, "%s/%s/crash", xdg, app);
-	} else {
-		const char* home = getenv("HOME");
-		if (home == NULL || home[0] != '/') {
-			return false;
-		}
-		len = snprintf(out, cap, "%s/.local/state/%s/crash", home, app);
-	}
-	return len > 0 && (size_t)len < cap;
-}
-
 /**
  * @param path  Receives the envelope path on success.
  * @return `true` when the envelope was written.
@@ -420,15 +374,10 @@ cw_platform_run_watcher(const char* spec) {
 	cw_linux.region = region;
 	cw_ctx.shared = &region->common;
 
-	char report_dir[CW_STR_CAP];
-	if (!resolve_report_dir(report_dir, sizeof(report_dir))) {
-		cw_log(CW_LOG_ERROR, "cannot resolve report directory");
-		exit(1);
-	}
-
+	const char* report_dir = cw_ctx.report_dir;
 	char sub_dir[CW_STR_CAP + 16];
 	snprintf(sub_dir, sizeof(sub_dir), "%s/pending", report_dir);
-	if (!mkdir_p(sub_dir)) {
+	if (!cw_platform_mkdir_p(sub_dir)) {
 		cw_log(CW_LOG_ERROR, "cannot create %s", sub_dir);
 		exit(1);
 	}

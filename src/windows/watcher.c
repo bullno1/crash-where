@@ -9,49 +9,6 @@
 
 #include "windows/platform.h"
 
-static bool
-mkdir_p(const char* path) {
-	char buf[CW_STR_CAP];
-	size_t len = strnlen(path, sizeof(buf));
-	if (len == 0 || len >= sizeof(buf)) {
-		return false;
-	}
-	memcpy(buf, path, len + 1);
-
-	/* A drive letter is not a directory to create. */
-	size_t i = len >= 2 && buf[1] == ':' ? 3 : 1;
-	for (; i <= len; ++i) {
-		if (buf[i] == '\\' || buf[i] == '/' || buf[i] == '\0') {
-			char saved = buf[i];
-			buf[i] = '\0';
-			if (!CreateDirectoryA(buf, NULL) && GetLastError() != ERROR_ALREADY_EXISTS) {
-				return false;
-			}
-			buf[i] = saved;
-		}
-	}
-	return true;
-}
-
-/**
- * Resolve the report directory: the configured one, or
- * `%LOCALAPPDATA%\<app>\crash`.
- */
-static bool
-resolve_report_dir(char* out, size_t cap) {
-	int len;
-	if (cw_ctx.cfg.report_dir != NULL) {
-		len = snprintf(out, cap, "%s", cw_ctx.cfg.report_dir);
-	} else {
-		const char* local = getenv("LOCALAPPDATA");
-		if (local == NULL || local[0] == '\0') {
-			return false;
-		}
-		len = snprintf(out, cap, "%s\\%s\\crash", local, cw_ctx.cfg.app);
-	}
-	return len > 0 && (size_t)len < cap;
-}
-
 /**
  * @param path  Receives the envelope path on success.
  * @return `true` when the envelope was written.
@@ -272,15 +229,10 @@ cw_platform_run_watcher(const char* spec) {
 	cw_win.region = region;
 	cw_ctx.shared = &region->common;
 
-	char report_dir[CW_STR_CAP];
-	if (!resolve_report_dir(report_dir, sizeof(report_dir))) {
-		cw_log(CW_LOG_ERROR, "cannot resolve report directory");
-		exit(1);
-	}
-
+	const char* report_dir = cw_ctx.report_dir;
 	char sub_dir[CW_STR_CAP + 16];
 	snprintf(sub_dir, sizeof(sub_dir), "%s\\pending", report_dir);
-	if (!mkdir_p(sub_dir)) {
+	if (!cw_platform_mkdir_p(sub_dir)) {
 		cw_log(CW_LOG_ERROR, "cannot create %s", sub_dir);
 		exit(1);
 	}
