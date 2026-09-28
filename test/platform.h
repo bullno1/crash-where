@@ -51,6 +51,14 @@ bool
 test_spawn_self(const char* const* env, test_exit_t* out);
 
 /**
+ * Make sockets usable in this process. Safe to call repeatedly.
+ *
+ * @return `false` when the socket layer is unavailable.
+ */
+bool
+test_sockets_init(void);
+
+/**
  * Create one directory level. Succeeds when it already exists.
  */
 bool

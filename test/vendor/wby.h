@@ -522,6 +522,7 @@ wby_read_buffered_data(int *data_left, struct wby_buffer* buffer,
  * ---------------------------------------------------------------*/
 #ifdef _WIN32
 #include <winsock2.h>
+#include <errno.h>
 typedef SOCKET wby_socket;
 typedef int wby_socklen;
 typedef char wby_sockopt;
@@ -1624,7 +1625,7 @@ wby_start(struct wby_server *server, void *memory)
         goto error;
     }
     if (server->config.port == 0) {
-        if (getsockname(sock, (struct sockaddr*)&bind_addr, &(socklen_t){ sizeof(bind_addr) }) != WBY_OK) {
+        if (getsockname(sock, (struct sockaddr*)&bind_addr, &(wby_socklen){ sizeof(bind_addr) }) != WBY_OK) {
             wby_dbg(server->config.log, "getsockname() failed: %d", wby_socket_error());
             wby_dbg(server->config.log, "getsockname() failed: %s", strerror(wby_socket_error()));
             goto error;

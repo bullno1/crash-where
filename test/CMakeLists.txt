@@ -3,12 +3,13 @@ add_executable(cw_test
 	scenario.c
 	crash.c
 	hang.c
+	http.c
+	http_server.c
 	vendor/yyjson.c
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	enable_language(ASM)
-	target_sources(cw_test PRIVATE linux.c cfi.c cfi_fixtures.S http.c http_server.c)
-	target_link_libraries(cw_test PRIVATE cw_http)
+	target_sources(cw_test PRIVATE linux.c cfi.c cfi_fixtures.S)
 	# The .eh_frame interpreter is checked against libdwfl; without the
 	# development package that test skips itself.
 	find_library(TEST_LIBDW dw)
@@ -20,13 +21,15 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 	target_sources(cw_test PRIVATE windows.c cw_test.manifest)
+	# The loopback server's sockets.
+	target_link_libraries(cw_test PRIVATE ws2_32)
 endif()
 target_include_directories(cw_test PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}
 	${PROJECT_SOURCE_DIR}/src
 	${CMAKE_CURRENT_SOURCE_DIR}/vendor
 )
-target_link_libraries(cw_test PRIVATE cw)
+target_link_libraries(cw_test PRIVATE cw cw_http)
 
 if(MSVC)
 	target_compile_definitions(cw_test PRIVATE _CRT_SECURE_NO_WARNINGS)

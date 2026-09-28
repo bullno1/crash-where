@@ -3,6 +3,7 @@
  * Windows implementation of the test platform functions.
  */
 #define WIN32_LEAN_AND_MEAN
+#include <winsock2.h>
 #include <windows.h>
 
 #include <signal.h>
@@ -117,6 +118,12 @@ test_spawn_self(const char* const* env, test_exit_t* out) {
 	CloseHandle(pi.hProcess);
 	*out = exit_from_code(code);
 	return true;
+}
+
+bool
+test_sockets_init(void) {
+	WSADATA data;
+	return WSAStartup(MAKEWORD(2, 2), &data) == 0;
 }
 
 bool

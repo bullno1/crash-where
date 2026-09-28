@@ -11,8 +11,6 @@
 #include <blog.h>
 #include "http_server.h"
 #include "platform.h"
-
-#define WBY_IMPLEMENTATION
 #include "wby.h"
 
 struct test_http_server_s {
@@ -99,6 +97,10 @@ log_from_wby(const char* msg) {
 
 test_http_server_t*
 test_http_start(const test_http_reply_t* reply) {
+	if (!test_sockets_init()) {
+		BLOG_ERROR("no socket layer");
+		return NULL;
+	}
 	test_http_server_t* server = calloc(1, sizeof(*server));
 	if (server == NULL) {
 		return NULL;
@@ -163,3 +165,13 @@ test_http_stop(test_http_server_t* server) {
 	free(server->memory);
 	free(server);
 }
+
+/* Last: the implementation redefines snprintf on Windows. */
+#if defined(_MSC_VER)
+#	pragma warning(push, 0)
+#endif
+#define WBY_IMPLEMENTATION
+#include "wby.h"
+#if defined(_MSC_VER)
+#	pragma warning(pop)
+#endif

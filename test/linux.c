@@ -101,6 +101,11 @@ test_spawn_self(const char* const* env, test_exit_t* out) {
 }
 
 bool
+test_sockets_init(void) {
+	return true;
+}
+
+bool
 test_mkdir(const char* path) {
 	return mkdir(path, 0777) == 0 || errno == EEXIST;
 }

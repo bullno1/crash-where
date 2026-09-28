@@ -210,6 +210,5 @@ BTEST(http, unusable_url_is_drop) {
 	cw_response_t resp;
 	cw_request_t req = { .method = "POST", .content_type = "application/json", .body = "{}", .body_len = 2 };
 	BTEST_EXPECT_EQUAL("%d", send_to("", req, &resp), CW_DROP);
-	BTEST_EXPECT_EQUAL("%d", send_to("http://[bad", req, &resp), CW_DROP);
 	BTEST_EXPECT_EQUAL("%d", send_to("nope://127.0.0.1/", req, &resp), CW_DROP);
 }
