@@ -15,6 +15,11 @@
 
 cw_linux_t cw_linux = { .sock = -1 };
 
+void
+cw_platform_notify_auth(void) {
+	cw_send_msg(cw_linux.sock, CW_MSG_AUTH, 0);
+}
+
 /**
  * `$XDG_STATE_HOME/<app>/crash`, with the `~/.local/state` fallback.
  */
@@ -83,4 +88,9 @@ cw_platform_now_ms(void) {
 uint32_t
 cw_platform_tid(void) {
 	return (uint32_t)gettid();
+}
+
+bool
+cw_platform_replace(const char* from, const char* to) {
+	return rename(from, to) == 0;
 }

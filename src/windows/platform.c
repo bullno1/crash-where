@@ -62,3 +62,8 @@ uint32_t
 cw_platform_tid(void) {
 	return GetCurrentThreadId();
 }
+
+bool
+cw_platform_replace(const char* from, const char* to) {
+	return MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING) != 0;
+}

@@ -10,7 +10,7 @@
 #include "windows/platform.h"
 
 #define CW_READY_TIMEOUT 2000
-#define CW_MAX_INHERIT   9 /* Six shared handles and three standard ones. */
+#define CW_MAX_INHERIT   10 /* Seven shared handles and three standard ones. */
 
 /**
  * Copy the environment block without any watcher entry and append one.
@@ -170,19 +170,24 @@ cw_platform_run_game(void) {
 	h.ev_done = make_event();
 	h.ev_ready = make_event();
 	h.ev_shutdown = make_event();
-	if (h.ev_crash == NULL || h.ev_done == NULL || h.ev_ready == NULL || h.ev_shutdown == NULL) {
+	h.ev_auth = make_event();
+	if (
+		h.ev_crash == NULL || h.ev_done == NULL || h.ev_ready == NULL
+		|| h.ev_shutdown == NULL || h.ev_auth == NULL
+	) {
 		fail = "cannot create events";
 		goto end;
 	}
 
-	wchar_t watcher_var[160];
+	wchar_t watcher_var[200];
 	swprintf(
 		watcher_var, sizeof(watcher_var) / sizeof(watcher_var[0]),
-		L"" CW_ENV_WATCHER L"=%lu,%llx,%llx,%llx,%llx,%llx,%llx",
+		L"" CW_ENV_WATCHER L"=%lu,%llx,%llx,%llx,%llx,%llx,%llx,%llx",
 		GetCurrentProcessId(),
 		(unsigned long long)(uintptr_t)h.section, (unsigned long long)(uintptr_t)h.game,
 		(unsigned long long)(uintptr_t)h.ev_crash, (unsigned long long)(uintptr_t)h.ev_done,
-		(unsigned long long)(uintptr_t)h.ev_ready, (unsigned long long)(uintptr_t)h.ev_shutdown
+		(unsigned long long)(uintptr_t)h.ev_ready, (unsigned long long)(uintptr_t)h.ev_shutdown,
+		(unsigned long long)(uintptr_t)h.ev_auth
 	);
 	env = build_env(watcher_var);
 	if (env == NULL) {
@@ -191,9 +196,9 @@ cw_platform_run_game(void) {
 	}
 
 	HANDLE inherit[CW_MAX_INHERIT] = {
-		h.section, h.game, h.ev_crash, h.ev_done, h.ev_ready, h.ev_shutdown,
+		h.section, h.game, h.ev_crash, h.ev_done, h.ev_ready, h.ev_shutdown, h.ev_auth,
 	};
-	DWORD count = 6;
+	DWORD count = 7;
 	STARTUPINFOW std = { .dwFlags = STARTF_USESTDHANDLES };
 	std.hStdInput = add_std_handle(STD_INPUT_HANDLE, inherit, &count);
 	std.hStdOutput = add_std_handle(STD_OUTPUT_HANDLE, inherit, &count);
@@ -247,7 +252,9 @@ end:
 		if (region != NULL) {
 			UnmapViewOfFile(region);
 		}
-		HANDLE* handles[] = { &h.section, &h.game, &h.ev_crash, &h.ev_done, &h.ev_ready, &h.ev_shutdown };
+		HANDLE* handles[] = {
+			&h.section, &h.game, &h.ev_crash, &h.ev_done, &h.ev_ready, &h.ev_shutdown, &h.ev_auth,
+		};
 		for (size_t i = 0; i < sizeof(handles) / sizeof(handles[0]); ++i) {
 			if (*handles[i] != NULL) {
 				CloseHandle(*handles[i]);
@@ -261,4 +268,9 @@ void
 cw_platform_shutdown(int result) {
 	cw_win.region->shutdown_result = result;
 	SetEvent(cw_win.handles.ev_shutdown);
+}
+
+void
+cw_platform_notify_auth(void) {
+	SetEvent(cw_win.handles.ev_auth);
 }

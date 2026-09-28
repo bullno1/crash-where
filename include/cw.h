@@ -30,7 +30,7 @@ extern "C" {
 #endif
 
 /**
- * Result of an authentication or upload step.
+ * Result of a transport call or an upload step.
  *
  * The value decides what happens to the report or proof afterwards.
  */
@@ -58,51 +58,6 @@ typedef enum {
 	CW_REPORT_HANG,
 	CW_REPORT_ABNORMAL_EXIT, /**< The game ended without cw_shutdown(). */
 } cw_report_kind_t;
-
-/**
- * Storefront authentication hooks.
- *
- * Authentication filters noise from pirated copies and bots; it is not a
- * security boundary.
- *
- * Both callbacks run in the game process only.
- */
-typedef struct {
-	const char* store; /**< Storefront name such as "steam", "epic", "gog", "itch", or "beta". Sent with the proof. */
-
-	/**
-	 * Produce the storefront proof, for example a Steam encrypted app ticket.
-	 *
-	 * @param user  The `user` member of this struct.
-	 * @param buf   Output buffer for the proof bytes.
-	 * @param len   On entry the capacity of `buf`; on ::CW_OK the number of bytes written.
-	 * @return ::CW_OK on success, ::CW_RETRY if the storefront SDK is not ready yet,
-	 *         ::CW_DROP if no proof can ever be produced.
-	 */
-	cw_status_t (*get_proof)(void* user, void* buf, size_t* len);
-
-	/**
-	 * Exchange the proof for a token yourself.
-	 *
-	 * Optional; `NULL` hands the proof to the watcher, which POST it to
-	 * `<endpoint>/v1/<app>/auth` through cw_config_t::transport.
-	 *
-	 * @param user     The `user` member of this struct.
-	 * @param proof    Bytes produced by get_proof.
-	 * @param len      Length of `proof`.
-	 * @param token    Output buffer; receives a NUL-terminated token.
-	 * @param cap      Capacity of `token` in bytes, including the terminator.
-	 * @param expires  Receives the token expiry as Unix seconds.
-	 * @return ::CW_OK on success, ::CW_RETRY on a transient failure, ::CW_DROP otherwise.
-	 */
-	cw_status_t (*exchange)(
-		void* user,
-		const void* proof, size_t len,
-		char* token, size_t cap, int64_t* expires
-	);
-
-	void* user; /**< Passed unchanged as the first argument of every callback. */
-} cw_auth_t;
 
 /**
  * One HTTP request as handed to the transport.
@@ -194,7 +149,6 @@ typedef struct {
 	 */
 	uint32_t hang_timeout_ms;
 
-	const cw_auth_t* auth;           /**< Storefront authentication, or `NULL` for unauthenticated reports. */
 	const cw_transport_t* transport; /**< HTTP transport, or `NULL` to keep reports on disk unsent. */
 
 	/**
@@ -241,19 +195,39 @@ void
 cw_attach_thread(void);
 
 /**
- * Run storefront authentication again.
+ * Submit a storefront proof (e.g: a Steam encrypted app ticket) to the watcher.
  *
- * Call after the storefront SDK is initialized, which usually happens
- * after cw_init(). Safe to call repeatedly. On success, later uploads
- * carry the token.
+ * The watcher will use the configured @ref cw_config_t::transport for
+ * authentication.
  *
- * @return ::CW_OK when a token is cached or a proof has been handed to the
- *         watcher for exchange, ::CW_RETRY when the proof is not obtainable
- *         yet, ::CW_DROP when authentication is not configured or the
- *         proof was refused.
+ * Authentication serves as a noise filter. It is not meant to be a security
+ * boundary.
+ *
+ * Call this after the storefront SDK is initialized.
+ * A newer proof replaces one still waiting.
+ *
+ * @param store  Storefront name such as "steam", "epic", "gog", "itch",
+ *               or "beta": lowercase letters, digits, `-`, and `_`.
+ * @param proof  Proof bytes. Copied.
+ * @param len    Length of `proof`, at most 4 KB.
+ * @return `false` when the library is inactive, no transport is
+ *         configured, or the proof could not be stored.
  */
-cw_status_t
-cw_auth_refresh(void);
+bool
+cw_auth_proof(const char* store, const void* proof, size_t len);
+
+/**
+ * Cache a token the game has obtained itself.
+ *
+ * For custom authentication methods.
+ *
+ * @param token    NUL-terminated token.
+ * @param expires  Expiry as Unix seconds.
+ * @return `false` when the library is inactive or the token could not
+ *         be stored.
+ */
+bool
+cw_auth_token(const char* token, int64_t expires);
 
 /**
  * Mark the game alive.

@@ -1,6 +1,7 @@
 add_executable(cw_test
 	main.c
 	scenario.c
+	auth.c
 	crash.c
 	hang.c
 	http.c

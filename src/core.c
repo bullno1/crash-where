@@ -128,9 +128,30 @@ cw_attach_thread(void) {
 	cw_platform_attach_thread();
 }
 
-cw_status_t
-cw_auth_refresh(void) {
-	return CW_DROP;
+bool
+cw_auth_proof(const char* store, const void* proof, size_t len) {
+	if (!cw_ctx.active || store == NULL || proof == NULL) {
+		return false;
+	}
+	if (cw_ctx.cfg.transport == NULL) {
+		cw_log(CW_LOG_WARN, "no transport configured, proof cannot be exchanged");
+		return false;
+	}
+	if (!cw_proof_store(store, proof, len)) {
+		cw_log(CW_LOG_ERROR, "proof for store '%s' (%zu bytes) not stored", store, len);
+		return false;
+	}
+	cw_platform_notify_auth();
+	return true;
+}
+
+bool
+cw_auth_token(const char* token, int64_t expires) {
+	if (!cw_ctx.active || token == NULL || !cw_token_store(token, expires)) {
+		return false;
+	}
+	cw_platform_notify_auth();
+	return true;
 }
 
 void

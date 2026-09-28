@@ -301,7 +301,7 @@ cw_watch(pid_t game, int sock, const char* report_dir) {
 					result = msg.value;
 					break;
 				case CW_MSG_AUTH:
-					cw_log(CW_LOG_DEBUG, "token refreshed");
+					cw_auth_refreshed();
 					break;
 				default:
 					break;

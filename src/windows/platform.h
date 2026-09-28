@@ -55,6 +55,7 @@ typedef struct {
 	HANDLE ev_done;            /**< Watcher: report written, game may die. */
 	HANDLE ev_ready;           /**< Watcher: region mapped, watching. */
 	HANDLE ev_shutdown;        /**< Game: exiting on purpose, result is in the region. */
+	HANDLE ev_auth;            /**< Game: token or proof file refreshed. */
 } cw_handles_t;
 
 typedef struct {

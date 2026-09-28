@@ -7,6 +7,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include <blog.h>
 #include <cw.h>
@@ -29,15 +30,21 @@ test_cw_log(cw_log_level_t level, const char* msg) {
 
 /**
  * HTTP status the runner asked the transport to answer with.
+ *
+ * "unauthorized" refuses only a request that carries a token, so the
+ * bounce without one can succeed.
  */
 static int
-http_status_from_env(void) {
+http_status_from_env(const cw_request_t* req) {
 	const char* status = getenv("CW_TEST_STATUS");
 	if (status != NULL && strcmp(status, "retry") == 0) {
 		return 503;
 	}
 	if (status != NULL && strcmp(status, "drop") == 0) {
 		return 400;
+	}
+	if (status != NULL && strcmp(status, "unauthorized") == 0 && req->token != NULL) {
+		return 401;
 	}
 	return 200;
 }
@@ -63,8 +70,20 @@ write_event(yyjson_mut_doc* doc) {
 }
 
 /**
+ * Whether the request went to a route of the given name.
+ */
+static bool
+route_is(const cw_request_t* req, const char* route) {
+	size_t url_len = strlen(req->url);
+	size_t route_len = strlen(route);
+	return url_len > route_len && req->url[url_len - route_len - 1] == '/'
+		&& strcmp(req->url + url_len - route_len, route) == 0;
+}
+
+/**
  * Test transport: log the request, then answer with the status the
- * runner asked for and a reply that grants or declines attachments.
+ * runner asked for and a reply that grants or declines attachments, or
+ * mints a token for a proof.
  */
 static cw_status_t
 test_send(void* user, const cw_request_t* req, cw_response_t* resp) {
@@ -97,13 +116,18 @@ test_send(void* user, const cw_request_t* req, cw_response_t* resp) {
 	}
 	write_event(doc);
 
-	const char* want = getenv("CW_TEST_WANT_ATTACHMENTS");
-	int n = snprintf(
-		req->reply, req->reply_cap, "want_attachments %d\n",
-		want != NULL && strcmp(want, "1") == 0 ? 1 : 0
-	);
+	int n;
+	if (route_is(req, "auth")) {
+		n = snprintf(req->reply, req->reply_cap, "token watcher-token\nexpires %lld\n", (long long)time(NULL) + 3600);
+	} else {
+		const char* want = getenv("CW_TEST_WANT_ATTACHMENTS");
+		n = snprintf(
+			req->reply, req->reply_cap, "want_attachments %d\n",
+			want != NULL && strcmp(want, "1") == 0 ? 1 : 0
+		);
+	}
 	*resp = (cw_response_t){
-		.status = http_status_from_env(),
+		.status = http_status_from_env(req),
 		.reply_len = n > 0 && (size_t)n < req->reply_cap ? (size_t)n : 0,
 	};
 	return CW_OK;
@@ -141,6 +165,17 @@ test_fixture_main(const char* name) {
 		.log = test_cw_log,
 	};
 	cw_init(&cfg);
+
+	const char* auth = getenv("CW_TEST_AUTH");
+	if (auth != NULL && auth[0] != '\0') {
+		bool ok;
+		if (strcmp(auth, "proof") == 0) {
+			ok = cw_auth_proof("test", "proof-bytes", sizeof("proof-bytes") - 1);
+		} else {
+			ok = cw_auth_token("local-token", strcmp(auth, "expired") == 0 ? 1 : (int64_t)time(NULL) + 3600);
+		}
+		cw_set_state("auth", ok ? "1" : "0");
+	}
 
 	AUTOLIST_FOREACH(entry, test_scenarios) {
 		const test_scenario_t* scenario = entry->value_addr;
@@ -245,14 +280,16 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
 	char e_status[64];
 	char e_want[64];
 	char e_hang[64];
+	char e_auth[64];
 	snprintf(e_scenario, sizeof(e_scenario), "CW_TEST_SCENARIO=%s", scenario->name);
 	snprintf(e_out, sizeof(e_out), "CW_TEST_OUT=%s", run->dir);
 	snprintf(e_report, sizeof(e_report), "CW_TEST_REPORT_DIR=%s", report);
 	snprintf(e_status, sizeof(e_status), "CW_TEST_STATUS=%s", o.status != NULL ? o.status : "ok");
 	snprintf(e_want, sizeof(e_want), "CW_TEST_WANT_ATTACHMENTS=%d", o.want_attachments ? 1 : 0);
 	snprintf(e_hang, sizeof(e_hang), "CW_TEST_HANG_MS=%" PRIu32, o.hang_timeout_ms);
+	snprintf(e_auth, sizeof(e_auth), "CW_TEST_AUTH=%s", o.auth != NULL ? o.auth : "");
 	const char* env[] = {
-		e_scenario, e_out, e_report, e_status, e_want, e_hang,
+		e_scenario, e_out, e_report, e_status, e_want, e_hang, e_auth,
 		/* A sanitizer build must let the crash reach the library's handlers. */
 		"ASAN_OPTIONS=handle_segv=0:handle_abort=0:handle_sigbus=0:handle_sigfpe=0:handle_sigill=0",
 		o.disable ? "CW_DISABLE=1" : NULL,
@@ -265,6 +302,32 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
 	}
 	read_events(run);
 	return run;
+}
+
+bool
+test_run_has(const test_run_t* run, const char* name) {
+	char path[512];
+	snprintf(path, sizeof(path), "%s/report/%s", run->dir, name);
+	return test_file_size(path) >= 0;
+}
+
+int
+test_run_pending(const test_run_t* run, const char* suffix) {
+	char dir[512];
+	snprintf(dir, sizeof(dir), "%s/report/pending", run->dir);
+	return test_count_files(dir, suffix);
+}
+
+bool
+test_event_is(yyjson_doc* ev, const char* route, const char* token) {
+	char url[128];
+	snprintf(url, sizeof(url), "http://127.0.0.1:9/v1/cw-test/%s", route);
+	const char* call = test_json_str(ev, "/call");
+	const char* got_url = test_json_str(ev, "/url");
+	const char* got = test_json_str(ev, "/token");
+	return call != NULL && strcmp(call, "request") == 0
+		&& got_url != NULL && strcmp(got_url, url) == 0
+		&& (token == NULL ? got == NULL : got != NULL && strcmp(got, token) == 0);
 }
 
 uintptr_t

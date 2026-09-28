@@ -159,8 +159,10 @@ cw_watch(const char* report_dir) {
 	DWORD interval_ms = (DWORD)cw_hang_poll_ms(cw_ctx.cfg.hang_timeout_ms);
 
 	for (;;) {
-		HANDLE objects[3] = { cw_win.handles.ev_crash, cw_win.handles.ev_shutdown, cw_win.handles.game };
-		DWORD which = WaitForMultipleObjects(3, objects, FALSE, crashed ? INFINITE : interval_ms);
+		HANDLE objects[4] = {
+			cw_win.handles.ev_crash, cw_win.handles.ev_shutdown, cw_win.handles.ev_auth, cw_win.handles.game,
+		};
+		DWORD which = WaitForMultipleObjects(4, objects, FALSE, crashed ? INFINITE : interval_ms);
 		if (!crashed) {
 			check_hang(&hang, report_dir);
 		}
@@ -179,6 +181,8 @@ cw_watch(const char* report_dir) {
 		} else if (which == WAIT_OBJECT_0 + 1) {
 			shutdown = true;
 			result = cw_win.region->shutdown_result;
+		} else if (which == WAIT_OBJECT_0 + 2) {
+			cw_auth_refreshed();
 		} else {
 			break;
 		}
@@ -203,8 +207,12 @@ _Noreturn void
 cw_platform_run_watcher(const char* spec) {
 	_putenv_s(CW_ENV_WATCHER, "");
 	unsigned long game;
-	unsigned long long v[6];
-	if (sscanf(spec, "%lu,%llx,%llx,%llx,%llx,%llx,%llx", &game, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5]) != 7) {
+	unsigned long long v[7];
+	int parsed = sscanf(
+		spec, "%lu,%llx,%llx,%llx,%llx,%llx,%llx,%llx",
+		&game, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6]
+	);
+	if (parsed != 8) {
 		cw_log(CW_LOG_ERROR, "malformed " CW_ENV_WATCHER);
 		exit(1);
 	}
@@ -215,6 +223,7 @@ cw_platform_run_watcher(const char* spec) {
 		.ev_done = (HANDLE)(uintptr_t)v[3],
 		.ev_ready = (HANDLE)(uintptr_t)v[4],
 		.ev_shutdown = (HANDLE)(uintptr_t)v[5],
+		.ev_auth = (HANDLE)(uintptr_t)v[6],
 	};
 
 	cw_region_t* region = MapViewOfFile(cw_win.handles.section, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(cw_region_t));

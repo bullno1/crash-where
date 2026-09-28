@@ -23,6 +23,8 @@
 #define CW_MAX_MODULES    64
 #define CW_MAX_FRAMES     64
 #define CW_STR_CAP        256
+#define CW_TOKEN_CAP      1024
+#define CW_PROOF_CAP      4096
 #define CW_ENV_WATCHER    "CW_WATCHER" /**< Set by the game on the watcher: `<pid>,<platform handles>`. */
 
 /**
@@ -220,6 +222,10 @@ cw_platform_attach_thread(void);
 void
 cw_platform_check_handlers(void);
 
+/** Tell the watcher that the token or proof file was rewritten. */
+void
+cw_platform_notify_auth(void);
+
 /**
  * The platform's report directory for cw_ctx_t::app.
  *
@@ -231,6 +237,10 @@ cw_platform_default_report_dir(char* out, size_t cap);
 /** Create a directory and every missing parent. Succeeds when it exists. */
 bool
 cw_platform_mkdir_p(const char* path);
+
+/** Rename `from` over `to`, replacing an existing file. */
+bool
+cw_platform_replace(const char* from, const char* to);
 
 /* Implemented by the core. */
 
@@ -249,7 +259,53 @@ cw_write_envelope(
 	const cw_shared_t* shared, char* out_path, size_t cap
 );
 
-/* The pending store, `<report_dir>/pending/`. */
+/* Report directory files: `token`, `proof`, and `pending/`. */
+
+/**
+ * Write a file under the report directory atomically, creating the
+ * directory on first use.
+ */
+bool
+cw_store_write(const char* name, const void* data, size_t len);
+
+/**
+ * Read a whole file under the report directory into `buf`, NUL
+ * terminated.
+ *
+ * @return `false` when the file is absent or larger than `cap - 1`.
+ */
+bool
+cw_store_read(const char* name, void* buf, size_t cap, size_t* len);
+
+void
+cw_store_remove(const char* name);
+
+/** The cached token, when it has not expired. */
+bool
+cw_token_load(char* token, size_t cap);
+
+/**
+ * Write the proof as the finished body of the auth request, so the
+ * watcher posts it verbatim.
+ *
+ * @return `false` when `store` is not a plain name or the file could
+ *         not be written.
+ */
+bool
+cw_proof_store(const char* store, const void* proof, size_t len);
+
+bool
+cw_token_store(const char* token, int64_t expires);
+
+/**
+ * Value of `key` in a text of `key value` lines, the format of server
+ * replies and of the token file.
+ *
+ * @return `true` and the NUL-terminated value in `out`, or `false` when
+ *         the key is absent or its value does not fit.
+ */
+bool
+cw_reply_get(const char* text, const char* key, char* out, size_t cap);
 
 /** File name letter of a report kind: `c`, `h`, or `a`. */
 char
@@ -277,7 +333,14 @@ void
 cw_pending_remove(const cw_pending_t* p);
 
 /**
- * Send one written envelope through the transport.
+ * The game sent `auth refreshed`: exchange the proof it left, if any.
+ */
+void
+cw_auth_refreshed(void);
+
+/**
+ * Send one written envelope through the transport, after exchanging a
+ * waiting proof so it carries the token.
  *
  * Delivered and rejected envelopes are deleted; failed ones stay in
  * `pending/`. Without a transport the file is left where it is and a
