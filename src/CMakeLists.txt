@@ -39,5 +39,22 @@ if(MSVC)
 	target_compile_options(cw PRIVATE /W4 /experimental:c11atomics)
 else()
 	target_compile_definitions(cw PRIVATE _GNU_SOURCE)
-	target_compile_options(cw PRIVATE -Wall -Wextra -fno-omit-frame-pointer)
+	target_compile_options(cw PRIVATE -Wall -Wextra)
+endif()
+
+# What the watcher needs from the crashing binary; consumers inherit it.
+if(MSVC)
+	# The CodeView record with the PDB GUID and age is only written with /DEBUG.
+	target_link_options(cw INTERFACE /DEBUG:FULL)
+	if(CMAKE_SIZEOF_VOID_P EQUAL 4)
+		# The x86 walk follows the EBP chain and /O2 implies /Oy.
+		target_compile_options(cw INTERFACE /Oy-)
+	endif()
+else()
+	# The frame-pointer walk needs every frame built with a frame pointer.
+	target_compile_options(cw PUBLIC -fno-omit-frame-pointer)
+	if(CMAKE_SYSTEM_NAME MATCHES "^(Linux|Android)$")
+		# Linkers emit the ELF build id only when asked; sha1 keeps it at 20 bytes.
+		target_link_options(cw INTERFACE -Wl,--build-id=sha1)
+	endif()
 endif()

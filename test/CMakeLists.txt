@@ -19,9 +19,8 @@ if(MSVC)
 	target_compile_definitions(cw_test PRIVATE _CRT_SECURE_NO_WARNINGS)
 	target_compile_options(cw_test PRIVATE /W4)
 else()
-	# The frame-pointer walk in the watcher needs the crashing program built with frame pointers.
 	target_compile_definitions(cw_test PRIVATE _GNU_SOURCE)
-	target_compile_options(cw_test PRIVATE -Wall -Wextra -fno-omit-frame-pointer)
+	target_compile_options(cw_test PRIVATE -Wall -Wextra)
 endif()
 
 add_test(
