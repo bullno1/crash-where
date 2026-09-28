@@ -7,7 +7,7 @@ add_executable(cw_test
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	target_sources(cw_test PRIVATE linux.c)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-	target_sources(cw_test PRIVATE windows.c)
+	target_sources(cw_test PRIVATE windows.c cw_test.manifest)
 endif()
 target_include_directories(cw_test PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}
