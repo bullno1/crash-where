@@ -102,8 +102,8 @@ test_send(void* user, const cw_request_t* req, cw_response_t* resp) {
 
 	const char* want = getenv("CW_TEST_WANT_ATTACHMENTS");
 	int n = snprintf(
-		req->reply, req->reply_cap, "{\"want_attachments\":%s}",
-		want != NULL && strcmp(want, "1") == 0 ? "true" : "false"
+		req->reply, req->reply_cap, "want_attachments %d\n",
+		want != NULL && strcmp(want, "1") == 0 ? 1 : 0
 	);
 	*resp = (cw_response_t){
 		.status = http_status_from_env(),

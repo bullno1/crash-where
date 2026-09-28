@@ -70,27 +70,36 @@ map_status(int status) {
 }
 
 /**
- * Whether a JSON reply sets `key` to `true`.
+ * Value of `key` in a reply of `key value` lines.
  *
- * The reply is ours and tiny, so a scan for the quoted key and the
- * literal after its colon stands in for a parser.
+ * @return `true` and the NUL-terminated value in `out`, or `false` when
+ *         the key is absent or its value does not fit.
  */
 static bool
-reply_flag(const char* reply, const char* key) {
-	char quoted[64];
-	snprintf(quoted, sizeof(quoted), "\"%s\"", key);
-	const char* p = strstr(reply, quoted);
-	if (p == NULL) {
-		return false;
+reply_get(const char* reply, const char* key, char* out, size_t cap) {
+	size_t key_len = strlen(key);
+	for (const char* line = reply; *line != '\0';) {
+		const char* end = strchr(line, '\n');
+		size_t line_len = end != NULL ? (size_t)(end - line) : strlen(line);
+		if (line_len > key_len && line[key_len] == ' ' && memcmp(line, key, key_len) == 0) {
+			const char* value = line + key_len + 1;
+			size_t value_len = line_len - key_len - 1;
+			if (value_len > 0 && value[value_len - 1] == '\r') {
+				--value_len;
+			}
+			if (value_len >= cap) {
+				return false;
+			}
+			memcpy(out, value, value_len);
+			out[value_len] = '\0';
+			return true;
+		}
+		if (end == NULL) {
+			break;
+		}
+		line = end + 1;
 	}
-	p += strlen(quoted);
-	p += strspn(p, " \t\r\n");
-	if (*p != ':') {
-		return false;
-	}
-	++p;
-	p += strspn(p, " \t\r\n");
-	return strncmp(p, "true", 4) == 0;
+	return false;
 }
 
 void
@@ -140,7 +149,10 @@ cw_upload_report(const char* path) {
 		if (status != CW_OK) {
 			cw_log(CW_LOG_DEBUG, "server answered %d for report %s", resp.status, id);
 		}
-		want_attachments = status == CW_OK && reply_flag(reply, "want_attachments");
+		char value[8];
+		want_attachments = status == CW_OK
+			&& reply_get(reply, "want_attachments", value, sizeof(value))
+			&& strcmp(value, "1") == 0;
 	}
 	/* The prototype writes no attachments yet. */
 	if (want_attachments) {
