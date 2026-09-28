@@ -1,0 +1,13 @@
+#!/bin/sh
+set -eu
+HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/../env.sh"
+
+cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
+	-DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+	-DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$BIN_DIR" \
+	-DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$BIN_DIR" \
+	-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY="$BIN_DIR"
+
+# Point clangd at the host build.
+ln -sfn ".build/$TOOLCHAIN/$BUILD_TYPE/compile_commands.json" "$ROOT/compile_commands.json"

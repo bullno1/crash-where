@@ -1,0 +1,13 @@
+#!/bin/sh
+set -u
+HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/../env.sh"
+
+"$HERE/test" "$@" || true
+while inotifywait -qq -r -e close_write,create,delete,move \
+	"$ROOT/src" "$ROOT/include" "$ROOT/test" "$ROOT/samples" \
+	"$ROOT/cmake" "$ROOT/CMakeLists.txt"
+do
+	sleep 0.2
+	"$HERE/test" "$@" || true
+done

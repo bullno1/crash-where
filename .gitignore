@@ -1,4 +1,5 @@
 /AGENTS.md
 /DESIGN.md
-/build/
-/build-win/
+/bin/
+/.build/
+/work/

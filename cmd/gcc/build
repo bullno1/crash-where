@@ -1,0 +1,7 @@
+#!/bin/sh
+set -eu
+HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/../env.sh"
+
+[ -f "$BUILD_DIR/build.ninja" ] || "$HERE/configure"
+exec cmake --build "$BUILD_DIR"
