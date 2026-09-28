@@ -112,6 +112,7 @@ typedef struct {
 
 typedef struct {
 	int samples;
+	int fixtures;              /**< Samples inside the hand-written fixtures. */
 	int both_callers;          /**< Samples where both unwinders found a caller. */
 	int mismatches;
 	int cw_only[CW_REG_COUNT]; /**< Compared register known to the in-tree parser only. */
@@ -124,6 +125,10 @@ typedef struct {
  * it and both unwinders see the same bytes wherever a chain leads.
  */
 static _Alignas(16) uint8_t stack_buf[STACK_LEN];
+
+/* Bounds of the hand-written rows in `cfi_fixtures.S`. */
+extern const char cfi_fixtures_begin[];
+extern const char cfi_fixtures_end[];
 
 static void
 fill_stack(void) {
@@ -306,11 +311,14 @@ compare(tally_t* t, const char* path, uint64_t addr, const caller_t* cw, const c
 }
 
 /**
- * Step both unwinders from `pc` and compare. `addr` is the link-time
- * address, as a disassembler shows it.
+ * Step both unwinders from `pc` and compare, reporting the link-time
+ * address as a disassembler shows it.
  */
 static void
 sample(tally_t* t, const cw_eh_module_t* m, Dwfl* dwfl, dwfl_ctx_t* ctx, const char* path, uint64_t pc) {
+	if (pc >= (uint64_t)(uintptr_t)cfi_fixtures_begin && pc < (uint64_t)(uintptr_t)cfi_fixtures_end) {
+		++t->fixtures;
+	}
 	caller_t cw = cw_step(m, pc);
 	caller_t dw = dwfl_step(dwfl, ctx, pc);
 	compare(t, path, pc - m->bias, &cw, &dw);
@@ -409,7 +417,10 @@ BTEST(cfi, matches_libdwfl) {
 	dwfl_end(dwfl);
 
 	BTEST_EXPECT_RELATION("%d", modules, >, 0);
-	BLOG_INFO("%d samples, %d with a caller from both, %d mismatches", tally.samples, tally.both_callers, tally.mismatches);
+	BLOG_INFO(
+		"%d samples (%d in fixtures), %d with a caller from both, %d mismatches",
+		tally.samples, tally.fixtures, tally.both_callers, tally.mismatches
+	);
 	for (size_t i = 0; i < sizeof(compared) / sizeof(compared[0]); ++i) {
 		int r = compared[i];
 		if (tally.cw_only[r] != 0 || tally.dw_only[r] != 0) {
@@ -420,6 +431,7 @@ BTEST(cfi, matches_libdwfl) {
 		}
 	}
 	BTEST_EXPECT_RELATION("%d", tally.both_callers, >, tally.samples / 2);
+	BTEST_EXPECT_RELATION("%d", tally.fixtures, >, 0);
 	BTEST_EXPECT_EQUAL("%d", tally.mismatches, 0);
 }
 
