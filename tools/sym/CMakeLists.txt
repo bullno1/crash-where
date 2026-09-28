@@ -5,6 +5,7 @@ add_library(cw_sym STATIC
 	elf.c
 	pe.c
 	wasm.c
+	normalize.c
 )
 target_include_directories(cw_sym PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # sym.h includes cw.h and the upload step uses the transport type.

@@ -275,11 +275,11 @@ BTEST(sym, rejects_foreign_files) {
 
 /** What the sink saw about one C++ fixture. */
 typedef struct {
-	uint32_t want;                        /**< Module offset to match, or 0 to match by scope. */
-	const char* want_scope[MAX_COMPONENTS]; /**< Scope to match when `want` is 0. */
-	int want_scope_len;
+	uint32_t want;            /**< Module offset to match, or 0 to match by normalized name. */
+	const char* want_name;    /**< Expected normalized name; the match key when `want` is 0. */
 	bool found;
-	char scope[MAX_COMPONENTS][64];
+	char name[256];           /**< Normalized name. */
+	char scope[MAX_COMPONENTS][64]; /**< Raw components, for the shapes the normalizer rewrites. */
 	int scope_len;
 	char display[256];
 	bool has_display;
@@ -292,32 +292,20 @@ typedef struct {
 	cxx_probe_t anon_fn;
 	cxx_probe_t template_fn;
 	cxx_probe_t file_static;
-	cxx_probe_t method;      /**< `ns::Foo::bar`, matched by scope. */
-	cxx_probe_t lambda;      /**< `lambda_host::<unnamed>::operator()`, matched by scope. */
+	cxx_probe_t method;      /**< `ns::Foo::bar`, no address C can take. */
+	cxx_probe_t lambda;      /**< The lambda's `operator()`, likewise. */
 } cxx_capture_t;
 
-static bool
-scope_matches(const cxx_probe_t* p, const cwsym_symbol_t* s) {
-	if (s->scope_len != p->want_scope_len) {
-		return false;
-	}
-	for (int i = 0; i < s->scope_len; ++i) {
-		if (strcmp(s->scope[i], p->want_scope[i]) != 0) {
-			return false;
-		}
-	}
-	return true;
-}
-
 static void
-match_cxx(cxx_probe_t* p, const cwsym_symbol_t* s) {
-	bool hit = p->want != 0 ? s->start == p->want : scope_matches(p, s);
-	if (p->found || !hit || s->scope_len > MAX_COMPONENTS) {
+match_cxx(cxx_probe_t* p, const cwsym_symbol_t* s, const char* name) {
+	bool hit = p->want != 0 ? s->start == p->want : strcmp(name, p->want_name) == 0;
+	if (p->found || !hit) {
 		return;
 	}
 	p->found = true;
-	p->scope_len = s->scope_len;
-	for (int i = 0; i < s->scope_len; ++i) {
+	copy_str(p->name, sizeof(p->name), name);
+	p->scope_len = s->scope_len < MAX_COMPONENTS ? s->scope_len : MAX_COMPONENTS;
+	for (int i = 0; i < p->scope_len; ++i) {
 		copy_str(p->scope[i], sizeof(p->scope[i]), s->scope[i]);
 	}
 	p->has_display = s->display != NULL;
@@ -329,12 +317,14 @@ match_cxx(cxx_probe_t* p, const cwsym_symbol_t* s) {
 static bool
 on_cxx_symbol(void* user, const cwsym_symbol_t* s) {
 	cxx_capture_t* c = user;
-	match_cxx(&c->static_method, s);
-	match_cxx(&c->anon_fn, s);
-	match_cxx(&c->template_fn, s);
-	match_cxx(&c->file_static, s);
-	match_cxx(&c->method, s);
-	match_cxx(&c->lambda, s);
+	char name[512];
+	cwsym_normalize(s, name, sizeof(name));
+	match_cxx(&c->static_method, s, name);
+	match_cxx(&c->anon_fn, s, name);
+	match_cxx(&c->template_fn, s, name);
+	match_cxx(&c->file_static, s, name);
+	match_cxx(&c->method, s, name);
+	match_cxx(&c->lambda, s, name);
 	return true;
 }
 
@@ -343,37 +333,30 @@ starts_with(const char* s, const char* prefix) {
 	return strncmp(s, prefix, strlen(prefix)) == 0;
 }
 
-/** The scope as `a::b::c`, an empty component shown as `<>`, for messages. */
-static const char*
-scope_text(const cxx_probe_t* p, char* buf, size_t cap) {
-	size_t len = 0;
-	buf[0] = '\0';
-	for (int i = 0; i < p->scope_len && len < cap; ++i) {
-		len += (size_t)snprintf(buf + len, cap - len, "%s%s", i > 0 ? "::" : "", p->scope[i][0] ? p->scope[i] : "<>");
-	}
-	return buf;
-}
-
 /**
- * The scope must match exactly and the unit must be the fixture file.
- * Display names differ between compilers and GCC omits them for
- * internal linkage, so they are checked only by prefix and only when
- * present.
+ * The normalized name, linkage, and unit must match exactly. Display
+ * names differ between compilers and GCC omits them for internal
+ * linkage, so they are checked only by prefix and only when present.
  */
 static void
-expect_cxx(const cxx_probe_t* p, const char* const* scope, int scope_len, bool is_static, const char* display_prefix) {
-	char text[512];
-	BTEST_ASSERT_EX(p->found, "no symbol for %s", scope[scope_len - 1]);
-	BTEST_EXPECT_EX(p->scope_len == scope_len, "%s has %d components", scope_text(p, text, sizeof(text)), p->scope_len);
-	for (int i = 0; i < scope_len && i < p->scope_len; ++i) {
-		BTEST_EXPECT_EX(strcmp(p->scope[i], scope[i]) == 0, "%s: component %d", scope_text(p, text, sizeof(text)), i);
-	}
-	BTEST_EXPECT_EX(p->is_static == is_static, "%s: is_static is %d", scope_text(p, text, sizeof(text)), p->is_static);
-	BTEST_EXPECT_EX(ends_with(p->unit, "cxx_fixtures.cpp"), "%s: unit is %s", scope_text(p, text, sizeof(text)), p->unit);
+expect_cxx(const cxx_probe_t* p, bool is_static, const char* display_prefix) {
+	BTEST_ASSERT_EX(p->found, "no symbol for %s", p->want_name);
+	BTEST_EXPECT_EX(strcmp(p->name, p->want_name) == 0, "%s: normalized as %s", p->want_name, p->name);
+	BTEST_EXPECT_EX(p->is_static == is_static, "%s: is_static is %d", p->want_name, p->is_static);
+	BTEST_EXPECT_EX(ends_with(p->unit, "cxx_fixtures.cpp"), "%s: unit is %s", p->want_name, p->unit);
 	if (p->has_display) {
-		BTEST_EXPECT_EX(starts_with(p->display, display_prefix), "%s: display is %s", scope_text(p, text, sizeof(text)), p->display);
+		BTEST_EXPECT_EX(starts_with(p->display, display_prefix), "%s: display is %s", p->want_name, p->display);
 	} else {
-		BTEST_EXPECT_EX(is_static, "%s: an external function has no display name", scope_text(p, text, sizeof(text)));
+		BTEST_EXPECT_EX(is_static, "%s: an external function has no display name", p->want_name);
+	}
+}
+
+/** The raw components, for a shape the normalizer rewrites and would otherwise hide. */
+static void
+expect_components(const cxx_probe_t* p, const char* const* scope, int scope_len) {
+	BTEST_EXPECT_EX(p->scope_len == scope_len, "%s: %d raw components", p->want_name, p->scope_len);
+	for (int i = 0; i < scope_len && i < p->scope_len; ++i) {
+		BTEST_EXPECT_EX(strcmp(p->scope[i], scope[i]) == 0, "%s: raw component %d is \"%s\"", p->want_name, i, p->scope[i]);
 	}
 }
 
@@ -382,23 +365,27 @@ BTEST(sym, reads_cxx_scopes) {
 	test_cxx_fixtures(&fx);
 	uintptr_t base = test_image_base();
 	cxx_capture_t c = {
-		.static_method = { .want = (uint32_t)(fx.static_method - base) },
-		.anon_fn = { .want = (uint32_t)(fx.anon_fn - base) },
-		.template_fn = { .want = (uint32_t)(fx.template_fn - base) },
-		.file_static = { .want = (uint32_t)(fx.file_static - base) },
-		.method = { .want_scope = { "ns", "Foo", "bar" }, .want_scope_len = 3 },
-		.lambda = { .want_scope = { "lambda_host", "", "operator()" }, .want_scope_len = 3 },
+		.static_method = { .want = (uint32_t)(fx.static_method - base), .want_name = "ns::Foo::baz" },
+		.anon_fn = { .want = (uint32_t)(fx.anon_fn - base), .want_name = "cxx_fixtures:ns::$anon::hidden" },
+		.template_fn = { .want = (uint32_t)(fx.template_fn - base), .want_name = "ns::twice" },
+		.file_static = { .want = (uint32_t)(fx.file_static - base), .want_name = "cxx_fixtures:file_static" },
+		.method = { .want_name = "ns::Foo::bar" },
+		.lambda = { .want_name = "cxx_fixtures:lambda_host::$lambda::operator()" },
 	};
 	cwsym_sink_t sink = { .symbol = on_cxx_symbol, .user = &c };
 	cwsym_log_t log = { .log = on_log };
 	BTEST_ASSERT_EQUAL("%d", cwsym_read("/proc/self/exe", NULL, &sink, &log), CWSYM_OK);
 
-	expect_cxx(&c.static_method, (const char* const[]){ "ns", "Foo", "baz" }, 3, false, "ns::Foo::baz(");
-	expect_cxx(&c.anon_fn, (const char* const[]){ "ns", "", "hidden" }, 3, true, "ns::(anonymous namespace)::hidden(");
-	expect_cxx(&c.template_fn, (const char* const[]){ "ns", "twice<int>" }, 2, false, "int ns::twice<int>(");
-	expect_cxx(&c.file_static, (const char* const[]){ "file_static" }, 1, true, "file_static(");
-	expect_cxx(&c.method, (const char* const[]){ "ns", "Foo", "bar" }, 3, false, "ns::Foo::bar(");
-	expect_cxx(&c.lambda, (const char* const[]){ "lambda_host", "", "operator()" }, 3, true, "lambda_host");
+	expect_cxx(&c.static_method, false, "ns::Foo::baz(");
+	expect_cxx(&c.anon_fn, true, "ns::(anonymous namespace)::hidden(");
+	expect_cxx(&c.template_fn, false, "int ns::twice<int>(");
+	expect_cxx(&c.file_static, true, "file_static(");
+	expect_cxx(&c.method, false, "ns::Foo::bar(");
+	expect_cxx(&c.lambda, true, "lambda_host");
+
+	/* The two shapes where an empty component carries meaning. */
+	expect_components(&c.anon_fn, (const char* const[]){ "ns", "", "hidden" }, 3);
+	expect_components(&c.lambda, (const char* const[]){ "lambda_host", "", "operator()" }, 3);
 }
 
 /* }}} */
