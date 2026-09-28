@@ -390,4 +390,65 @@ BTEST(sym, reads_cxx_scopes) {
 
 /* }}} */
 
+/* Reader into table {{{ */
+
+typedef struct {
+	int count;
+	char file[256];
+	uint32_t line;
+	char function[256];
+} first_location_t;
+
+static void
+on_first_location(void* user, const cwsym_location_t* loc) {
+	first_location_t* f = user;
+	if (f->count++ == 0) {
+		copy_str(f->file, sizeof(f->file), loc->file);
+		copy_str(f->function, sizeof(f->function), loc->function);
+		f->line = loc->line;
+	}
+}
+
+/** The whole pipeline on this executable: read, build, look up, symbolize. */
+BTEST(sym, builds_table_from_this_executable) {
+	cwsym_log_t log = { .log = on_log };
+	cwsym_table_builder_t* b = cwsym_table_begin();
+	BTEST_ASSERT(b != NULL);
+	cwsym_sink_t sink = cwsym_table_sink(b, true);
+	BTEST_ASSERT_EQUAL("%d", cwsym_read("/proc/self/exe", NULL, &sink, &log), CWSYM_OK);
+	cwsym_table_t t;
+	BTEST_ASSERT_EQUAL("%d", cwsym_table_end(b, &t, &log), CWSYM_OK);
+	BTEST_EXPECT_RELATION("%u", t.count, >, 100u);
+	BTEST_EXPECT_RELATION("%u", t.line_count, >, 1000u);
+	BTEST_EXPECT_RELATION("%u", t.site_count, >, 0u);
+
+	uint32_t probe = offset_of((void (*)(void))keep_probe);
+	cwsym_hit_t hit;
+	BTEST_ASSERT_EX(cwsym_lookup(&t, probe, &hit), "no function at %#x", probe);
+	BTEST_EXPECT_EX(strcmp(hit.name, "sym:sym_probe") == 0, "name is %s", hit.name);
+	BTEST_EXPECT_EQUAL("%u", hit.start, probe);
+
+	first_location_t first = { 0 };
+	cwsym_location_sink_t locations = { .location = on_first_location, .user = &first };
+	BTEST_EXPECT_RELATION("%d", cwsym_symbolize(&t, probe, &locations), >=, 1);
+	BTEST_EXPECT_EX(ends_with(first.file, "sym.c"), "file is %s", first.file);
+	BTEST_EXPECT_EX(
+		first.line >= PROBE_LINE && first.line <= PROBE_LINE + 3,
+		"line is %u, want %d..%d", first.line, PROBE_LINE, PROBE_LINE + 3
+	);
+
+	test_cxx_fixtures_t fx;
+	test_cxx_fixtures(&fx);
+	uint32_t method = (uint32_t)(fx.static_method - test_image_base());
+	BTEST_ASSERT(cwsym_lookup(&t, method, &hit));
+	BTEST_EXPECT_EX(strcmp(hit.name, "ns::Foo::baz") == 0, "name is %s", hit.name);
+
+	char id[41];
+	cwsym_build_id_hex(t.build_id, t.build_id_len, id);
+	BTEST_EXPECT_EQUAL("%zu", strlen(id), (size_t)40);
+	cwsym_table_free(&t);
+}
+
+/* }}} */
+
 #endif /* TEST_HAVE_CWSYM_ELF */

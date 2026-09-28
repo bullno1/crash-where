@@ -1,6 +1,7 @@
 /**
  * @file reader.h
- * Shared by the format readers and the detector that dispatches to them.
+ * Shared by the format readers, the detector that dispatches to them,
+ * and the table code.
  */
 #ifndef CWSYM_READER_H
 #define CWSYM_READER_H

@@ -320,7 +320,9 @@ cwsym_table_end(cwsym_table_builder_t* builder, cwsym_table_t* table, const cwsy
  * string offset lands on a NUL-terminated string inside its section. A
  * buffer that ends after `strings` is accepted as a prefix. Does not
  * check `rules`; the caller compares cwsym_table_t::rules with what it
- * expects. `buf` must outlive the table.
+ * expects. `buf` must outlive the table and be 4-byte aligned, as a
+ * `malloc` or `mmap` result is; the sections are read in place, so the
+ * host must be little-endian like every target.
  *
  * @return ::CWSYM_OK, ::CWSYM_ERR_FORMAT for a foreign or truncated buffer, ::CWSYM_ERR_INVALID for a broken invariant.
  */

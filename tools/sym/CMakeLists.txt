@@ -6,8 +6,12 @@ add_library(cw_sym STATIC
 	pe.c
 	wasm.c
 	normalize.c
+	table.c
 )
-target_include_directories(cw_sym PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
+target_include_directories(cw_sym
+	PUBLIC ${CMAKE_CURRENT_SOURCE_DIR}
+	PRIVATE ${PROJECT_SOURCE_DIR}/src
+)
 # sym.h includes cw.h and the upload step uses the transport type.
 target_link_libraries(cw_sym PUBLIC cw)
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
