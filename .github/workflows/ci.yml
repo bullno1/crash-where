@@ -1,0 +1,41 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  linux:
+    name: ${{ matrix.toolchain }} (Linux)
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        toolchain: [gcc, clang-mold]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install toolchain
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends ninja-build clang
+      - name: Install mold
+        if: matrix.toolchain == 'clang-mold'
+        uses: rui314/setup-mold@v1
+        with:
+          # The toolchain file selects mold itself; keep the system linker
+          # untouched.
+          make-default: false
+      - name: Build and test
+        run: cmd/${{ matrix.toolchain }}/test
+
+  msvc:
+    name: msvc (Windows)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Build and test
+        shell: cmd
+        run: cmd\msvc\test.bat
