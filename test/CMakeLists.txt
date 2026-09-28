@@ -8,6 +8,7 @@ add_executable(cw_test
 	normalize.c
 	table.c
 	upload.c
+	cli.c
 	vendor/yyjson.c
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
@@ -43,7 +44,7 @@ target_include_directories(cw_test PRIVATE
 	${PROJECT_SOURCE_DIR}/src
 	${CMAKE_CURRENT_SOURCE_DIR}/vendor
 )
-target_link_libraries(cw_test PRIVATE cw cw_http cw_sym)
+target_link_libraries(cw_test PRIVATE cw cw_http cw_sym cwsym_cli)
 # Golden files shared with the Worker repository; see test/table.c.
 target_compile_definitions(cw_test PRIVATE TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 

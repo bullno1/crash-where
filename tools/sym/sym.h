@@ -1,6 +1,6 @@
 /**
  * @file sym.h
- * Internal library behind `cw-upload-sym`: readers, normalizer, table
+ * Internal library behind `cwsym`: readers, normalizer, table
  * builder, parser, lookup, and symbolizer.
  *
  * Data flows one way. A reader walks one debug file and pushes raw

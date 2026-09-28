@@ -1,5 +1,5 @@
 # The symbol tool's library: readers, normalizer, table builder, lookup.
-# The CLI target comes later; tests link this library directly.
+# The command line over it lives under cli/; tests link both directly.
 add_library(cw_sym STATIC
 	read.c
 	elf.c
@@ -33,3 +33,5 @@ else()
 	target_compile_definitions(cw_sym PRIVATE _GNU_SOURCE)
 	target_compile_options(cw_sym PRIVATE -Wall -Wextra)
 endif()
+
+add_subdirectory(cli)
