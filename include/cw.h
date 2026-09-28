@@ -102,7 +102,7 @@ typedef struct {
  * of the call that receives it.
  */
 typedef struct {
-	const char* method;       /**< "POST" or "GET". */
+	const char* method;       /**< "POST", "PUT", or "GET". */
 	const char* url;          /**< Absolute URL. */
 	const char* content_type; /**< Media type of `body`, or `NULL` when there is no body. */
 	const char* token;        /**< Bearer token, or `NULL` when unauthenticated. */
@@ -172,7 +172,7 @@ typedef struct {
 	 */
 	const char* app;
 	const char* version;     /**< Application version such as "1.4.2". The server rejects reports from unknown versions. */
-	const char* channel;     /**< Distribution channel such as "steam" or "beta". */
+	const char* channel;     /**< Build stream such as "stable" or "beta". The server rejects reports whose channel differs from the one the release was registered with. */
 	const char* endpoint;    /**< Base URL of the ingest service, without a trailing slash. */
 	const char* report_dir;  /**< Directory for pending reports, or `NULL` for the platform default. */
 
