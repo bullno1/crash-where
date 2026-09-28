@@ -159,12 +159,9 @@ typedef struct {
 /**
  * Initialization parameters for cw_init().
  *
- * Zero-initialize the struct, then set the fields you need. `size` lets
- * the library detect a caller built against a different header revision.
+ * Zero-initialize the struct, then set the fields you need.
  */
 typedef struct {
-	size_t size;             /**< Must be `sizeof(cw_config_t)`. */
-
 	/**
 	 * Application identifier such as "forest-quest".
 	 *
