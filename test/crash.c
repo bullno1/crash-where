@@ -183,7 +183,7 @@ pending_path(const test_run_t* run, yyjson_doc* ev, char* out, size_t cap) {
 		run->dir,
 		yyjson_get_uint(test_json_get(ev, "/envelope/sent_at")),
 		test_json_str(ev, "/envelope/client_fp"),
-		test_json_str(ev, "/id")
+		test_json_str(ev, "/envelope/report_id")
 	);
 }
 
@@ -204,9 +204,9 @@ BTEST(crash, null_write) {
 	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
 
 	yyjson_doc* ev = run->events[0];
-	BTEST_ASSERT(strcmp(test_json_str(ev, "/call"), "envelope") == 0);
+	BTEST_ASSERT(strcmp(test_json_str(ev, "/url"), "http://127.0.0.1:9/v1/cw-test/report") == 0);
 	BTEST_EXPECT_EQUAL("%d", (int)yyjson_get_int(test_json_get(ev, "/attempts")), 0);
-	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/report_id"), test_json_str(ev, "/id")) == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/method"), "POST") == 0);
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/app/name"), "cw-test") == 0);
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), TEST_EXC_SEGV) == 0);
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/state/mode"), "null_write") == 0);

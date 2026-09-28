@@ -89,9 +89,9 @@ cw_init(const cw_config_t* cfg) {
 	cw_ctx.cfg.channel = cw_ctx.channel;
 	cw_ctx.cfg.endpoint = cw_ctx.endpoint;
 	cw_ctx.cfg.report_dir = cfg->report_dir != NULL ? cw_ctx.report_dir : NULL;
-	if (cfg->uploader != NULL) {
-		cw_ctx.uploader = *cfg->uploader;
-		cw_ctx.cfg.uploader = &cw_ctx.uploader;
+	if (cfg->transport != NULL) {
+		cw_ctx.transport = *cfg->transport;
+		cw_ctx.cfg.transport = &cw_ctx.transport;
 	}
 	if (cw_ctx.cfg.hang_timeout_ms == 0) {
 		cw_ctx.cfg.hang_timeout_ms = CW_HANG_DEFAULT_MS;

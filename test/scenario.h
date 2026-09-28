@@ -5,8 +5,8 @@
  * A scenario is a function that crashes, hangs, or exits. It runs in a
  * child process that is this same executable started again with
  * `CW_TEST_SCENARIO` set. The runner waits for the child and its watcher
- * to finish, then reads back every call the watcher made to the test
- * uploader.
+ * to finish, then reads back every request the watcher made through the
+ * test transport.
  */
 #ifndef CW_TEST_SCENARIO_H
 #define CW_TEST_SCENARIO_H
@@ -49,8 +49,8 @@ AUTOLIST_DECLARE(test_scenarios)
  * succeeds, attachments are declined, and the library is enabled.
  */
 typedef struct {
-	const char* status;    /**< Status the test uploader returns: "ok", "retry", or "drop". `NULL` means "ok". */
-	bool want_attachments; /**< Value the test uploader reports for `want_attachments`. */
+	const char* status;    /**< HTTP status the test transport answers: "ok" (200), "retry" (503), or "drop" (400). `NULL` means "ok". */
+	bool want_attachments; /**< Value of `want_attachments` in the test transport's reply. */
 	bool disable;          /**< Run the child with `CW_DISABLE=1`. */
 	uint32_t hang_timeout_ms; /**< Passed to cw_config_t::hang_timeout_ms; 0 keeps the library default. */
 } test_run_opts_t;
@@ -60,13 +60,13 @@ typedef struct {
 /**
  * Outcome of one scenario run.
  *
- * Every uploader call is one event, in call order. An envelope event
- * looks like `{"call":"envelope","id":...,"attempts":...,"token":...,
- * "attachments":[...],"envelope":{...}}`; an attachment event like
- * `{"call":"attachment","id":...,"path":...,"copy":...,"size":...}`.
+ * Every transport call is one event, in call order:
+ * `{"call":"request","method":...,"url":...,"content_type":...,
+ * "token":...,"body_len":...,"envelope":{...}}`, where `envelope` is
+ * present when the body is JSON.
  */
 typedef struct {
-	char dir[256];        /**< Directory holding the report store and the uploader log. */
+	char dir[256];        /**< Directory holding the report store and the transport log. */
 	test_exit_t exit;
 	int num_events;
 	yyjson_doc* events[TEST_MAX_EVENTS];

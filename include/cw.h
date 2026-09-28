@@ -9,7 +9,7 @@
  * Only the game process returns from @ref cw_init. The watcher will call
  * `exit` and never execute the rest of the program.
  *
- * Everything in this header except the cw_uploader_t callbacks runs in
+ * Everything in this header except the cw_transport_t callback runs in
  * the game process.
  *
  * Two environment variables affect behaviour:
@@ -75,7 +75,8 @@ typedef struct {
 	/**
 	 * Exchange the proof for a token yourself.
 	 *
-	 * Optional; `NULL` lets the library POST the proof to `<endpoint>/v1/auth`.
+	 * Optional; `NULL` hands the proof to the watcher, which POST it to
+	 * `<endpoint>/v1/<app>/auth` through cw_config_t::transport.
 	 *
 	 * @param user     The `user` member of this struct.
 	 * @param proof    Bytes produced by get_proof.
@@ -95,66 +96,65 @@ typedef struct {
 } cw_auth_t;
 
 /**
- * One pending report as handed to an uploader.
+ * One HTTP request as handed to the transport.
  *
- * All strings and paths are owned by the library and remain valid only
- * for the duration of the callback that receives them.
+ * Every pointer is owned by the library and valid only for the duration
+ * of the call that receives it.
  */
 typedef struct {
-	const char* id;                 /**< Client-generated UUID v4. Retries reuse it so the server can deduplicate. */
-	const char* envelope_json;      /**< The JSON envelope, uncompressed. */
-	const char* token;              /**< Cached authentication token, or `NULL` when unauthenticated. */
-	const char* const* attachments; /**< `NULL`-terminated list of file paths (minidump, log tail, snapshots). */
-	int attempts;                   /**< Number of earlier delivery attempts for this report. */
-} cw_report_t;
+	const char* method;       /**< "POST" or "GET". */
+	const char* url;          /**< Absolute URL. */
+	const char* content_type; /**< Media type of `body`, or `NULL` when there is no body. */
+	const char* token;        /**< Bearer token, or `NULL` when unauthenticated. */
+	const void* body;         /**< Request body, or `NULL`. */
+	size_t body_len;          /**< Length of `body` in bytes. */
+	char* reply;              /**< Buffer that receives the reply body. */
+	size_t reply_cap;         /**< Capacity of `reply` in bytes. */
+} cw_request_t;
 
 /**
- * Upload transport hooks.
+ * Outcome of one transport call.
+ */
+typedef struct {
+	int status;       /**< HTTP status, or 0 when no reply arrived. */
+	size_t reply_len; /**< Bytes written to cw_request_t::reply. A longer reply is truncated. */
+} cw_response_t;
+
+/**
+ * HTTP transport hook.
  *
- * Optional; with a `NULL` cw_config_t::uploader every report stays in the
- * report directory and nothing is sent.
+ * Optional; with a `NULL` cw_config_t::transport every report stays in
+ * the report directory, nothing is sent, and no proof is exchanged.
  *
- * The callbacks run in a process owned by the library, never in the game
- * process. They cannot rely on anything the game initialized, and the
- * `user` pointer must be valid in that process.
+ * The callback runs in the watcher process, never in the game process.
+ * It cannot rely on anything the game initialized, and the `user`
+ * pointer must be valid in that process.
  */
 typedef struct {
 	/**
-	 * POST the envelope.
+	 * Perform one HTTP request and wait for the reply.
 	 *
-	 * Map the HTTP status as follows: 2xx is ::CW_OK; 429, 5xx, and network
-	 * errors are ::CW_RETRY; every other 4xx, including 410, is ::CW_DROP.
+	 * Send `body`, when present, with its `Content-Type` and
+	 * `Content-Length`.
+	 * Send `Authorization: Bearer <token>` when a token is given.
+	 * Never follow redirects.
+	 * Copy at most `reply_cap` bytes of the reply body into `reply`, reading
+	 * and discarding the rest so the status still arrives.
 	 *
-	 * @param user              The `user` member of this struct.
-	 * @param report            The report to send.
-	 * @param want_attachments  On ::CW_OK, set from the server reply. `false` makes
-	 *                          the library delete the attachments locally without
-	 *                          sending them.
-	 * @return The mapped status.
+	 * @param user  The `user` member of this struct.
+	 * @param req   The request.
+	 * @param resp  Filled in on ::CW_OK.
+	 * @return ::CW_OK when an HTTP reply arrived, whatever its status;
+	 *         ::CW_RETRY when the network, name resolution, or TLS failed;
+	 *         ::CW_DROP when the request can never succeed, such as a
+	 *         malformed URL.
 	 */
-	cw_status_t (*send_envelope)(
-		void* user, const cw_report_t* report,
-		bool* want_attachments
+	cw_status_t (*send)(
+		void* user, const cw_request_t* req, cw_response_t* resp
 	);
 
-	/**
-	 * POST one attachment file under the same report id.
-	 *
-	 * Called once per entry of cw_report_t::attachments, only after
-	 * send_envelope returned ::CW_OK with `want_attachments` set.
-	 *
-	 * @param user    The `user` member of this struct.
-	 * @param report  The report the attachment belongs to.
-	 * @param path    Path of the file to send.
-	 * @return Status mapped as for send_envelope.
-	 */
-	cw_status_t (*send_attachment)(
-		void* user, const cw_report_t* report,
-		const char* path
-	);
-
-	void* user; /**< Passed unchanged as the first argument of every callback. */
-} cw_uploader_t;
+	void* user; /**< Passed unchanged as the first argument of the callback. */
+} cw_transport_t;
 
 /**
  * Initialization parameters for cw_init().
@@ -168,6 +168,7 @@ typedef struct {
 	 * Required. Lowercase letters, digits, `-`, and `_` only, at most 63
 	 * bytes. Names the default report directory and identifies the game
 	 * to the server, so several games can share a machine and a backend.
+	 * Keep it the same across releases.
 	 */
 	const char* app;
 	const char* version;     /**< Application version such as "1.4.2". The server rejects reports from unknown versions. */
@@ -184,8 +185,8 @@ typedef struct {
 	 */
 	uint32_t hang_timeout_ms;
 
-	const cw_auth_t* auth;         /**< Storefront authentication, or `NULL` for unauthenticated reports. */
-	const cw_uploader_t* uploader; /**< Upload transport, or `NULL` to keep reports on disk unsent. */
+	const cw_auth_t* auth;           /**< Storefront authentication, or `NULL` for unauthenticated reports. */
+	const cw_transport_t* transport; /**< HTTP transport, or `NULL` to keep reports on disk unsent. */
 
 	/**
 	 * Diagnostic log sink.
@@ -225,9 +226,10 @@ cw_init(const cw_config_t* cfg);
  * after cw_init(). Safe to call repeatedly. On success, later uploads
  * carry the token.
  *
- * @return ::CW_OK when a valid token is cached, ::CW_RETRY when the proof
- *         is not obtainable yet, ::CW_DROP when authentication is not
- *         configured or was refused.
+ * @return ::CW_OK when a token is cached or a proof has been handed to the
+ *         watcher for exchange, ::CW_RETRY when the proof is not obtainable
+ *         yet, ::CW_DROP when authentication is not configured or the
+ *         proof was refused.
  */
 cw_status_t
 cw_auth_refresh(void);

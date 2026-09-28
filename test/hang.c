@@ -124,7 +124,7 @@ record_addr(const char* key, uintptr_t addr) {
 }
 
 /**
- * Spin until the watcher has uploaded a report, which the test uploader
+ * Spin until the watcher has uploaded a report, which the test transport
  * records in the events file, so the stall lasts exactly as long as
  * detection takes. The file is checked only every 64K iterations so
  * the watcher's snapshot lands in this function nearly every time.
@@ -222,7 +222,7 @@ check_stall_frames(yyjson_doc* ev) {
 
 static void
 check_hang_envelope(yyjson_doc* ev, const char* mode) {
-	BTEST_ASSERT(strcmp(test_json_str(ev, "/call"), "envelope") == 0);
+	BTEST_ASSERT(strcmp(test_json_str(ev, "/url"), "http://127.0.0.1:9/v1/cw-test/report") == 0);
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), "HANG") == 0);
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/message_norm"), "no heartbeat for <N> ms") == 0);
 	BTEST_EXPECT_RELATION("%" PRIu64, yyjson_get_uint(test_json_get(ev, "/envelope/exception/thread")), >, 0);
@@ -255,7 +255,7 @@ BTEST(hang, stall_then_crash) {
 	BTEST_EXPECT(strcmp(test_json_str(crash, "/envelope/exception/type"), TEST_EXC_SEGV) == 0);
 	BTEST_EXPECT_RELATION("%zu", yyjson_arr_size(test_json_get(crash, "/envelope/frames")), >=, 1);
 	/* Two reports from one session must not share an id. */
-	BTEST_EXPECT(strcmp(test_json_str(run->events[0], "/id"), test_json_str(crash, "/id")) != 0);
+	BTEST_EXPECT(strcmp(test_json_str(run->events[0], "/envelope/report_id"), test_json_str(crash, "/envelope/report_id")) != 0);
 }
 
 BTEST(hang, no_heartbeat) {

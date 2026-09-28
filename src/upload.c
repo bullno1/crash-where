@@ -1,6 +1,6 @@
 /**
  * @file upload.c
- * Hands one written report to the configured uploader.
+ * Sends one written report through the configured transport.
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -8,25 +8,28 @@
 
 #include "internal.h"
 
+/** Largest reply body the protocol ever needs to read. */
+#define CW_REPLY_CAP 4096
+
 /**
  * Read a whole file into a NUL-terminated heap buffer.
  *
  * @return The buffer, or `NULL` when the file cannot be read.
  */
 static char*
-read_file(const char* path) {
+read_file(const char* path, size_t* len) {
 	FILE* f = fopen(path, "rb");
 	if (f == NULL) {
 		return NULL;
 	}
 	char* buf = NULL;
 	if (fseek(f, 0, SEEK_END) == 0) {
-		long len = ftell(f);
-		if (len >= 0 && fseek(f, 0, SEEK_SET) == 0) {
-			buf = malloc((size_t)len + 1);
+		long size = ftell(f);
+		if (size >= 0 && fseek(f, 0, SEEK_SET) == 0) {
+			buf = malloc((size_t)size + 1);
 			if (buf != NULL) {
-				size_t n = fread(buf, 1, (size_t)len, f);
-				buf[n] = '\0';
+				*len = fread(buf, 1, (size_t)size, f);
+				buf[*len] = '\0';
 			}
 		}
 	}
@@ -49,11 +52,52 @@ path_id(const char* path, char out[37]) {
 	return true;
 }
 
+/**
+ * Map an HTTP status onto what happens to the report.
+ *
+ * Redirects count as rejections: they are never followed, and one means
+ * the compiled-in endpoint is wrong, which retrying cannot fix.
+ */
+static cw_status_t
+map_status(int status) {
+	if (status >= 200 && status < 300) {
+		return CW_OK;
+	}
+	if (status == 0 || status == 429 || status >= 500) {
+		return CW_RETRY;
+	}
+	return CW_DROP;
+}
+
+/**
+ * Whether a JSON reply sets `key` to `true`.
+ *
+ * The reply is ours and tiny, so a scan for the quoted key and the
+ * literal after its colon stands in for a parser.
+ */
+static bool
+reply_flag(const char* reply, const char* key) {
+	char quoted[64];
+	snprintf(quoted, sizeof(quoted), "\"%s\"", key);
+	const char* p = strstr(reply, quoted);
+	if (p == NULL) {
+		return false;
+	}
+	p += strlen(quoted);
+	p += strspn(p, " \t\r\n");
+	if (*p != ':') {
+		return false;
+	}
+	++p;
+	p += strspn(p, " \t\r\n");
+	return strncmp(p, "true", 4) == 0;
+}
+
 void
 cw_upload_report(const char* path) {
-	const cw_uploader_t* up = cw_ctx.cfg.uploader;
-	if (up == NULL) {
-		cw_log(CW_LOG_WARN, "no uploader configured, report kept at %s", path);
+	const cw_transport_t* tr = cw_ctx.cfg.transport;
+	if (tr == NULL) {
+		cw_log(CW_LOG_WARN, "no transport configured, report kept at %s", path);
 		return;
 	}
 
@@ -62,27 +106,46 @@ cw_upload_report(const char* path) {
 		cw_log(CW_LOG_ERROR, "unexpected report name %s", path);
 		return;
 	}
-	char* json = read_file(path);
+	size_t len = 0;
+	char* json = read_file(path, &len);
 	if (json == NULL) {
 		cw_log(CW_LOG_ERROR, "cannot read %s back for upload", path);
 		return;
 	}
 
-	/* The prototype writes no attachments yet. */
-	const char* const attachments[] = { NULL };
-	cw_report_t report = {
-		.id = id,
-		.envelope_json = json,
+	char url[CW_STR_CAP + 128];
+	snprintf(url, sizeof(url), "%s/v1/%s/report", cw_ctx.cfg.endpoint, cw_ctx.cfg.app);
+	char reply[CW_REPLY_CAP];
+	cw_request_t req = {
+		.method = "POST",
+		.url = url,
+		.content_type = "application/json",
 		.token = NULL,
-		.attachments = attachments,
-		.attempts = 0,
+		.body = json,
+		.body_len = len,
+		.reply = reply,
+		.reply_cap = sizeof(reply) - 1,
 	};
-	bool want_attachments = false;
-	cw_status_t status = up->send_envelope(up->user, &report, &want_attachments);
-	for (size_t i = 0; status == CW_OK && want_attachments && attachments[i] != NULL; ++i) {
-		status = up->send_attachment(up->user, &report, attachments[i]);
-	}
+	cw_response_t resp = { 0 };
+	cw_status_t status = tr->send(tr->user, &req, &resp);
 	free(json);
+
+	bool want_attachments = false;
+	if (status == CW_OK) {
+		if (resp.reply_len > req.reply_cap) {
+			resp.reply_len = req.reply_cap;
+		}
+		reply[resp.reply_len] = '\0';
+		status = map_status(resp.status);
+		if (status != CW_OK) {
+			cw_log(CW_LOG_DEBUG, "server answered %d for report %s", resp.status, id);
+		}
+		want_attachments = status == CW_OK && reply_flag(reply, "want_attachments");
+	}
+	/* The prototype writes no attachments yet. */
+	if (want_attachments) {
+		cw_log(CW_LOG_DEBUG, "server wants attachments for report %s, none written", id);
+	}
 
 	switch (status) {
 	case CW_OK:
