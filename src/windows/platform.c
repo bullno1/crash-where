@@ -67,3 +67,31 @@ bool
 cw_platform_replace(const char* from, const char* to) {
 	return MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING) != 0;
 }
+
+bool
+cw_platform_list_dir(const char* path, void (*fn)(void* user, const char* name), void* user) {
+	char pattern[CW_STR_CAP + 32];
+	int len = snprintf(pattern, sizeof(pattern), "%s\\*", path);
+	if (len <= 0 || (size_t)len >= sizeof(pattern)) {
+		return false;
+	}
+	WIN32_FIND_DATAA data;
+	HANDLE find = FindFirstFileA(pattern, &data);
+	if (find == INVALID_HANDLE_VALUE) {
+		return false;
+	}
+	do {
+		if (strcmp(data.cFileName, ".") != 0 && strcmp(data.cFileName, "..") != 0) {
+			fn(user, data.cFileName);
+		}
+	} while (FindNextFileA(find, &data));
+	FindClose(find);
+	return true;
+}
+
+bool
+cw_platform_lock(const char* path) {
+	/* No sharing: a second opener fails until this process exits and the handle closes. */
+	HANDLE h = CreateFileA(path, GENERIC_WRITE, 0, NULL, OPEN_ALWAYS, FILE_ATTRIBUTE_NORMAL, NULL);
+	return h != INVALID_HANDLE_VALUE;
+}

@@ -23,6 +23,8 @@
 #define CW_MAX_MODULES    64
 #define CW_MAX_FRAMES     64
 #define CW_STR_CAP        256
+#define CW_UUID_CAP       37 /**< A UUID in text with its terminator; report ids are UUIDs. */
+#define CW_PENDING_CAP    64
 #define CW_TOKEN_CAP      1024
 #define CW_PROOF_CAP      4096
 #define CW_ENV_WATCHER    "CW_WATCHER" /**< Set by the game on the watcher: `<pid>,<platform handles>`. */
@@ -238,9 +240,26 @@ cw_platform_default_report_dir(char* out, size_t cap);
 bool
 cw_platform_mkdir_p(const char* path);
 
+/**
+ * Call `fn` with the name of every entry of a directory, in no
+ * particular order and without `.` and `..`.
+ *
+ * @return `false` when the directory cannot be read.
+ */
+bool
+cw_platform_list_dir(const char* path, void (*fn)(void* user, const char* name), void* user);
+
 /** Rename `from` over `to`, replacing an existing file. */
 bool
 cw_platform_replace(const char* from, const char* to);
+
+/**
+ * Take an exclusive lock on a file, held until the process exits.
+ *
+ * @return `false` when another process holds it.
+ */
+bool
+cw_platform_lock(const char* path);
 
 /* Implemented by the core. */
 
@@ -259,7 +278,11 @@ cw_write_envelope(
 	const cw_shared_t* shared, char* out_path, size_t cap
 );
 
-/* Report directory files: `token`, `proof`, and `pending/`. */
+/* Report directory files: `token`, `proof`, `lock`, and `pending/`. */
+
+/** Build `<report_dir>/<name>`. */
+bool
+cw_store_path(char* out, size_t cap, const char* name);
 
 /**
  * Write a file under the report directory atomically, creating the
@@ -328,25 +351,61 @@ typedef struct {
 bool
 cw_pending_parse(const char* name, cw_pending_t* out);
 
+/**
+ * List the envelopes in `pending/`, oldest first.
+ *
+ * @return The number written to `out`, at most `cap`.
+ */
+int
+cw_pending_list(cw_pending_t* out, int cap);
+
+/** Full path of a listed envelope. */
+void
+cw_pending_path(const cw_pending_t* p, char* out, size_t cap);
+
 /** Delete an envelope together with its attachments. */
 void
 cw_pending_remove(const cw_pending_t* p);
 
-/**
- * The game sent `auth refreshed`: exchange the proof it left, if any.
- */
-void
-cw_auth_refreshed(void);
+/* Watcher-side upload policy. */
 
 /**
- * Send one written envelope through the transport, after exchanging a
- * waiting proof so it carries the token.
+ * What the watcher knows about sending: whether the backlog of earlier
+ * runs has been drained, whether the waiting proof is worth a try, and
+ * which reports already failed this run and wait for the next launch.
+ */
+typedef struct {
+	bool auth_seen;            /**< The game refreshed the token or handed over a proof. */
+	bool proof_failed;         /**< The waiting proof could not be exchanged; not retried until a new one arrives. */
+	bool caught_up;            /**< The backlog was drained once this run. */
+	bool locked;               /**< This watcher won the drainer lock. */
+	uint64_t start_ms;
+	char failed[CW_PENDING_CAP][CW_UUID_CAP]; /**< Ids of reports whose upload failed this run. */
+	int failed_count;
+} cw_drain_t;
+
+void
+cw_drain_init(cw_drain_t* d);
+
+/**
+ * A report was just written; send it now.
  *
  * Delivered and rejected envelopes are deleted; failed ones stay in
- * `pending/`. Without a transport the file is left where it is and a
- * warning is logged.
+ * `pending/` for the catch-up drain of a later run.
  */
 void
-cw_upload_report(const char* path);
+cw_drain_report(cw_drain_t* d, const char* path);
+
+/** The game sent `auth refreshed`. */
+void
+cw_drain_auth(cw_drain_t* d);
+
+/** Periodic check for the catch-up timeout; call from the watcher's poll loop. */
+void
+cw_drain_tick(cw_drain_t* d, uint64_t now_ms);
+
+/** The game is gone: drain whatever is still waiting. */
+void
+cw_drain_finish(cw_drain_t* d);
 
 #endif /* CW_INTERNAL_H */

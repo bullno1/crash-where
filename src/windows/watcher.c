@@ -32,9 +32,12 @@ write_crash_report(const char* report_dir, char* path, size_t cap) {
  *
  * The exit status tells a fast-fail such as `0xC0000409` from a launcher
  * kill or a bare `_exit`.
+ *
+ * @param path  Receives the envelope path on success.
+ * @return `true` when the envelope was written.
  */
-static void
-write_killed_report(const char* report_dir) {
+static bool
+write_killed_report(const char* report_dir, char* path, size_t cap) {
 	static cw_crash_info_t info;
 	info = (cw_crash_info_t){
 		.kind = CW_REPORT_ABNORMAL_EXIT,
@@ -46,11 +49,11 @@ write_killed_report(const char* report_dir) {
 	if (GetExitCodeProcess(cw_win.handles.game, &code)) {
 		snprintf(info.message_raw, sizeof(info.message_raw), "game ended without cw_shutdown, exit code 0x%lx", code);
 	}
-	char path[CW_STR_CAP + 64];
-	if (cw_write_envelope(report_dir, &info, &cw_win.region->common, path, sizeof(path))) {
-		cw_log(CW_LOG_INFO, "report written to %s", path);
-		cw_upload_report(path);
+	if (!cw_write_envelope(report_dir, &info, &cw_win.region->common, path, cap)) {
+		return false;
 	}
+	cw_log(CW_LOG_INFO, "report written to %s", path);
+	return true;
 }
 
 /**
@@ -118,7 +121,7 @@ game_stopped(void) {
  * Sample the heartbeat once and act on what the detector says.
  */
 static void
-check_hang(cw_hang_t* hang, const char* report_dir) {
+check_hang(cw_hang_t* hang, cw_drain_t* drain, const char* report_dir) {
 	uint64_t now = cw_platform_now_ms();
 	uint64_t count = atomic_load_explicit(&cw_win.region->common.heartbeat, memory_order_relaxed);
 	if (count == hang->count && game_stopped()) {
@@ -131,7 +134,7 @@ check_hang(cw_hang_t* hang, const char* report_dir) {
 		cw_log(CW_LOG_WARN, "no heartbeat for %" PRIu64 " ms", silent_ms);
 		char path[CW_STR_CAP + 64];
 		if (write_hang_report(report_dir, silent_ms, path, sizeof(path))) {
-			cw_upload_report(path);
+			cw_drain_report(drain, path);
 		}
 		break;
 	}
@@ -156,6 +159,8 @@ cw_watch(const char* report_dir) {
 	bool shutdown = false;
 	int result = 0;
 	cw_hang_t hang = { 0 };
+	cw_drain_t drain;
+	cw_drain_init(&drain);
 	DWORD interval_ms = (DWORD)cw_hang_poll_ms(cw_ctx.cfg.hang_timeout_ms);
 
 	for (;;) {
@@ -164,7 +169,8 @@ cw_watch(const char* report_dir) {
 		};
 		DWORD which = WaitForMultipleObjects(4, objects, FALSE, crashed ? INFINITE : interval_ms);
 		if (!crashed) {
-			check_hang(&hang, report_dir);
+			check_hang(&hang, &drain, report_dir);
+			cw_drain_tick(&drain, cw_platform_now_ms());
 		}
 		if (which == WAIT_TIMEOUT) {
 			continue;
@@ -176,27 +182,29 @@ cw_watch(const char* report_dir) {
 			crashed = true;
 			SetEvent(cw_win.handles.ev_done);
 			if (written) {
-				cw_upload_report(path);
+				cw_drain_report(&drain, path);
 			}
 		} else if (which == WAIT_OBJECT_0 + 1) {
 			shutdown = true;
 			result = cw_win.region->shutdown_result;
 		} else if (which == WAIT_OBJECT_0 + 2) {
-			cw_auth_refreshed();
+			cw_drain_auth(&drain);
 		} else {
 			break;
 		}
 	}
 
-	if (crashed) {
-		return;
-	}
 	if (shutdown) {
 		cw_log(CW_LOG_INFO, "game exited cleanly with result %d", result);
-		return;
+	} else if (!crashed) {
+		cw_log(CW_LOG_WARN, "game ended without cw_shutdown");
+		char path[CW_STR_CAP + 64];
+		if (write_killed_report(report_dir, path, sizeof(path))) {
+			cw_drain_report(&drain, path);
+		}
 	}
-	cw_log(CW_LOG_WARN, "game ended without cw_shutdown");
-	write_killed_report(report_dir);
+	/* The game is gone, so the backlog may go out. */
+	cw_drain_finish(&drain);
 }
 
 /**

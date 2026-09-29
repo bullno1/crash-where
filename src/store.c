@@ -2,7 +2,7 @@
  * @file store.c
  * Files under the report directory: the cached token, the proof awaiting
  * exchange, and the pending store whose envelopes are described by
- * their names alone so none has to be parsed.
+ * their names alone so nothing is parsed to list them.
  *
  * Every file is written to a `.tmp` name and renamed into place, so a
  * reader in the other process never sees a partial file.
@@ -14,9 +14,8 @@
 
 #include "internal.h"
 
-/** Build `<report_dir>/<name>`. */
-static bool
-store_path(char* out, size_t cap, const char* name) {
+bool
+cw_store_path(char* out, size_t cap, const char* name) {
 	if (cw_ctx.report_dir[0] == '\0') {
 		return false;
 	}
@@ -28,7 +27,7 @@ bool
 cw_store_write(const char* name, const void* data, size_t len) {
 	char path[CW_STR_CAP + 64];
 	char tmp[sizeof(path) + 4];
-	if (!store_path(path, sizeof(path), name) || !cw_platform_mkdir_p(cw_ctx.report_dir)) {
+	if (!cw_store_path(path, sizeof(path), name) || !cw_platform_mkdir_p(cw_ctx.report_dir)) {
 		return false;
 	}
 	snprintf(tmp, sizeof(tmp), "%s.tmp", path);
@@ -50,7 +49,7 @@ cw_store_write(const char* name, const void* data, size_t len) {
 bool
 cw_store_read(const char* name, void* buf, size_t cap, size_t* len) {
 	char path[CW_STR_CAP + 64];
-	if (!store_path(path, sizeof(path), name)) {
+	if (!cw_store_path(path, sizeof(path), name)) {
 		return false;
 	}
 	FILE* f = fopen(path, "rb");
@@ -68,7 +67,7 @@ cw_store_read(const char* name, void* buf, size_t cap, size_t* len) {
 void
 cw_store_remove(const char* name) {
 	char path[CW_STR_CAP + 64];
-	if (store_path(path, sizeof(path), name)) {
+	if (cw_store_path(path, sizeof(path), name)) {
 		remove(path);
 	}
 }
@@ -174,6 +173,43 @@ cw_pending_parse(const char* name, cw_pending_t* out) {
 	*out = (cw_pending_t){ .ts = ts, .kind = kind };
 	memcpy(out->name, name, len + 1);
 	return true;
+}
+
+typedef struct {
+	cw_pending_t* out;
+	int cap;
+	int count;
+} list_ctx_t;
+
+static void
+collect(void* user, const char* name) {
+	list_ctx_t* ctx = user;
+	cw_pending_t p;
+	if (ctx->count < ctx->cap && cw_pending_parse(name, &p)) {
+		ctx->out[ctx->count++] = p;
+	}
+}
+
+static int
+pending_cmp(const void* a, const void* b) {
+	return strcmp(((const cw_pending_t*)a)->name, ((const cw_pending_t*)b)->name);
+}
+
+int
+cw_pending_list(cw_pending_t* out, int cap) {
+	char dir[CW_STR_CAP + 16];
+	if (!cw_store_path(dir, sizeof(dir), "pending")) {
+		return 0;
+	}
+	list_ctx_t ctx = { .out = out, .cap = cap };
+	cw_platform_list_dir(dir, collect, &ctx);
+	qsort(out, (size_t)ctx.count, sizeof(*out), pending_cmp);
+	return ctx.count;
+}
+
+void
+cw_pending_path(const cw_pending_t* p, char* out, size_t cap) {
+	snprintf(out, cap, "%s/pending/%s", cw_ctx.report_dir, p->name);
 }
 
 void

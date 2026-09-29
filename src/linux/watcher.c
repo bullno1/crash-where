@@ -41,9 +41,12 @@ write_crash_report(pid_t game, const char* report_dir, char* path, size_t cap) {
 
 /**
  * Report a game that vanished without a crash or a shutdown.
+ *
+ * @param path  Receives the envelope path on success.
+ * @return `true` when the envelope was written.
  */
-static void
-write_killed_report(const char* report_dir) {
+static bool
+write_killed_report(const char* report_dir, char* path, size_t cap) {
 	static cw_crash_info_t info;
 	info = (cw_crash_info_t){
 		.kind = CW_REPORT_ABNORMAL_EXIT,
@@ -51,11 +54,11 @@ write_killed_report(const char* report_dir) {
 		.message_raw = "game ended without cw_shutdown",
 		.main_module = -1,
 	};
-	char path[CW_STR_CAP + 64];
-	if (cw_write_envelope(report_dir, &info, &cw_linux.region->common, path, sizeof(path))) {
-		cw_log(CW_LOG_INFO, "report written to %s", path);
-		cw_upload_report(path);
+	if (!cw_write_envelope(report_dir, &info, &cw_linux.region->common, path, cap)) {
+		return false;
 	}
+	cw_log(CW_LOG_INFO, "report written to %s", path);
+	return true;
 }
 
 /**
@@ -224,7 +227,7 @@ game_stopped(pid_t game) {
  * Sample the heartbeat once and act on what the detector says.
  */
 static void
-check_hang(pid_t game, cw_hang_t* hang, const char* report_dir) {
+check_hang(pid_t game, cw_hang_t* hang, cw_drain_t* drain, const char* report_dir) {
 	uint64_t now = cw_platform_now_ms();
 	uint64_t count = atomic_load_explicit(&cw_linux.region->common.heartbeat, memory_order_relaxed);
 	if (count == hang->count && game_stopped(game)) {
@@ -237,7 +240,7 @@ check_hang(pid_t game, cw_hang_t* hang, const char* report_dir) {
 		cw_log(CW_LOG_WARN, "no heartbeat for %" PRIu64 " ms", silent_ms);
 		char path[CW_STR_CAP + 64];
 		if (write_hang_report(game, report_dir, silent_ms, path, sizeof(path))) {
-			cw_upload_report(path);
+			cw_drain_report(drain, path);
 		}
 		break;
 	}
@@ -261,6 +264,8 @@ cw_watch(pid_t game, int sock, const char* report_dir) {
 	int result = 0;
 	bool game_gone = false;
 	cw_hang_t hang = { 0 };
+	cw_drain_t drain;
+	cw_drain_init(&drain);
 	int interval_ms = cw_hang_poll_ms(cw_ctx.cfg.hang_timeout_ms);
 
 	while (!game_gone) {
@@ -276,7 +281,8 @@ cw_watch(pid_t game, int sock, const char* report_dir) {
 			break;
 		}
 		if (!crashed) {
-			check_hang(game, &hang, report_dir);
+			check_hang(game, &hang, &drain, report_dir);
+			cw_drain_tick(&drain, cw_platform_now_ms());
 		}
 		if (n == 0) {
 			continue;
@@ -292,7 +298,7 @@ cw_watch(pid_t game, int sock, const char* report_dir) {
 					crashed = true;
 					cw_send_msg(sock, CW_MSG_DONE, 0);
 					if (written) {
-						cw_upload_report(path);
+						cw_drain_report(&drain, path);
 					}
 					break;
 				}
@@ -301,7 +307,7 @@ cw_watch(pid_t game, int sock, const char* report_dir) {
 					result = msg.value;
 					break;
 				case CW_MSG_AUTH:
-					cw_auth_refreshed();
+					cw_drain_auth(&drain);
 					break;
 				default:
 					break;
@@ -326,17 +332,17 @@ cw_watch(pid_t game, int sock, const char* report_dir) {
 		close(pidfd);
 	}
 
-	if (crashed) {
-		return;
-	}
-
 	if (shutdown) {
 		cw_log(CW_LOG_INFO, "game exited cleanly with result %d", result);
-		return;
+	} else if (!crashed) {
+		cw_log(CW_LOG_WARN, "game ended without cw_shutdown");
+		char path[CW_STR_CAP + 64];
+		if (write_killed_report(report_dir, path, sizeof(path))) {
+			cw_drain_report(&drain, path);
+		}
 	}
-
-	cw_log(CW_LOG_WARN, "game ended without cw_shutdown");
-	write_killed_report(report_dir);
+	/* The game is gone, so the backlog may go out. */
+	cw_drain_finish(&drain);
 }
 
 /**

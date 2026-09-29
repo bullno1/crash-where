@@ -127,7 +127,7 @@ fingerprint(const cw_crash_info_t* info) {
 }
 
 static void
-make_uuid(char out[37]) {
+make_uuid(char out[CW_UUID_CAP]) {
 	unsigned char b[16] = { 0 };
 	if (!cw_platform_random(b, sizeof(b))) {
 		uint64_t t = (uint64_t)time(NULL);
@@ -136,7 +136,7 @@ make_uuid(char out[37]) {
 	b[6] = (unsigned char)((b[6] & 0x0f) | 0x40);
 	b[8] = (unsigned char)((b[8] & 0x3f) | 0x80);
 	snprintf(
-		out, 37,
+		out, CW_UUID_CAP,
 		"%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
 		b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
 		b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
@@ -249,7 +249,7 @@ cw_write_envelope(
 	const char* exe_build_id = info->main_module >= 0 ? info->modules[info->main_module].build_id : "";
 	uint64_t fp = fingerprint(info);
 	long long now = (long long)time(NULL);
-	char uuid[37];
+	char uuid[CW_UUID_CAP];
 	make_uuid(uuid);
 	snprintf(
 		out_path, cap, "%s/pending/%lld_%c_%016" PRIx64 "_%s.json",

@@ -8,11 +8,16 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "internal.h"
 
 /** Largest reply body the protocol ever needs to read. */
 #define CW_REPLY_CAP 4096
+/** How long the catch-up drain waits for the game to authenticate. */
+#define CW_CATCHUP_TIMEOUT_MS 60000u
+/** Age after which a pending report is given up on. */
+#define CW_REPORT_MAX_AGE_S (14 * 24 * 3600)
 
 /**
  * Read a whole file into a NUL-terminated heap buffer.
@@ -44,14 +49,14 @@ read_file(const char* path, size_t* len) {
  * Take the report id from an envelope name, `<ts>_<kind>_<fp>_<id>.json`.
  */
 static bool
-name_id(const char* name, char out[37]) {
+name_id(const char* name, char out[CW_UUID_CAP]) {
 	static const char ext[] = ".json";
 	const char* end = strrchr(name, '.');
-	if (end == NULL || strcmp(end, ext) != 0 || end - name < 37 || end[-37] != '_') {
+	if (end == NULL || strcmp(end, ext) != 0 || end - name < CW_UUID_CAP || end[-CW_UUID_CAP] != '_') {
 		return false;
 	}
-	memcpy(out, end - 36, 36);
-	out[36] = '\0';
+	memcpy(out, end - (CW_UUID_CAP - 1), CW_UUID_CAP - 1);
+	out[CW_UUID_CAP - 1] = '\0';
 	return true;
 }
 
@@ -139,19 +144,16 @@ send_request(
 
 /* Proof exchange {{{ */
 
-/** The waiting proof could not be exchanged; not retried until a new one arrives. */
-static bool proof_failed;
-
 /**
  * Post the auth request body the game left in the report directory and
- * cache the token it buys. A transient failure keeps the proof for the next
- * `auth refreshed` or the next launch, not for the next upload.
+ * cache the token it buys. A transient failure keeps the proof for the
+ * next `auth refreshed` or the next launch, not for the next drain.
  */
 static void
-exchange_proof(void) {
+exchange_proof(cw_drain_t* d) {
 	static char body[CW_PROOF_CAP * 4 / 3 + 128];
 	size_t body_len;
-	if (proof_failed || cw_ctx.cfg.transport == NULL || !cw_store_read("proof", body, sizeof(body), &body_len)) {
+	if (d->proof_failed || cw_ctx.cfg.transport == NULL || !cw_store_read("proof", body, sizeof(body), &body_len)) {
 		return;
 	}
 
@@ -180,7 +182,7 @@ exchange_proof(void) {
 		break;
 	case CW_RETRY:
 		cw_log(CW_LOG_WARN, "proof exchange failed, kept for a later try");
-		proof_failed = true;
+		d->proof_failed = true;
 		break;
 	case CW_DROP:
 		cw_log(CW_LOG_WARN, "server refused the proof (%d), discarded", http);
@@ -189,39 +191,43 @@ exchange_proof(void) {
 	}
 }
 
-void
-cw_auth_refreshed(void) {
-	cw_log(CW_LOG_DEBUG, "auth refreshed");
-	proof_failed = false;
-	exchange_proof();
-}
-
 /* }}} */
 
-/**
- * A token the server refuses costs one bounce: the report is sent
- * again without it and lands unauthenticated.
- */
-void
-cw_upload_report(const char* path) {
-	if (cw_ctx.cfg.transport == NULL) {
-		cw_log(CW_LOG_WARN, "no transport configured, report kept at %s", path);
-		return;
+static bool
+failed_this_run(const cw_drain_t* d, const char* id) {
+	for (int i = 0; i < d->failed_count; ++i) {
+		if (strcmp(d->failed[i], id) == 0) {
+			return true;
+		}
 	}
-	exchange_proof();
+	return false;
+}
 
-	const char* name = strrchr(path, '/');
-	cw_pending_t p;
-	char id[37];
-	if (name == NULL || !cw_pending_parse(name + 1, &p) || !name_id(p.name, id)) {
-		cw_log(CW_LOG_ERROR, "unexpected report name %s", path);
-		return;
+/**
+ * Send one envelope with the cached token, if any.
+ *
+ * A token the server refuses costs one bounce: the report is sent
+ * again without it and lands unauthenticated. Delivered and rejected
+ * envelopes are deleted; failed ones stay in `pending/` and are not
+ * tried again before the next launch.
+ */
+static cw_status_t
+upload_report(cw_drain_t* d, const cw_pending_t* p) {
+	char id[CW_UUID_CAP];
+	if (!name_id(p->name, id)) {
+		cw_log(CW_LOG_ERROR, "unexpected report name %s", p->name);
+		return CW_DROP;
 	}
+	if (failed_this_run(d, id)) {
+		return CW_RETRY;
+	}
+	char path[CW_STR_CAP + 128];
+	cw_pending_path(p, path, sizeof(path));
 	size_t len = 0;
 	char* json = read_file(path, &len);
 	if (json == NULL) {
 		cw_log(CW_LOG_ERROR, "cannot read %s back for upload", path);
-		return;
+		return CW_RETRY;
 	}
 
 	char token[CW_TOKEN_CAP];
@@ -254,14 +260,110 @@ cw_upload_report(const char* path) {
 	switch (status) {
 	case CW_OK:
 		cw_log(CW_LOG_INFO, "report %s uploaded", id);
-		cw_pending_remove(&p);
+		cw_pending_remove(p);
 		break;
 	case CW_RETRY:
 		cw_log(CW_LOG_WARN, "upload of report %s failed, kept at %s", id, path);
+		if (d->failed_count < CW_PENDING_CAP) {
+			memcpy(d->failed[d->failed_count++], id, sizeof(id));
+		}
 		break;
 	case CW_DROP:
 		cw_log(CW_LOG_WARN, "report %s rejected, deleted", id);
-		cw_pending_remove(&p);
+		cw_pending_remove(p);
 		break;
 	}
+	return status;
 }
+
+/* Drain {{{ */
+
+void
+cw_drain_init(cw_drain_t* d) {
+	*d = (cw_drain_t){ .start_ms = cw_platform_now_ms() };
+	if (cw_ctx.cfg.transport == NULL) {
+		cw_log(CW_LOG_WARN, "no transport configured, reports stay in %s", cw_ctx.report_dir);
+	}
+}
+
+/**
+ * Send every pending report, oldest first, after exchanging a waiting
+ * proof so they carry the token. Whoever holds `lock` drains; another
+ * watcher skips.
+ */
+static void
+drain_pending(cw_drain_t* d) {
+	if (cw_ctx.cfg.transport == NULL) {
+		return;
+	}
+	if (!d->locked) {
+		char lock[CW_STR_CAP + 16];
+		d->locked = cw_store_path(lock, sizeof(lock), "lock") && cw_platform_lock(lock);
+		if (!d->locked) {
+			cw_log(CW_LOG_INFO, "another watcher is draining, skipping");
+			return;
+		}
+	}
+	exchange_proof(d);
+	cw_pending_t list[CW_PENDING_CAP];
+	int n = cw_pending_list(list, CW_PENDING_CAP);
+	long long now = (long long)time(NULL);
+	for (int i = 0; i < n; ++i) {
+		if (now - list[i].ts > CW_REPORT_MAX_AGE_S) {
+			cw_log(CW_LOG_INFO, "report %s is too old, deleted", list[i].name);
+			cw_pending_remove(&list[i]);
+		} else {
+			upload_report(d, &list[i]);
+		}
+	}
+}
+
+static void
+catch_up(cw_drain_t* d) {
+	d->caught_up = true;
+	drain_pending(d);
+}
+
+void
+cw_drain_report(cw_drain_t* d, const char* path) {
+	const char* name = strrchr(path, '/');
+	cw_pending_t p;
+	if (name == NULL || !cw_pending_parse(name + 1, &p)) {
+		cw_log(CW_LOG_ERROR, "unexpected report name %s", path);
+		return;
+	}
+	if (cw_ctx.cfg.transport == NULL) {
+		return;
+	}
+	exchange_proof(d);
+	upload_report(d, &p);
+}
+
+void
+cw_drain_auth(cw_drain_t* d) {
+	cw_log(CW_LOG_DEBUG, "auth refreshed");
+	d->auth_seen = true;
+	d->proof_failed = false;
+	if (!d->caught_up) {
+		catch_up(d);
+	} else {
+		exchange_proof(d);
+	}
+}
+
+void
+cw_drain_tick(cw_drain_t* d, uint64_t now_ms) {
+	if (!d->caught_up && now_ms - d->start_ms >= CW_CATCHUP_TIMEOUT_MS) {
+		cw_log(CW_LOG_DEBUG, "no authentication after %u ms, draining without it", CW_CATCHUP_TIMEOUT_MS);
+		catch_up(d);
+	}
+}
+
+void
+cw_drain_finish(cw_drain_t* d) {
+	if (!d->caught_up) {
+		catch_up(d);
+	}
+}
+
+/* }}} */

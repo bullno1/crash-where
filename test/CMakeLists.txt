@@ -3,6 +3,7 @@ add_executable(cw_test
 	scenario.c
 	auth.c
 	crash.c
+	drain.c
 	hang.c
 	http.c
 	http_server.c

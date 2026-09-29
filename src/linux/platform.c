@@ -2,10 +2,13 @@
  * @file linux/platform.c
  * Platform services shared by the game and the watcher.
  */
+#include <dirent.h>
 #include <errno.h>
+#include <fcntl.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/file.h>
 #include <sys/random.h>
 #include <sys/stat.h>
 #include <time.h>
@@ -93,4 +96,33 @@ cw_platform_tid(void) {
 bool
 cw_platform_replace(const char* from, const char* to) {
 	return rename(from, to) == 0;
+}
+
+bool
+cw_platform_list_dir(const char* path, void (*fn)(void* user, const char* name), void* user) {
+	DIR* dir = opendir(path);
+	if (dir == NULL) {
+		return false;
+	}
+	for (struct dirent* e = readdir(dir); e != NULL; e = readdir(dir)) {
+		if (strcmp(e->d_name, ".") != 0 && strcmp(e->d_name, "..") != 0) {
+			fn(user, e->d_name);
+		}
+	}
+	closedir(dir);
+	return true;
+}
+
+bool
+cw_platform_lock(const char* path) {
+	int fd = open(path, O_RDWR | O_CREAT | O_CLOEXEC, 0600);
+	if (fd < 0) {
+		return false;
+	}
+	if (flock(fd, LOCK_EX | LOCK_NB) != 0) {
+		close(fd);
+		return false;
+	}
+	/* Held until exit; the descriptor is deliberately leaked. */
+	return true;
 }
