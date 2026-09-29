@@ -88,6 +88,7 @@ typedef struct {
 	char endpoint[CW_STR_CAP];
 	char report_dir[CW_STR_CAP]; /**< Resolved report directory; empty until cw_init() accepted the config. */
 	cw_transport_t transport;  /**< Copy of the caller's transport; `cfg.transport` points here or is `NULL`. */
+	cw_consent_dialog_t dialog; /**< Copy of the caller's prompt; `cfg.consent_dialog` points here or is `NULL`. */
 	cw_shared_t* shared;       /**< Mapped region, or `NULL` when inactive. */
 	bool initialized;          /**< cw_init() has run, whatever the outcome. */
 	bool active;               /**< Capture is armed in this process. */
@@ -414,6 +415,7 @@ typedef struct {
 	bool auth_seen;            /**< The game refreshed the token or handed over a proof. */
 	bool proof_failed;         /**< The waiting proof could not be exchanged; not retried until a new one arrives. */
 	bool caught_up;            /**< The backlog was drained once this run. */
+	bool wrote_report;         /**< This run produced a report, so a native prompt is due. */
 	bool locked;               /**< This watcher won the drainer lock. */
 	uint64_t start_ms;
 	char failed[CW_PENDING_CAP][CW_UUID_CAP]; /**< Ids of reports whose upload failed this run. */
@@ -448,7 +450,7 @@ cw_drain_consent(cw_drain_t* d, cw_consent_t choice);
 void
 cw_drain_tick(cw_drain_t* d, uint64_t now_ms);
 
-/** The game is gone: drain whatever the decision allows. */
+/** The game is gone: prompt if configured and due, then drain whatever the decision allows. */
 void
 cw_drain_finish(cw_drain_t* d);
 

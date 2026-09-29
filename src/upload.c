@@ -381,6 +381,7 @@ catch_up(cw_drain_t* d) {
 
 void
 cw_drain_report(cw_drain_t* d, const char* path) {
+	d->wrote_report = true;
 	const char* name = strrchr(path, '/');
 	cw_pending_t p;
 	if (name == NULL || !cw_pending_parse(name + 1, &p)) {
@@ -432,6 +433,17 @@ cw_drain_tick(cw_drain_t* d, uint64_t now_ms) {
 
 void
 cw_drain_finish(cw_drain_t* d) {
+	/* Only a run with a report of its own prompts; an old backlog is the in-game screen's. */
+	const cw_consent_dialog_t* dialog = cw_ctx.cfg.consent_dialog;
+	if (d->consent == CW_CONSENT_ASK && d->wrote_report && dialog != NULL && dialog->show != NULL) {
+		cw_consent_summary_t summary;
+		cw_pending_summary(&summary);
+		if (summary.count > 0) {
+			cw_consent_t choice = dialog->show(dialog->user, &summary);
+			cw_consent_store(choice);
+			cw_drain_consent(d, choice);
+		}
+	}
 	if (!d->caught_up) {
 		catch_up(d);
 	}

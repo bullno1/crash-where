@@ -91,6 +91,10 @@ cw_init(const cw_config_t* cfg) {
 		cw_ctx.transport = *cfg->transport;
 		cw_ctx.cfg.transport = &cw_ctx.transport;
 	}
+	if (cfg->consent_dialog != NULL) {
+		cw_ctx.dialog = *cfg->consent_dialog;
+		cw_ctx.cfg.consent_dialog = &cw_ctx.dialog;
+	}
 	if (cw_ctx.cfg.hang_timeout_ms == 0) {
 		cw_ctx.cfg.hang_timeout_ms = CW_HANG_DEFAULT_MS;
 	}

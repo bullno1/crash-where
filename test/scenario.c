@@ -130,6 +130,38 @@ test_send(void* user, const cw_request_t* req, cw_response_t* resp) {
 	return CW_OK;
 }
 
+static cw_consent_t
+consent_from_name(const char* name) {
+	if (strcmp(name, "always") == 0) {
+		return CW_CONSENT_ALWAYS;
+	}
+	if (strcmp(name, "never") == 0) {
+		return CW_CONSENT_NEVER;
+	}
+	if (strcmp(name, "once") == 0) {
+		return CW_CONSENT_ONCE;
+	}
+	return CW_CONSENT_ASK;
+}
+
+/**
+ * Native prompt, run in the watcher: log what it was shown and answer
+ * what the runner asked for.
+ */
+static cw_consent_t
+test_dialog_show(void* user, const cw_consent_summary_t* summary) {
+	static const char* const kind_names[] = { "crash", "hang", "abnormal_exit" };
+	yyjson_mut_doc* doc = yyjson_mut_doc_new(NULL);
+	yyjson_mut_val* root = yyjson_mut_obj(doc);
+	yyjson_mut_doc_set_root(doc, root);
+	yyjson_mut_obj_add_str(doc, root, "call", "dialog");
+	yyjson_mut_obj_add_int(doc, root, "count", summary->count);
+	yyjson_mut_obj_add_str(doc, root, "kind", kind_names[summary->newest_kind]);
+	yyjson_mut_obj_add_sint(doc, root, "time", summary->newest_time);
+	test_write_event(doc);
+	return consent_from_name(user);
+}
+
 int
 test_fixture_main(const char* name) {
 	/* A fresh process, and the watcher after it, so logging starts here. */
@@ -148,8 +180,10 @@ test_fixture_main(const char* name) {
 		return 2;
 	}
 
-	/* Copied by cw_init, so it may live on this stack. */
+	/* Copied by cw_init, so these may live on this stack. */
 	cw_transport_t transport = { .send = test_send };
+	const char* dialog_answer = getenv("CW_TEST_DIALOG");
+	cw_consent_dialog_t dialog = { .show = test_dialog_show, .user = (void*)dialog_answer };
 	const char* hang_ms = getenv("CW_TEST_HANG_MS");
 	cw_config_t cfg = {
 		.app = "cw-test",
@@ -159,6 +193,7 @@ test_fixture_main(const char* name) {
 		.report_dir = report_dir,
 		.hang_timeout_ms = hang_ms != NULL ? (uint32_t)strtoul(hang_ms, NULL, 10) : 0,
 		.transport = &transport,
+		.consent_dialog = dialog_answer != NULL && dialog_answer[0] != '\0' ? &dialog : NULL,
 		.log = test_cw_log,
 	};
 	cw_init(&cfg);
@@ -168,12 +203,7 @@ test_fixture_main(const char* name) {
 		consent = "always";
 	}
 	if (strcmp(consent, "skip") != 0) {
-		cw_consent_set(
-			strcmp(consent, "always") == 0 ? CW_CONSENT_ALWAYS
-			: strcmp(consent, "never") == 0 ? CW_CONSENT_NEVER
-			: strcmp(consent, "once") == 0 ? CW_CONSENT_ONCE
-			: CW_CONSENT_ASK
-		);
+		cw_consent_set(consent_from_name(consent));
 	}
 
 	const char* auth = getenv("CW_TEST_AUTH");
@@ -292,6 +322,7 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
 	char e_hang[64];
 	char e_auth[64];
 	char e_consent[64];
+	char e_dialog[64];
 	snprintf(e_scenario, sizeof(e_scenario), "CW_TEST_SCENARIO=%s", scenario->name);
 	snprintf(e_out, sizeof(e_out), "CW_TEST_OUT=%s", run->dir);
 	snprintf(e_report, sizeof(e_report), "CW_TEST_REPORT_DIR=%s", report);
@@ -300,8 +331,9 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
 	snprintf(e_hang, sizeof(e_hang), "CW_TEST_HANG_MS=%" PRIu32, o.hang_timeout_ms);
 	snprintf(e_auth, sizeof(e_auth), "CW_TEST_AUTH=%s", o.auth != NULL ? o.auth : "");
 	snprintf(e_consent, sizeof(e_consent), "CW_TEST_CONSENT=%s", o.consent != NULL ? o.consent : "");
+	snprintf(e_dialog, sizeof(e_dialog), "CW_TEST_DIALOG=%s", o.dialog != NULL ? o.dialog : "");
 	const char* env[] = {
-		e_scenario, e_out, e_report, e_status, e_want, e_hang, e_auth, e_consent,
+		e_scenario, e_out, e_report, e_status, e_want, e_hang, e_auth, e_consent, e_dialog,
 		/* A sanitizer build must let the crash reach the library's handlers. */
 		"ASAN_OPTIONS=handle_segv=0:handle_abort=0:handle_sigbus=0:handle_sigfpe=0:handle_sigill=0",
 		o.disable ? "CW_DISABLE=1" : NULL,

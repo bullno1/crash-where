@@ -9,8 +9,8 @@
  * Only the game process returns from @ref cw_init. The watcher will call
  * `exit` and never execute the rest of the program.
  *
- * Everything in this header except the cw_transport_t callback runs in
- * the game process.
+ * Everything in this header except the cw_transport_t and
+ * cw_consent_dialog_t callbacks runs in the game process.
  *
  * Two environment variables affect behaviour:
  * - `CW_WATCHER` is set by the game on the watcher to carry inherited
@@ -81,6 +81,31 @@ typedef struct {
 	cw_report_kind_t newest_kind; /**< Kind of the newest of them. Meaningless when `count` is 0. */
 	int64_t newest_time;         /**< When the newest was written, as Unix seconds. */
 } cw_consent_summary_t;
+
+/**
+ * Native consent prompt shown by the watcher.
+ *
+ * The callback runs in the watcher process, never in the game process,
+ * and only after the game process is gone: after a crash, or at exit
+ * for a hang or an abnormal end. It cannot rely on anything the game
+ * initialized, and the `user` pointer must be valid in that process.
+ * A game without a native prompt asks in game on the next launch
+ * instead, using cw_consent_pending().
+ */
+typedef struct {
+	/**
+	 * Ask the player what to do with the waiting reports.
+	 *
+	 * @param user     The `user` member of this struct.
+	 * @param summary  The reports awaiting a decision.
+	 * @return The player's choice. ::CW_CONSENT_ASK means the prompt was
+	 *         not shown or was dismissed; the reports then wait for the
+	 *         in-game prompt on a later launch.
+	 */
+	cw_consent_t (*show)(void* user, const cw_consent_summary_t* summary);
+
+	void* user; /**< Passed unchanged as the first argument of the callback. */
+} cw_consent_dialog_t;
 
 /**
  * One HTTP request as handed to the transport.
@@ -173,6 +198,7 @@ typedef struct {
 	uint32_t hang_timeout_ms;
 
 	const cw_transport_t* transport; /**< HTTP transport, or `NULL` to keep reports on disk unsent. */
+	const cw_consent_dialog_t* consent_dialog; /**< Native consent prompt, or `NULL` to ask in game only. */
 
 	/**
 	 * Diagnostic log sink.

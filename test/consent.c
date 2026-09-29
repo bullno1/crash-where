@@ -224,4 +224,48 @@ BTEST(consent, always_persists) {
 	BTEST_EXPECT(!test_run_has(run, "consent"));
 }
 
+BTEST(consent, dialog_once) {
+	const test_run_t* run = RUN_SCENARIO_WITH(SCENARIO_REF(consent_crash), .consent = "skip", .dialog = "once");
+	BTEST_ASSERT(run != NULL);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 2);
+	yyjson_doc* dlg = run->events[0];
+	BTEST_EXPECT(strcmp(test_json_str(dlg, "/call"), "dialog") == 0);
+	BTEST_EXPECT_EQUAL("%d", (int)yyjson_get_int(test_json_get(dlg, "/count")), 1);
+	BTEST_EXPECT(strcmp(test_json_str(dlg, "/kind"), "crash") == 0);
+	BTEST_EXPECT(test_event_is(run->events[1], "report", NULL));
+	BTEST_EXPECT_EQUAL("%d", test_run_pending(run, ".json"), 0);
+	BTEST_EXPECT(!test_run_has(run, "consent"));
+}
+
+BTEST(consent, dialog_never) {
+	const test_run_t* run = RUN_SCENARIO_WITH(SCENARIO_REF(consent_crash), .consent = "skip", .dialog = "never");
+	BTEST_ASSERT(run != NULL);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	BTEST_EXPECT(strcmp(test_json_str(run->events[0], "/call"), "dialog") == 0);
+	BTEST_EXPECT_EQUAL("%d", test_run_pending(run, ".json"), 0);
+	char word[16];
+	store_word(run, "consent", word);
+	BTEST_EXPECT_EX(strcmp(word, "never") == 0, "consent file holds '%s'", word);
+}
+
+BTEST(consent, dialog_dismissed) {
+	const test_run_t* run = RUN_SCENARIO_WITH(SCENARIO_REF(consent_crash), .consent = "skip", .dialog = "ask");
+	BTEST_ASSERT(run != NULL);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	BTEST_EXPECT(strcmp(test_json_str(run->events[0], "/call"), "dialog") == 0);
+	BTEST_EXPECT_EQUAL("%d", test_run_pending(run, ".json"), 1);
+	BTEST_EXPECT_EQUAL("%d", test_run_pending(run, ".ok"), 0);
+}
+
+/** A run without a report of its own leaves the backlog to the in-game prompt. */
+BTEST(consent, dialog_only_after_own_report) {
+	const test_run_t* run = RUN_SCENARIO_WITH(SCENARIO_REF(consent_crash), .consent = "skip");
+	BTEST_ASSERT(run != NULL);
+
+	run = RUN_SCENARIO_WITH(SCENARIO_REF(consent_exit), .consent = "skip", .dialog = "always", .keep = true);
+	BTEST_ASSERT(run != NULL);
+	BTEST_EXPECT_EQUAL("%d", run->num_events, 0);
+	BTEST_EXPECT_EQUAL("%d", test_run_pending(run, ".json"), 1);
+}
+
 /* }}} */

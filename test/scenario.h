@@ -49,7 +49,7 @@ AUTOLIST_DECLARE(test_scenarios)
  * Options for one run. A zero-initialized value means the upload
  * succeeds, attachments are declined, the library is enabled, the
  * report directory starts empty, the child consents to every upload,
- * and no authentication happens.
+ * no authentication happens, and no native prompt is configured.
  */
 typedef struct {
 	const char* status;    /**< HTTP status the test transport answers: "ok" (200), "retry" (503), "drop" (400), or "unauthorized" (401 to a request carrying a token). `NULL` means "ok". */
@@ -59,6 +59,7 @@ typedef struct {
 	bool keep;             /**< Keep the report directory of this test's previous run instead of starting empty. */
 	const char* auth;      /**< "proof" hands a proof to the watcher, "token" caches a token, "expired" caches one with a past expiry; `NULL` does neither. The child records the call's result in the `auth` state slot. */
 	const char* consent;   /**< Decision the child records after init: "always" (`NULL`), "never", "once", "ask", or "skip" to leave the stored one alone. */
+	const char* dialog;    /**< Answer of the native prompt: "always", "never", "once", or "ask"; `NULL` configures none. */
 } test_run_opts_t;
 
 #define TEST_MAX_EVENTS 8
@@ -69,8 +70,9 @@ typedef struct {
  * Every transport call is one event, in call order:
  * `{"call":"request","method":...,"url":...,"content_type":...,
  * "token":...,"body_len":...,"envelope":{...}}`, where `envelope` is
- * present when the body is JSON. A scenario may add events of its own
- * with test_write_event().
+ * present when the body is JSON. The native prompt records
+ * `{"call":"dialog","count":...,"kind":...,"time":...}` and a scenario
+ * may add events of its own with test_write_event().
  */
 typedef struct {
 	char dir[256];        /**< Directory holding the report store and the transport log. */
