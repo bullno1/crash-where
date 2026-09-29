@@ -1,5 +1,5 @@
 add_executable(crashme crashme.c)
-target_link_libraries(crashme PRIVATE cw cw_http)
+target_link_libraries(crashme PRIVATE cw cw_http cw_host)
 if(MSVC)
 	target_compile_options(crashme PRIVATE /W4)
 else()

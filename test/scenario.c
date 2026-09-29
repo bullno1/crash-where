@@ -11,6 +11,7 @@
 
 #include <blog.h>
 #include <cw.h>
+#include <cw_host.h>
 #include "scenario.h"
 
 AUTOLIST_IMPL(test_scenarios)
@@ -195,6 +196,8 @@ test_fixture_main(const char* name) {
 	cw_consent_dialog_t dialog = { .show = test_dialog_show, .user = (void*)dialog_answer };
 	cw_collector_t at_init = { .collect = test_collect, .user = "collected_at_init" };
 	cw_collector_t at_report = { .collect = test_collect, .user = "collected_at_report" };
+	const char* host = getenv("CW_TEST_HOST");
+	bool use_host = host != NULL && strcmp(host, "1") == 0;
 	const char* hang_ms = getenv("CW_TEST_HANG_MS");
 	cw_config_t cfg = {
 		.app = "cw-test",
@@ -205,8 +208,8 @@ test_fixture_main(const char* name) {
 		.hang_timeout_ms = hang_ms != NULL ? (uint32_t)strtoul(hang_ms, NULL, 10) : 0,
 		.transport = &transport,
 		.consent_dialog = dialog_answer != NULL && dialog_answer[0] != '\0' ? &dialog : NULL,
-		.collect_at_init = &at_init,
-		.collect_at_report = &at_report,
+		.collect_at_init = use_host ? &cw_collector_host : &at_init,
+		.collect_at_report = use_host ? &cw_collector_host : &at_report,
 		.log = test_cw_log,
 	};
 	cw_init(&cfg);
@@ -336,6 +339,7 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
 	char e_auth[64];
 	char e_consent[64];
 	char e_dialog[64];
+	char e_host[32];
 	snprintf(e_scenario, sizeof(e_scenario), "CW_TEST_SCENARIO=%s", scenario->name);
 	snprintf(e_out, sizeof(e_out), "CW_TEST_OUT=%s", run->dir);
 	snprintf(e_report, sizeof(e_report), "CW_TEST_REPORT_DIR=%s", report);
@@ -345,8 +349,9 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
 	snprintf(e_auth, sizeof(e_auth), "CW_TEST_AUTH=%s", o.auth != NULL ? o.auth : "");
 	snprintf(e_consent, sizeof(e_consent), "CW_TEST_CONSENT=%s", o.consent != NULL ? o.consent : "");
 	snprintf(e_dialog, sizeof(e_dialog), "CW_TEST_DIALOG=%s", o.dialog != NULL ? o.dialog : "");
+	snprintf(e_host, sizeof(e_host), "CW_TEST_HOST=%d", o.host ? 1 : 0);
 	const char* env[] = {
-		e_scenario, e_out, e_report, e_status, e_want, e_hang, e_auth, e_consent, e_dialog,
+		e_scenario, e_out, e_report, e_status, e_want, e_hang, e_auth, e_consent, e_dialog, e_host,
 		/* A sanitizer build must let the crash reach the library's handlers. */
 		"ASAN_OPTIONS=handle_segv=0:handle_abort=0:handle_sigbus=0:handle_sigfpe=0:handle_sigill=0",
 		o.disable ? "CW_DISABLE=1" : NULL,

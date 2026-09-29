@@ -70,6 +70,24 @@ else()
 	target_compile_options(cw_http PRIVATE -Wall -Wextra)
 endif()
 
+add_library(cw_host STATIC host/host.c)
+if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
+	target_sources(cw_host PRIVATE host/linux.c)
+elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
+	target_sources(cw_host PRIVATE host/windows.c)
+	# The registry reads at init; dxgi is loaded at run time, only in the watcher.
+	target_link_libraries(cw_host PRIVATE advapi32)
+endif()
+target_link_libraries(cw_host PUBLIC cw)
+target_include_directories(cw_host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+if(MSVC)
+	target_compile_definitions(cw_host PRIVATE _CRT_SECURE_NO_WARNINGS)
+	target_compile_options(cw_host PRIVATE /W4 /experimental:c11atomics)
+else()
+	target_compile_definitions(cw_host PRIVATE _GNU_SOURCE)
+	target_compile_options(cw_host PRIVATE -Wall -Wextra)
+endif()
+
 # What the watcher needs from the crashing binary; consumers inherit it.
 if(MSVC)
 	# The CodeView record with the PDB GUID and age is only written with /DEBUG;

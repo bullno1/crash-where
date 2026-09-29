@@ -381,6 +381,7 @@ cw_platform_run_watcher(const char* spec) {
 	}
 	cw_linux.region = region;
 	cw_ctx.shared = &region->common;
+	cw_ctx.game_pid = (uint32_t)game;
 
 	const char* report_dir = cw_ctx.report_dir;
 	char sub_dir[CW_STR_CAP + 16];

@@ -6,6 +6,7 @@ add_executable(cw_test
 	crash.c
 	drain.c
 	hang.c
+	host.c
 	http.c
 	http_server.c
 	normalize.c
@@ -47,7 +48,7 @@ target_include_directories(cw_test PRIVATE
 	${PROJECT_SOURCE_DIR}/src
 	${CMAKE_CURRENT_SOURCE_DIR}/vendor
 )
-target_link_libraries(cw_test PRIVATE cw cw_http cw_sym cwsym_cli)
+target_link_libraries(cw_test PRIVATE cw cw_http cw_host cw_sym cwsym_cli)
 # Golden files shared with the Worker repository; see test/table.c.
 target_compile_definitions(cw_test PRIVATE TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
 

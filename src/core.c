@@ -312,6 +312,24 @@ cw_set_env(const char* key, const char* value) {
 	atomic_store_explicit(&slot->seq, stamp, memory_order_release);
 }
 
+bool
+cw_env_has(const char* key) {
+	cw_shared_t* shared = cw_ctx.shared;
+	if (shared == NULL || key == NULL) {
+		return false;
+	}
+	for (int i = 0; i < CW_ENV_COUNT; ++i) {
+		cw_env_slot_t* s = &shared->env[i];
+		if (
+			atomic_load_explicit(&s->seq, memory_order_acquire) != 0
+			&& strncmp(s->key, key, sizeof(s->key)) == 0
+		) {
+			return true;
+		}
+	}
+	return false;
+}
+
 void
 cw_set_snapshot(const char* name, const void* data, size_t len) {
 	(void)data;

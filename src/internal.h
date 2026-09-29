@@ -107,6 +107,7 @@ typedef struct {
 	cw_collector_t collect_at_init;   /**< Copy of the caller's collector; `cfg.collect_at_init` points here or is `NULL`. */
 	cw_collector_t collect_at_report; /**< Copy of the caller's collector; `cfg.collect_at_report` points here or is `NULL`. */
 	cw_shared_t* shared;       /**< Mapped region, or `NULL` when inactive. */
+	uint32_t game_pid;         /**< Watcher side: the game process; 0 in the game. */
 	bool initialized;          /**< cw_init() has run, whatever the outcome. */
 	bool active;               /**< Capture is armed in this process. */
 } cw_ctx_t;
@@ -296,6 +297,10 @@ cw_platform_lock(const char* path);
 
 void
 cw_log(cw_log_level_t level, const char* fmt, ...);
+
+/** Whether an environment slot holds `key`. */
+bool
+cw_env_has(const char* key);
 
 /**
  * Write one envelope into `<report_dir>/pending/`.

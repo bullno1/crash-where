@@ -9,6 +9,7 @@
 #include <string.h>
 
 #include "cw.h"
+#include "cw_host.h"
 #include "cw_http.h"
 
 #if defined(_WIN32)
@@ -59,6 +60,8 @@ main(int argc, char** argv) {
 		.endpoint = "http://localhost:8080",
 		.report_dir = argc > 2 ? argv[2] : NULL,
 		.transport = &cw_transport_http,
+		.collect_at_init = &cw_collector_host,
+		.collect_at_report = &cw_collector_host,
 		.log = log_to_stderr,
 	};
 
