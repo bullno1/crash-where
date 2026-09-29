@@ -2,6 +2,7 @@ add_executable(cw_test
 	main.c
 	scenario.c
 	auth.c
+	consent.c
 	crash.c
 	drain.c
 	hang.c

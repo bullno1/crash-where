@@ -61,6 +61,7 @@ typedef enum {
 	CW_MSG_CRASH    = 'C',     /**< Game: crash record is complete. */
 	CW_MSG_SHUTDOWN = 'S',     /**< Game: exiting on purpose, `value` is the result. */
 	CW_MSG_AUTH     = 'A',     /**< Game: token or proof file refreshed. */
+	CW_MSG_CONSENT  = 'N',     /**< Game: the player decided, `value` is a cw_consent_t. */
 	CW_MSG_READY    = 'R',     /**< Watcher: region mapped, watching. */
 	CW_MSG_DONE     = 'D',     /**< Watcher: report written, game may die. */
 } cw_msg_type_t;

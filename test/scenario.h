@@ -48,7 +48,8 @@ AUTOLIST_DECLARE(test_scenarios)
 /**
  * Options for one run. A zero-initialized value means the upload
  * succeeds, attachments are declined, the library is enabled, the
- * report directory starts empty, and no authentication is configured.
+ * report directory starts empty, the child consents to every upload,
+ * and no authentication happens.
  */
 typedef struct {
 	const char* status;    /**< HTTP status the test transport answers: "ok" (200), "retry" (503), "drop" (400), or "unauthorized" (401 to a request carrying a token). `NULL` means "ok". */
@@ -57,6 +58,7 @@ typedef struct {
 	uint32_t hang_timeout_ms; /**< Passed to cw_config_t::hang_timeout_ms; 0 keeps the library default. */
 	bool keep;             /**< Keep the report directory of this test's previous run instead of starting empty. */
 	const char* auth;      /**< "proof" hands a proof to the watcher, "token" caches a token, "expired" caches one with a past expiry; `NULL` does neither. The child records the call's result in the `auth` state slot. */
+	const char* consent;   /**< Decision the child records after init: "always" (`NULL`), "never", "once", "ask", or "skip" to leave the stored one alone. */
 } test_run_opts_t;
 
 #define TEST_MAX_EVENTS 8
@@ -67,7 +69,8 @@ typedef struct {
  * Every transport call is one event, in call order:
  * `{"call":"request","method":...,"url":...,"content_type":...,
  * "token":...,"body_len":...,"envelope":{...}}`, where `envelope` is
- * present when the body is JSON.
+ * present when the body is JSON. A scenario may add events of its own
+ * with test_write_event().
  */
 typedef struct {
 	char dir[256];        /**< Directory holding the report store and the transport log. */
@@ -122,6 +125,12 @@ test_event_is(yyjson_doc* ev, const char* route, const char* token);
  */
 void
 test_cw_log(cw_log_level_t level, const char* msg);
+
+/**
+ * Child side: append one event to the run's log and free the document.
+ */
+void
+test_write_event(yyjson_mut_doc* doc);
 
 /**
  * Child side: initialize the library and run the named scenario.

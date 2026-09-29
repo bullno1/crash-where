@@ -23,6 +23,11 @@ cw_platform_notify_auth(void) {
 	cw_send_msg(cw_linux.sock, CW_MSG_AUTH, 0);
 }
 
+void
+cw_platform_notify_consent(cw_consent_t choice) {
+	cw_send_msg(cw_linux.sock, CW_MSG_CONSENT, (int32_t)choice);
+}
+
 /**
  * `$XDG_STATE_HOME/<app>/crash`, with the `~/.local/state` fallback.
  */

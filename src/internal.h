@@ -228,6 +228,10 @@ cw_platform_check_handlers(void);
 void
 cw_platform_notify_auth(void);
 
+/** Tell the watcher the player's decision. */
+void
+cw_platform_notify_consent(cw_consent_t choice);
+
 /**
  * The platform's report directory for cw_ctx_t::app.
  *
@@ -278,7 +282,7 @@ cw_write_envelope(
 	const cw_shared_t* shared, char* out_path, size_t cap
 );
 
-/* Report directory files: `token`, `proof`, `lock`, and `pending/`. */
+/* Report directory files: `consent`, `token`, `proof`, `lock`, and `pending/`. */
 
 /** Build `<report_dir>/<name>`. */
 bool
@@ -303,9 +307,21 @@ cw_store_read(const char* name, void* buf, size_t cap, size_t* len);
 void
 cw_store_remove(const char* name);
 
-/** The cached token, when it has not expired. */
+/** The persisted decision, ::CW_CONSENT_ASK when there is none. */
+cw_consent_t
+cw_consent_load(void);
+
+/** Persist ::CW_CONSENT_ALWAYS or ::CW_CONSENT_NEVER; anything else clears the file. */
 bool
-cw_token_load(char* token, size_t cap);
+cw_consent_store(cw_consent_t choice);
+
+/**
+ * The cached token and its expiry.
+ *
+ * @return `false` when there is none; the expiry is not checked.
+ */
+bool
+cw_token_load(char* token, size_t cap, int64_t* expires);
 
 /**
  * Write the proof as the finished body of the auth request, so the
@@ -341,6 +357,7 @@ typedef struct {
 	char name[96];             /**< File name with the `.json` extension. */
 	int64_t ts;                /**< When it was written, Unix seconds. */
 	cw_report_kind_t kind;
+	bool approved;             /**< An `.ok` sidecar released it. */
 } cw_pending_t;
 
 /**
@@ -363,18 +380,37 @@ cw_pending_list(cw_pending_t* out, int cap);
 void
 cw_pending_path(const cw_pending_t* p, char* out, size_t cap);
 
-/** Delete an envelope together with its attachments. */
+/** Delete an envelope together with its sidecars and attachments. */
 void
 cw_pending_remove(const cw_pending_t* p);
+
+/** Release every waiting envelope with an `.ok` sidecar. */
+void
+cw_pending_approve_all(void);
+
+/** Delete everything in `pending/`. */
+void
+cw_pending_purge(void);
+
+/** Count the envelopes awaiting a decision and describe the newest. */
+void
+cw_pending_summary(cw_consent_summary_t* out);
 
 /* Watcher-side upload policy. */
 
 /**
- * What the watcher knows about sending: whether the backlog of earlier
- * runs has been drained, whether the waiting proof is worth a try, and
- * which reports already failed this run and wait for the next launch.
+ * What the watcher knows about sending: the decision in force, the
+ * token, whether the backlog of earlier runs has been drained, whether
+ * the waiting proof is worth a try, and which reports already failed
+ * this run and wait for the next launch.
+ *
+ * The consent and token files are read only here, at start and when the
+ * game says they changed, never while the game may be writing them.
  */
 typedef struct {
+	cw_consent_t consent;      /**< From the file at start, then from messages. */
+	char token[CW_TOKEN_CAP];  /**< From the file at start and on `auth refreshed`; empty when there is none. */
+	int64_t token_expires;     /**< Unix seconds. */
 	bool auth_seen;            /**< The game refreshed the token or handed over a proof. */
 	bool proof_failed;         /**< The waiting proof could not be exchanged; not retried until a new one arrives. */
 	bool caught_up;            /**< The backlog was drained once this run. */
@@ -387,8 +423,12 @@ typedef struct {
 void
 cw_drain_init(cw_drain_t* d);
 
+/** Whether reports may still be written; `false` under ::CW_CONSENT_NEVER. */
+bool
+cw_drain_accepts(const cw_drain_t* d);
+
 /**
- * A report was just written; send it now.
+ * A report was just written; send it now when the decision allows.
  *
  * Delivered and rejected envelopes are deleted; failed ones stay in
  * `pending/` for the catch-up drain of a later run.
@@ -396,15 +436,19 @@ cw_drain_init(cw_drain_t* d);
 void
 cw_drain_report(cw_drain_t* d, const char* path);
 
-/** The game sent `auth refreshed`. */
+/** The game sent `auth refreshed`: exchange the proof and drain. */
 void
 cw_drain_auth(cw_drain_t* d);
+
+/** The game sent `consent(choice)`. */
+void
+cw_drain_consent(cw_drain_t* d, cw_consent_t choice);
 
 /** Periodic check for the catch-up timeout; call from the watcher's poll loop. */
 void
 cw_drain_tick(cw_drain_t* d, uint64_t now_ms);
 
-/** The game is gone: drain whatever is still waiting. */
+/** The game is gone: drain whatever the decision allows. */
 void
 cw_drain_finish(cw_drain_t* d);
 

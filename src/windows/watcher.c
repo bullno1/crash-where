@@ -133,7 +133,7 @@ check_hang(cw_hang_t* hang, cw_drain_t* drain, const char* report_dir) {
 		uint64_t silent_ms = now - hang->since_ms;
 		cw_log(CW_LOG_WARN, "no heartbeat for %" PRIu64 " ms", silent_ms);
 		char path[CW_STR_CAP + 64];
-		if (write_hang_report(report_dir, silent_ms, path, sizeof(path))) {
+		if (cw_drain_accepts(drain) && write_hang_report(report_dir, silent_ms, path, sizeof(path))) {
 			cw_drain_report(drain, path);
 		}
 		break;
@@ -150,45 +150,49 @@ check_hang(cw_hang_t* hang, cw_drain_t* drain, const char* report_dir) {
  * Wait for events until the game is gone, sampling the heartbeat at a
  * quarter of the hang timeout in between.
  *
- * The game sets an event before it ends, and a wait that finds several
- * objects signaled reports the lowest index, so the events come first.
+ * A wait that finds several objects signaled reports the lowest index.
+ * The game sets an event before it ends, so the events come before the
+ * process handle; and it decides or authenticates before it crashes, so
+ * those events come before the crash, which keeps the game's order.
  */
 static void
-cw_watch(const char* report_dir) {
+cw_watch(const char* report_dir, cw_drain_t* drain) {
 	bool crashed = false;
 	bool shutdown = false;
 	int result = 0;
 	cw_hang_t hang = { 0 };
-	cw_drain_t drain;
-	cw_drain_init(&drain);
 	DWORD interval_ms = (DWORD)cw_hang_poll_ms(cw_ctx.cfg.hang_timeout_ms);
 
 	for (;;) {
-		HANDLE objects[4] = {
-			cw_win.handles.ev_crash, cw_win.handles.ev_shutdown, cw_win.handles.ev_auth, cw_win.handles.game,
+		HANDLE objects[5] = {
+			cw_win.handles.ev_consent, cw_win.handles.ev_auth,
+			cw_win.handles.ev_crash, cw_win.handles.ev_shutdown,
+			cw_win.handles.game,
 		};
-		DWORD which = WaitForMultipleObjects(4, objects, FALSE, crashed ? INFINITE : interval_ms);
+		DWORD which = WaitForMultipleObjects(5, objects, FALSE, crashed ? INFINITE : interval_ms);
 		if (!crashed) {
-			check_hang(&hang, &drain, report_dir);
-			cw_drain_tick(&drain, cw_platform_now_ms());
+			check_hang(&hang, drain, report_dir);
+			cw_drain_tick(drain, cw_platform_now_ms());
 		}
 		if (which == WAIT_TIMEOUT) {
 			continue;
 		}
 		if (which == WAIT_OBJECT_0) {
+			cw_drain_consent(drain, (cw_consent_t)atomic_load_explicit(&cw_win.region->consent, memory_order_acquire));
+		} else if (which == WAIT_OBJECT_0 + 1) {
+			cw_drain_auth(drain);
+		} else if (which == WAIT_OBJECT_0 + 2) {
 			/* Reply first: the game is parked until it hears back. */
 			char path[CW_STR_CAP + 64];
-			bool written = write_crash_report(report_dir, path, sizeof(path));
+			bool written = cw_drain_accepts(drain) && write_crash_report(report_dir, path, sizeof(path));
 			crashed = true;
 			SetEvent(cw_win.handles.ev_done);
 			if (written) {
-				cw_drain_report(&drain, path);
+				cw_drain_report(drain, path);
 			}
-		} else if (which == WAIT_OBJECT_0 + 1) {
+		} else if (which == WAIT_OBJECT_0 + 3) {
 			shutdown = true;
 			result = cw_win.region->shutdown_result;
-		} else if (which == WAIT_OBJECT_0 + 2) {
-			cw_drain_auth(&drain);
 		} else {
 			break;
 		}
@@ -199,12 +203,12 @@ cw_watch(const char* report_dir) {
 	} else if (!crashed) {
 		cw_log(CW_LOG_WARN, "game ended without cw_shutdown");
 		char path[CW_STR_CAP + 64];
-		if (write_killed_report(report_dir, path, sizeof(path))) {
-			cw_drain_report(&drain, path);
+		if (cw_drain_accepts(drain) && write_killed_report(report_dir, path, sizeof(path))) {
+			cw_drain_report(drain, path);
 		}
 	}
 	/* The game is gone, so the backlog may go out. */
-	cw_drain_finish(&drain);
+	cw_drain_finish(drain);
 }
 
 /**
@@ -215,12 +219,12 @@ _Noreturn void
 cw_platform_run_watcher(const char* spec) {
 	_putenv_s(CW_ENV_WATCHER, "");
 	unsigned long game;
-	unsigned long long v[7];
+	unsigned long long v[8];
 	int parsed = sscanf(
-		spec, "%lu,%llx,%llx,%llx,%llx,%llx,%llx,%llx",
-		&game, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6]
+		spec, "%lu,%llx,%llx,%llx,%llx,%llx,%llx,%llx,%llx",
+		&game, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]
 	);
-	if (parsed != 8) {
+	if (parsed != 9) {
 		cw_log(CW_LOG_ERROR, "malformed " CW_ENV_WATCHER);
 		exit(1);
 	}
@@ -232,6 +236,7 @@ cw_platform_run_watcher(const char* spec) {
 		.ev_ready = (HANDLE)(uintptr_t)v[4],
 		.ev_shutdown = (HANDLE)(uintptr_t)v[5],
 		.ev_auth = (HANDLE)(uintptr_t)v[6],
+		.ev_consent = (HANDLE)(uintptr_t)v[7],
 	};
 
 	cw_region_t* region = MapViewOfFile(cw_win.handles.section, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(cw_region_t));
@@ -255,8 +260,12 @@ cw_platform_run_watcher(const char* spec) {
 		exit(1);
 	}
 
+	/* Read the stored decision before the game can run and change it. */
+	cw_drain_t drain;
+	cw_drain_init(&drain);
+
 	SetEvent(cw_win.handles.ev_ready);
 	cw_log(CW_LOG_INFO, "watching game pid %lu", game);
-	cw_watch(report_dir);
+	cw_watch(report_dir, &drain);
 	exit(0);
 }

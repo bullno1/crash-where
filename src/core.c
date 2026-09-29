@@ -154,6 +154,41 @@ cw_auth_token(const char* token, int64_t expires) {
 	return true;
 }
 
+bool
+cw_consent_pending(cw_consent_summary_t* summary) {
+	cw_consent_summary_t local;
+	if (summary == NULL) {
+		summary = &local;
+	}
+	*summary = (cw_consent_summary_t){ 0 };
+	if (cw_ctx.report_dir[0] == '\0' || cw_consent_load() != CW_CONSENT_ASK) {
+		return false;
+	}
+	cw_pending_summary(summary);
+	return summary->count > 0;
+}
+
+void
+cw_consent_set(cw_consent_t choice) {
+	if (cw_ctx.report_dir[0] == '\0') {
+		return;
+	}
+	if (choice == CW_CONSENT_NEVER) {
+		cw_pending_purge();
+	}
+	if (choice != CW_CONSENT_ONCE) {
+		cw_consent_store(choice);
+	}
+	if (cw_ctx.active) {
+		cw_platform_notify_consent(choice);
+	}
+}
+
+cw_consent_t
+cw_consent_get(void) {
+	return cw_ctx.report_dir[0] != '\0' ? cw_consent_load() : CW_CONSENT_ASK;
+}
+
 void
 cw_heartbeat(void) {
 	if (!cw_ctx.active) {

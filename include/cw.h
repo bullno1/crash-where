@@ -51,6 +51,20 @@ typedef enum {
 } cw_log_level_t;
 
 /**
+ * The player's decision about sending reports.
+ *
+ * Nothing leaves the machine, the storefront proof included, until the
+ * decision is ::CW_CONSENT_ALWAYS or a report was released with
+ * ::CW_CONSENT_ONCE.
+ */
+typedef enum {
+	CW_CONSENT_ASK,    /**< No decision yet, or the prompt was dismissed. Reports wait on disk. */
+	CW_CONSENT_ALWAYS, /**< Send every report, now and in later runs. */
+	CW_CONSENT_NEVER,  /**< Send nothing; pending reports are deleted and no new ones are written. */
+	CW_CONSENT_ONCE,   /**< Send the reports waiting right now, then ask again for later ones. Never stored. */
+} cw_consent_t;
+
+/**
  * What a report describes.
  */
 typedef enum {
@@ -58,6 +72,15 @@ typedef enum {
 	CW_REPORT_HANG,
 	CW_REPORT_ABNORMAL_EXIT, /**< The game ended without cw_shutdown(). */
 } cw_report_kind_t;
+
+/**
+ * Reports waiting for a decision, for a consent screen.
+ */
+typedef struct {
+	int count;                   /**< Reports awaiting a decision. */
+	cw_report_kind_t newest_kind; /**< Kind of the newest of them. Meaningless when `count` is 0. */
+	int64_t newest_time;         /**< When the newest was written, as Unix seconds. */
+} cw_consent_summary_t;
 
 /**
  * One HTTP request as handed to the transport.
@@ -205,6 +228,7 @@ cw_attach_thread(void);
  *
  * Call this after the storefront SDK is initialized.
  * A newer proof replaces one still waiting.
+ * The exchange happens once the consent decision allows it.
  *
  * @param store  Storefront name such as "steam", "epic", "gog", "itch",
  *               or "beta": lowercase letters, digits, `-`, and `_`.
@@ -228,6 +252,49 @@ cw_auth_proof(const char* store, const void* proof, size_t len);
  */
 bool
 cw_auth_token(const char* token, int64_t expires);
+
+/**
+ * Check whether to show a consent screen to the user.
+ *
+ * This will only return true if:
+ *
+ * - No permanent decision was made (@ref CW_CONSENT_ALWAYS or @ref CW_CONSENT_NEVER).
+ * - There are pending reports.
+ *
+ * Otherwise, return false.
+ *
+ * @param summary  Filled with info about pending reports.
+ *                 May be `NULL`. Zeroed when the answer is `false`.
+ * @return `true` when the player should be asked.
+ */
+bool
+cw_consent_pending(cw_consent_summary_t* summary);
+
+/**
+ * Record the player's decision.
+ *
+ * - ::CW_CONSENT_ALWAYS and ::CW_CONSENT_NEVER persist across runs
+ * - ::CW_CONSENT_ASK clears a persisted decision
+ * - ::CW_CONSENT_ONCE releases the reports waiting right now and persists nothing
+ * - ::CW_CONSENT_NEVER deletes every waiting report.
+ *
+ * Safe to call at every launch, for a game that keeps the decision in
+ * its own settings. Takes effect at once; the watcher starts or stops
+ * sending without a restart.
+ *
+ * @param choice  The decision.
+ */
+void
+cw_consent_set(cw_consent_t choice);
+
+/**
+ * Retrieve the persisted decision.
+ *
+ * @return ::CW_CONSENT_ALWAYS, ::CW_CONSENT_NEVER, or ::CW_CONSENT_ASK
+ *         when none was recorded. Never ::CW_CONSENT_ONCE.
+ */
+cw_consent_t
+cw_consent_get(void);
 
 /**
  * Mark the game alive.

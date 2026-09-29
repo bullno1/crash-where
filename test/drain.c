@@ -1,7 +1,8 @@
 /**
  * @file drain.c
  * The catch-up drain: reports an earlier run could not send go out once
- * the game has authenticated, or when it exits.
+ * the game has authenticated, or when it exits. The runs rely on the
+ * stored decision, since a fresh one would drain at once.
  */
 #include <stdio.h>
 #include <string.h>
@@ -37,7 +38,7 @@ BTEST(drain, backlog_drains_after_auth) {
 	BTEST_ASSERT(run != NULL);
 	BTEST_ASSERT_EQUAL("%d", test_run_pending(run, ".json"), 1);
 
-	run = RUN_SCENARIO_WITH(SCENARIO_REF(drain_exit), .auth = "proof", .keep = true);
+	run = RUN_SCENARIO_WITH(SCENARIO_REF(drain_exit), .auth = "proof", .consent = "skip", .keep = true);
 	BTEST_ASSERT(run != NULL);
 	BTEST_ASSERT_EQUAL("%d", run->num_events, 2);
 	BTEST_EXPECT(test_event_is(run->events[0], "auth", NULL));
@@ -50,7 +51,7 @@ BTEST(drain, backlog_drains_at_exit_without_auth) {
 	const test_run_t* run = RUN_SCENARIO_WITH(SCENARIO_REF(drain_crash), .status = "retry");
 	BTEST_ASSERT(run != NULL);
 
-	run = RUN_SCENARIO_WITH(SCENARIO_REF(drain_exit), .keep = true);
+	run = RUN_SCENARIO_WITH(SCENARIO_REF(drain_exit), .consent = "skip", .keep = true);
 	BTEST_ASSERT(run != NULL);
 	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
 	BTEST_EXPECT(test_event_is(run->events[0], "report", NULL));

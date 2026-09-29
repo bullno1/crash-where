@@ -39,6 +39,7 @@ typedef struct {
 typedef struct {
 	cw_shared_t common;
 	int32_t shutdown_result;   /**< Valid once the shutdown event is set. */
+	_Atomic int32_t consent;   /**< Latest cw_consent_t the game chose; read when the consent event is set. */
 	cw_crash_t crash;
 } cw_region_t;
 
@@ -56,6 +57,7 @@ typedef struct {
 	HANDLE ev_ready;           /**< Watcher: region mapped, watching. */
 	HANDLE ev_shutdown;        /**< Game: exiting on purpose, result is in the region. */
 	HANDLE ev_auth;            /**< Game: token or proof file refreshed. */
+	HANDLE ev_consent;         /**< Game: the player decided, choice is in the region. */
 } cw_handles_t;
 
 typedef struct {

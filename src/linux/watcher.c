@@ -239,7 +239,7 @@ check_hang(pid_t game, cw_hang_t* hang, cw_drain_t* drain, const char* report_di
 		uint64_t silent_ms = now - hang->since_ms;
 		cw_log(CW_LOG_WARN, "no heartbeat for %" PRIu64 " ms", silent_ms);
 		char path[CW_STR_CAP + 64];
-		if (write_hang_report(game, report_dir, silent_ms, path, sizeof(path))) {
+		if (cw_drain_accepts(drain) && write_hang_report(game, report_dir, silent_ms, path, sizeof(path))) {
 			cw_drain_report(drain, path);
 		}
 		break;
@@ -257,15 +257,13 @@ check_hang(pid_t game, cw_hang_t* hang, cw_drain_t* drain, const char* report_di
  * a quarter of the hang timeout in between.
  */
 static void
-cw_watch(pid_t game, int sock, const char* report_dir) {
+cw_watch(pid_t game, int sock, const char* report_dir, cw_drain_t* drain) {
 	int pidfd = pidfd_open(game, 0);
 	bool crashed = false;
 	bool shutdown = false;
 	int result = 0;
 	bool game_gone = false;
 	cw_hang_t hang = { 0 };
-	cw_drain_t drain;
-	cw_drain_init(&drain);
 	int interval_ms = cw_hang_poll_ms(cw_ctx.cfg.hang_timeout_ms);
 
 	while (!game_gone) {
@@ -281,8 +279,8 @@ cw_watch(pid_t game, int sock, const char* report_dir) {
 			break;
 		}
 		if (!crashed) {
-			check_hang(game, &hang, &drain, report_dir);
-			cw_drain_tick(&drain, cw_platform_now_ms());
+			check_hang(game, &hang, drain, report_dir);
+			cw_drain_tick(drain, cw_platform_now_ms());
 		}
 		if (n == 0) {
 			continue;
@@ -294,11 +292,11 @@ cw_watch(pid_t game, int sock, const char* report_dir) {
 				case CW_MSG_CRASH: {
 					/* Reply first: the game is parked until it hears back. */
 					char path[CW_STR_CAP + 64];
-					bool written = write_crash_report(game, report_dir, path, sizeof(path));
+					bool written = cw_drain_accepts(drain) && write_crash_report(game, report_dir, path, sizeof(path));
 					crashed = true;
 					cw_send_msg(sock, CW_MSG_DONE, 0);
 					if (written) {
-						cw_drain_report(&drain, path);
+						cw_drain_report(drain, path);
 					}
 					break;
 				}
@@ -307,7 +305,10 @@ cw_watch(pid_t game, int sock, const char* report_dir) {
 					result = msg.value;
 					break;
 				case CW_MSG_AUTH:
-					cw_drain_auth(&drain);
+					cw_drain_auth(drain);
+					break;
+				case CW_MSG_CONSENT:
+					cw_drain_consent(drain, (cw_consent_t)msg.value);
 					break;
 				default:
 					break;
@@ -337,12 +338,12 @@ cw_watch(pid_t game, int sock, const char* report_dir) {
 	} else if (!crashed) {
 		cw_log(CW_LOG_WARN, "game ended without cw_shutdown");
 		char path[CW_STR_CAP + 64];
-		if (write_killed_report(report_dir, path, sizeof(path))) {
-			cw_drain_report(&drain, path);
+		if (cw_drain_accepts(drain) && write_killed_report(report_dir, path, sizeof(path))) {
+			cw_drain_report(drain, path);
 		}
 	}
 	/* The game is gone, so the backlog may go out. */
-	cw_drain_finish(&drain);
+	cw_drain_finish(drain);
 }
 
 /**
@@ -389,8 +390,12 @@ cw_platform_run_watcher(const char* spec) {
 		exit(1);
 	}
 
+	/* Read the stored decision before the game can run and change it. */
+	cw_drain_t drain;
+	cw_drain_init(&drain);
+
 	cw_send_msg(sock, CW_MSG_READY, 0);
 	cw_log(CW_LOG_INFO, "watching game pid %d", game);
-	cw_watch(game, sock, report_dir);
+	cw_watch(game, sock, report_dir, &drain);
 	exit(0);
 }

@@ -62,13 +62,20 @@ BTEST(auth, expired_token_is_not_sent) {
 	BTEST_EXPECT(test_event_is(run->events[0], "report", NULL));
 }
 
-/** A failing exchange is tried once per `auth refreshed`; the report itself never triggers another attempt. */
+/**
+ * The decision and the proof may reach the watcher in either order, so
+ * a failing exchange is tried once for each; the report itself never
+ * triggers another attempt.
+ */
 BTEST(auth, proof_kept_when_exchange_fails) {
 	const test_run_t* run = RUN_SCENARIO_WITH(SCENARIO_REF(crash_now), .auth = "proof", .status = "retry");
 	BTEST_ASSERT(run != NULL);
-	BTEST_ASSERT_EQUAL("%d", run->num_events, 2);
-	BTEST_EXPECT(test_event_is(run->events[0], "auth", NULL));
-	BTEST_EXPECT(test_event_is(run->events[1], "report", NULL));
+	BTEST_ASSERT_RELATION("%d", run->num_events, >=, 2);
+	BTEST_ASSERT_RELATION("%d", run->num_events, <=, 3);
+	for (int i = 0; i + 1 < run->num_events; ++i) {
+		BTEST_EXPECT(test_event_is(run->events[i], "auth", NULL));
+	}
+	BTEST_EXPECT(test_event_is(run->events[run->num_events - 1], "report", NULL));
 	BTEST_EXPECT(test_run_has(run, "proof"));
 	BTEST_EXPECT(!test_run_has(run, "token"));
 	BTEST_EXPECT_EQUAL("%d", test_run_pending(run, ".json"), 1);

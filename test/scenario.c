@@ -49,11 +49,8 @@ http_status_from_env(const cw_request_t* req) {
 	return 200;
 }
 
-/**
- * Append one event to the transport log and free the document.
- */
-static void
-write_event(yyjson_mut_doc* doc) {
+void
+test_write_event(yyjson_mut_doc* doc) {
 	char path[512];
 	snprintf(path, sizeof(path), "%s/events.jsonl", getenv("CW_TEST_OUT"));
 	FILE* f = fopen(path, "a");
@@ -114,7 +111,7 @@ test_send(void* user, const cw_request_t* req, cw_response_t* resp) {
 		}
 		yyjson_mut_obj_add_val(doc, root, "envelope", yyjson_mut_rawn(doc, body, len));
 	}
-	write_event(doc);
+	test_write_event(doc);
 
 	int n;
 	if (route_is(req, "auth")) {
@@ -165,6 +162,19 @@ test_fixture_main(const char* name) {
 		.log = test_cw_log,
 	};
 	cw_init(&cfg);
+
+	const char* consent = getenv("CW_TEST_CONSENT");
+	if (consent == NULL || consent[0] == '\0') {
+		consent = "always";
+	}
+	if (strcmp(consent, "skip") != 0) {
+		cw_consent_set(
+			strcmp(consent, "always") == 0 ? CW_CONSENT_ALWAYS
+			: strcmp(consent, "never") == 0 ? CW_CONSENT_NEVER
+			: strcmp(consent, "once") == 0 ? CW_CONSENT_ONCE
+			: CW_CONSENT_ASK
+		);
+	}
 
 	const char* auth = getenv("CW_TEST_AUTH");
 	if (auth != NULL && auth[0] != '\0') {
@@ -281,6 +291,7 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
 	char e_want[64];
 	char e_hang[64];
 	char e_auth[64];
+	char e_consent[64];
 	snprintf(e_scenario, sizeof(e_scenario), "CW_TEST_SCENARIO=%s", scenario->name);
 	snprintf(e_out, sizeof(e_out), "CW_TEST_OUT=%s", run->dir);
 	snprintf(e_report, sizeof(e_report), "CW_TEST_REPORT_DIR=%s", report);
@@ -288,8 +299,9 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
 	snprintf(e_want, sizeof(e_want), "CW_TEST_WANT_ATTACHMENTS=%d", o.want_attachments ? 1 : 0);
 	snprintf(e_hang, sizeof(e_hang), "CW_TEST_HANG_MS=%" PRIu32, o.hang_timeout_ms);
 	snprintf(e_auth, sizeof(e_auth), "CW_TEST_AUTH=%s", o.auth != NULL ? o.auth : "");
+	snprintf(e_consent, sizeof(e_consent), "CW_TEST_CONSENT=%s", o.consent != NULL ? o.consent : "");
 	const char* env[] = {
-		e_scenario, e_out, e_report, e_status, e_want, e_hang, e_auth,
+		e_scenario, e_out, e_report, e_status, e_want, e_hang, e_auth, e_consent,
 		/* A sanitizer build must let the crash reach the library's handlers. */
 		"ASAN_OPTIONS=handle_segv=0:handle_abort=0:handle_sigbus=0:handle_sigfpe=0:handle_sigill=0",
 		o.disable ? "CW_DISABLE=1" : NULL,

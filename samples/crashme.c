@@ -63,6 +63,8 @@ main(int argc, char** argv) {
 	};
 
 	cw_init(&cfg);
+	/* A real game should ask the player. */
+	cw_consent_set(CW_CONSENT_ALWAYS);
 
 	printf("crashme: game pid %d, mode %s\n", (int)getpid(), mode);
 	fflush(stdout);

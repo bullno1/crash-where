@@ -1,7 +1,8 @@
 /**
  * @file upload.c
  * The client side of the protocol: envelopes and proofs go out through
- * the transport and replies come back as `key value` lines.
+ * the transport, replies come back as `key value` lines, and the
+ * consent decision gates all of it.
  *
  * Everything here runs in the watcher.
  */
@@ -144,6 +145,14 @@ send_request(
 
 /* Proof exchange {{{ */
 
+static void
+load_token(cw_drain_t* d) {
+	if (!cw_token_load(d->token, sizeof(d->token), &d->token_expires)) {
+		d->token[0] = '\0';
+		d->token_expires = 0;
+	}
+}
+
 /**
  * Post the auth request body the game left in the report directory and
  * cache the token it buys. A transient failure keeps the proof for the
@@ -178,6 +187,7 @@ exchange_proof(cw_drain_t* d) {
 		if (cw_token_store(token, strtoll(expires, NULL, 10))) {
 			cw_log(CW_LOG_INFO, "token refreshed, valid until %s", expires);
 			cw_store_remove("proof");
+			load_token(d);
 		}
 		break;
 	case CW_RETRY:
@@ -193,6 +203,15 @@ exchange_proof(cw_drain_t* d) {
 
 /* }}} */
 
+/**
+ * The one rule: a report may go out under `always`, or when a one-shot
+ * approval released it.
+ */
+static bool
+upload_allowed(const cw_drain_t* d, const cw_pending_t* p) {
+	return d->consent == CW_CONSENT_ALWAYS || p->approved;
+}
+
 static bool
 failed_this_run(const cw_drain_t* d, const char* id) {
 	for (int i = 0; i < d->failed_count; ++i) {
@@ -206,21 +225,34 @@ failed_this_run(const cw_drain_t* d, const char* id) {
 /**
  * Send one envelope with the cached token, if any.
  *
- * A token the server refuses costs one bounce: the report is sent
- * again without it and lands unauthenticated. Delivered and rejected
- * envelopes are deleted; failed ones stay in `pending/` and are not
- * tried again before the next launch.
+ * This is the only path to the report route, and it goes nowhere
+ * without the player's decision and a transport. A token the server
+ * refuses costs one bounce: the report is sent again without it and
+ * lands unauthenticated. Delivered and rejected envelopes are deleted;
+ * failed ones stay in `pending/` and are not tried again before the
+ * next launch.
  */
 static cw_status_t
 upload_report(cw_drain_t* d, const cw_pending_t* p) {
+	if (!upload_allowed(d, p)) {
+		cw_log(CW_LOG_INFO, "report %s waits for consent", p->name);
+		return CW_RETRY;
+	}
+
+	if (cw_ctx.cfg.transport == NULL) {
+		return CW_RETRY;
+	}
+
 	char id[CW_UUID_CAP];
 	if (!name_id(p->name, id)) {
 		cw_log(CW_LOG_ERROR, "unexpected report name %s", p->name);
 		return CW_DROP;
 	}
+
 	if (failed_this_run(d, id)) {
 		return CW_RETRY;
 	}
+
 	char path[CW_STR_CAP + 128];
 	cw_pending_path(p, path, sizeof(path));
 	size_t len = 0;
@@ -230,11 +262,10 @@ upload_report(cw_drain_t* d, const cw_pending_t* p) {
 		return CW_RETRY;
 	}
 
-	char token[CW_TOKEN_CAP];
-	bool have_token = cw_token_load(token, sizeof(token));
+	bool have_token = d->token[0] != '\0' && d->token_expires > (int64_t)time(NULL);
 	char reply[CW_REPLY_CAP];
 	int http = 0;
-	cw_status_t status = send_request("report", have_token ? token : NULL, json, len, reply, sizeof(reply), &http);
+	cw_status_t status = send_request("report", have_token ? d->token : NULL, json, len, reply, sizeof(reply), &http);
 	if (status == CW_OK && http == 401 && have_token) {
 		cw_log(CW_LOG_WARN, "server refused the token, sending report %s unauthenticated", id);
 		status = send_request("report", NULL, json, len, reply, sizeof(reply), &http);
@@ -280,22 +311,36 @@ upload_report(cw_drain_t* d, const cw_pending_t* p) {
 
 void
 cw_drain_init(cw_drain_t* d) {
-	*d = (cw_drain_t){ .start_ms = cw_platform_now_ms() };
+	*d = (cw_drain_t){
+		.consent = cw_consent_load(),
+		.start_ms = cw_platform_now_ms(),
+	};
+	load_token(d);
+	static const char* const names[] = { "ask", "always", "never" };
+	cw_log(CW_LOG_DEBUG, "consent decision on disk: %s", names[d->consent]);
 	if (cw_ctx.cfg.transport == NULL) {
 		cw_log(CW_LOG_WARN, "no transport configured, reports stay in %s", cw_ctx.report_dir);
 	}
 }
 
+bool
+cw_drain_accepts(const cw_drain_t* d) {
+	return d->consent != CW_CONSENT_NEVER;
+}
+
 /**
- * Send every pending report, oldest first, after exchanging a waiting
- * proof so they carry the token. Whoever holds `lock` drains; another
- * watcher skips.
+ * Send every pending report the decision allows, oldest first, after
+ * exchanging a waiting proof so they carry the token. Whoever holds
+ * `lock` drains; another watcher skips.
+ *
+ * This is the only place the proof is exchanged.
  */
 static void
 drain_pending(cw_drain_t* d) {
-	if (cw_ctx.cfg.transport == NULL) {
+	if (d->consent == CW_CONSENT_NEVER) {
 		return;
 	}
+
 	if (!d->locked) {
 		char lock[CW_STR_CAP + 16];
 		d->locked = cw_store_path(lock, sizeof(lock), "lock") && cw_platform_lock(lock);
@@ -304,9 +349,19 @@ drain_pending(cw_drain_t* d) {
 			return;
 		}
 	}
-	exchange_proof(d);
+
 	cw_pending_t list[CW_PENDING_CAP];
 	int n = cw_pending_list(list, CW_PENDING_CAP);
+
+	// Under `always` the token must be ready before the next report
+	bool any_allowed = d->consent == CW_CONSENT_ALWAYS;
+	for (int i = 0; i < n; ++i) {
+		any_allowed = any_allowed || upload_allowed(d, &list[i]);
+	}
+	if (any_allowed) {
+		exchange_proof(d);
+	}
+
 	long long now = (long long)time(NULL);
 	for (int i = 0; i < n; ++i) {
 		if (now - list[i].ts > CW_REPORT_MAX_AGE_S) {
@@ -332,10 +387,6 @@ cw_drain_report(cw_drain_t* d, const char* path) {
 		cw_log(CW_LOG_ERROR, "unexpected report name %s", path);
 		return;
 	}
-	if (cw_ctx.cfg.transport == NULL) {
-		return;
-	}
-	exchange_proof(d);
 	upload_report(d, &p);
 }
 
@@ -344,10 +395,30 @@ cw_drain_auth(cw_drain_t* d) {
 	cw_log(CW_LOG_DEBUG, "auth refreshed");
 	d->auth_seen = true;
 	d->proof_failed = false;
-	if (!d->caught_up) {
+	load_token(d);
+	catch_up(d);
+}
+
+void
+cw_drain_consent(cw_drain_t* d, cw_consent_t choice) {
+	static const char* const names[] = { "ask", "always", "never", "once" };
+	cw_log(CW_LOG_INFO, "consent: %s", names[choice]);
+	switch (choice) {
+	case CW_CONSENT_ALWAYS:
+		d->consent = CW_CONSENT_ALWAYS;
 		catch_up(d);
-	} else {
-		exchange_proof(d);
+		break;
+	case CW_CONSENT_ONCE:
+		cw_pending_approve_all();
+		catch_up(d);
+		break;
+	case CW_CONSENT_NEVER:
+		d->consent = CW_CONSENT_NEVER;
+		cw_pending_purge();
+		break;
+	case CW_CONSENT_ASK:
+		d->consent = CW_CONSENT_ASK;
+		break;
 	}
 }
 
