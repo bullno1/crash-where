@@ -31,6 +31,21 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 		target_link_libraries(cw PRIVATE delayimp)
 		target_link_options(cw INTERFACE /DELAYLOAD:dbghelp.dll)
 	endif()
+elseif(EMSCRIPTEN)
+	target_sources(cw PRIVATE
+		web/game.c
+		web/platform.c
+		web/stack.c
+		web/watcher.c
+	)
+	# The shim reaches the game through the library, so the game's build names nothing.
+	# SHELL: keeps CMake from deduplicating the flag apart from its argument.
+	target_link_options(cw INTERFACE
+		"SHELL:--js-library ${CMAKE_CURRENT_SOURCE_DIR}/web/shim.js"
+	)
+	set_property(TARGET cw APPEND PROPERTY
+		INTERFACE_LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/web/shim.js
+	)
 endif()
 target_include_directories(cw
 	PUBLIC ${PROJECT_SOURCE_DIR}/include
@@ -59,6 +74,8 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 		target_link_libraries(cw_http PRIVATE delayimp)
 		target_link_options(cw_http INTERFACE /DELAYLOAD:winhttp.dll)
 	endif()
+elseif(EMSCRIPTEN)
+	target_sources(cw_http PRIVATE http/web.c)
 endif()
 target_link_libraries(cw_http PUBLIC cw)
 target_include_directories(cw_http PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -77,6 +94,8 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 	target_sources(cw_host PRIVATE host/windows.c)
 	# The registry reads at init; dxgi is loaded at run time, only in the watcher.
 	target_link_libraries(cw_host PRIVATE advapi32)
+elseif(EMSCRIPTEN)
+	target_sources(cw_host PRIVATE host/web.c)
 endif()
 target_link_libraries(cw_host PUBLIC cw)
 target_include_directories(cw_host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
@@ -99,8 +118,8 @@ if(MSVC)
 	endif()
 else()
 	target_compile_options(cw PUBLIC -fno-omit-frame-pointer)
-	if(CMAKE_SYSTEM_NAME MATCHES "^(Linux|Android)$")
-		# Linkers emit the ELF build id only when asked; sha1 keeps it at 20 bytes.
+	if(CMAKE_SYSTEM_NAME MATCHES "^(Linux|Android|Emscripten)$")
+		# Linkers emit the build id only when asked; sha1 keeps it at 20 bytes.
 		target_link_options(cw INTERFACE -Wl,--build-id=sha1)
 	endif()
 endif()

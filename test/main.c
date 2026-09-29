@@ -3,6 +3,9 @@
  * Test runner, or crash fixture when started by the runner.
  *
  * Usage: cw_test [suite [test]]
+ *
+ * `CW_TEST_SKIP` lists tests to leave out as `suite/test`, separated by
+ * spaces. A test named on the command line runs regardless.
  */
 #include <stdlib.h>
 #include <string.h>
@@ -11,6 +14,28 @@
 #include "scenario.h"
 
 #define BTEST_LOG_DEPTH 1 /* test/main.c */
+
+/**
+ * Whether `list` holds `suite/test` as one of its space-separated words.
+ */
+static bool
+test_listed(const char* list, const char* suite, const char* test) {
+	size_t suite_len = strlen(suite);
+	size_t test_len = strlen(test);
+	while (list != NULL && *list != '\0') {
+		size_t len = strcspn(list, " ");
+		if (
+			len == suite_len + 1 + test_len
+			&& memcmp(list, suite, suite_len) == 0
+			&& list[suite_len] == '/'
+			&& memcmp(list + suite_len + 1, test, test_len) == 0
+		) {
+			return true;
+		}
+		list += len + strspn(list + len, " ");
+	}
+	return false;
+}
 
 int
 main(int argc, const char* argv[]) {
@@ -37,13 +62,20 @@ main(int argc, const char* argv[]) {
 		.with_colors = true,
 	});
 
+	const char* skip = getenv("CW_TEST_SKIP");
 	int num_tests = 0;
 	int num_failed = 0;
+	int num_skipped = 0;
 	BTEST_FOREACH(test) {
 		if (suite_filter != NULL && strcmp(suite_filter, test->suite->name) != 0) {
 			continue;
 		}
 		if (test_filter != NULL && strcmp(test_filter, test->name) != 0) {
+			continue;
+		}
+		if (test_filter == NULL && test_listed(skip, test->suite->name, test->name)) {
+			BLOG_WARN("---- %s/%s: Skipped ----", test->suite->name, test->name);
+			++num_skipped;
 			continue;
 		}
 		++num_tests;
@@ -55,7 +87,11 @@ main(int argc, const char* argv[]) {
 			++num_failed;
 		}
 	}
-	BLOG_INFO("%d/%d tests passed", num_tests - num_failed, num_tests);
+	if (num_skipped > 0) {
+		BLOG_INFO("%d/%d tests passed, %d skipped", num_tests - num_failed, num_tests, num_skipped);
+	} else {
+		BLOG_INFO("%d/%d tests passed", num_tests - num_failed, num_tests);
+	}
 	return num_failed;
 }
 

@@ -1,0 +1,40 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>cw_test</title></head>
+<body>
+<script>
+// Everything the run prints goes to the launcher, in order, as it happens.
+let queue = Promise.resolve();
+const send = (path, body) => { queue = queue.then(() => fetch(path, { method: 'POST', body })); };
+const say = (text) => send('/log', String(text));
+addEventListener('message', (e) => {
+	if (e.data.log !== undefined) {
+		say(e.data.log);
+	}
+});
+addEventListener('error', (e) => say(`runner page: ${e.message}`));
+addEventListener('unhandledrejection', (e) => say(`runner page: ${e.reason}`));
+
+const EXIT_THREW = 70;
+const query = new URLSearchParams(location.search);
+const args = JSON.parse(query.get('args') || '[]');
+const env = JSON.parse(query.get('env') || '{}');
+window.Module = {
+	testRole: 'runner',
+	// The runner is no game.
+	cwRole: 'none',
+	noInitialRun: true,
+	preRun: [() => Object.assign(ENV, env)],
+	print: say,
+	printErr: say,
+	testOnFile: (path, bytes) => send('/file/' + path, bytes),
+	onRuntimeInitialized() {
+		Module.testRun(args)
+			.catch((e) => { say(`runner: ${e}`); return EXIT_THREW; })
+			.then((code) => send('/exit?code=' + code, ''));
+	},
+};
+</script>
+<script src="cw_test.js"></script>
+</body>
+</html>

@@ -1,0 +1,15 @@
+#!/bin/sh
+set -eu
+HERE=$(cd "$(dirname "$0")" && pwd)
+. "$HERE/../env.sh"
+
+command -v emcmake >/dev/null 2>&1 || {
+	echo "emcmake not found; install Emscripten and put it on PATH" >&2
+	exit 1
+}
+
+emcmake cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
+	-DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+	-DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$BIN_DIR" \
+	-DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$BIN_DIR" \
+	-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY="$BIN_DIR"

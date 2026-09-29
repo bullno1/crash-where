@@ -42,6 +42,22 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 	if(MSVC)
 		target_link_options(cw_test PRIVATE /INCREMENTAL:NO)
 	endif()
+elseif(EMSCRIPTEN)
+	target_sources(cw_test PRIVATE web.c)
+	# setjmp through JS would put a JS frame under every test, and the runner
+	# could then not suspend in test_spawn_self().
+	target_compile_options(cw_test PRIVATE -sSUPPORT_LONGJMP=wasm)
+	target_link_options(cw_test PRIVATE
+		-sSUPPORT_LONGJMP=wasm
+		-sENVIRONMENT=web,worker
+		# Module.onExit is how a child reports its exit status.
+		-sEXIT_RUNTIME=1
+		-sSTACK_SIZE=1MB
+		"SHELL:--js-library ${CMAKE_CURRENT_SOURCE_DIR}/web/testlib.js"
+	)
+	set_property(TARGET cw_test APPEND PROPERTY
+		LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/web/testlib.js
+	)
 endif()
 target_include_directories(cw_test PRIVATE
 	${CMAKE_CURRENT_SOURCE_DIR}

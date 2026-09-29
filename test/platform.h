@@ -12,6 +12,10 @@
 #	include <intrin.h>
 #	define TEST_NOINLINE __declspec(noinline)
 #	define TEST_RETURN_ADDRESS() ((uintptr_t)_ReturnAddress())
+#elif defined(__EMSCRIPTEN__)
+#	define TEST_NOINLINE __attribute__((noinline))
+/* A Wasm function cannot read its return address; frames are checked by other means. */
+#	define TEST_RETURN_ADDRESS() ((uintptr_t)0)
 #else
 #	define TEST_NOINLINE __attribute__((noinline))
 #	define TEST_RETURN_ADDRESS() ((uintptr_t)__builtin_return_address(0))
@@ -21,6 +25,10 @@
 #if defined(_WIN32)
 #	define TEST_EXC_SEGV           "EXCEPTION_ACCESS_VIOLATION"
 #	define TEST_EXC_STACK_OVERFLOW "EXCEPTION_STACK_OVERFLOW"
+#	define TEST_EXC_ABORT          "ABORT"
+#elif defined(__EMSCRIPTEN__)
+#	define TEST_EXC_SEGV           "OUT_OF_BOUNDS"
+#	define TEST_EXC_STACK_OVERFLOW "STACK_OVERFLOW"
 #	define TEST_EXC_ABORT          "ABORT"
 #else
 #	define TEST_EXC_SEGV           "SIGSEGV"

@@ -17,7 +17,7 @@
  *
  * The library disables itself when a debugger is attached to the game at
  * @ref cw_init, so that the debugger gets every crash. One attached later
- * changes nothing.
+ * changes nothing. On the web the library stays enabled.
  */
 #ifndef CW_H
 #define CW_H

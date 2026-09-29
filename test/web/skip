@@ -1,0 +1,86 @@
+# Tests cmd/emscripten/test leaves out, one `suite/test` per line.
+#
+# Each group names the first thing in the way, not the only one. Remove a
+# line when its test passes; everything not listed runs. To run the lot:
+#   CW_TEST_SKIP= cmd/emscripten/test
+
+# The scenario crashes by writing through a null pointer. Address 0 is
+# ordinary memory on the web, so nothing traps and nothing is reported.
+auth/watcher_exchanges_proof
+auth/game_supplies_token
+auth/expired_token_is_not_sent
+auth/proof_kept_when_exchange_fails
+auth/refused_token_bounces_once
+consent/ask_keeps_report
+consent/ask_holds_proof_back
+consent/dialog_once
+consent/dialog_never
+consent/dialog_dismissed
+crash/null_write
+crash/null_write_leaf
+crash/upload_retry_keeps_report
+crash/upload_drop_deletes_report
+hang/stall_then_crash
+host/collects_standard_keys
+
+# The report directory of one child is kept for the next. A child's store
+# lives in its watcher's memory and ends with it.
+consent/summary_counts_waiting_reports
+consent/once_releases_waiting_reports
+consent/once_sticks_to_released_reports
+consent/never_purges_and_stops_reporting
+consent/always_persists
+consent/dialog_only_after_own_report
+drain/backlog_drains_after_auth
+drain/backlog_drains_at_exit_without_auth
+drain/stale_report_is_deleted
+
+# Needs a second thread.
+crash/thread_stack_overflow
+crash/thread_null_write
+
+# Stack exhaustion is an error type the shim does not take.
+crash/stack_overflow
+
+# Expects the report of a game that ended without cw_shutdown(). Game and
+# watcher end together on the web.
+crash/exit_without_shutdown
+
+# The watcher inherits CW_DISABLE and returns from cw_init().
+crash/disabled
+
+# A page cannot be put under a debugger from inside, nor tell that it is
+# under one.
+crash/debugger
+crash/debugger_forced
+
+# Hangs are not detected on the web.
+hang/stall_then_exit
+hang/stopped
+
+# The transport sends nothing, and the loopback server needs sockets.
+http/post_carries_body_and_headers
+http/large_body_arrives_intact
+http/get_sends_no_body
+http/error_status_is_passed_through
+http/long_reply_is_truncated_to_cap
+http/redirect_is_not_followed
+http/refused_connection_is_retry
+http/unusable_url_is_drop
+upload/puts_table_to_release_route
+upload/encodes_version_and_channel
+upload/reports_server_refusal
+upload/refuses_incomplete_input
+cli/upload
+cli/upload_requires_token
+cli/upload_reports_refusal
+cli/upload_refuses_prefix
+
+# Reads fixtures, or this executable, from the host's files.
+table/golden
+cli/usage
+cli/dump_matches_golden
+cli/convert
+cli/convert_debug_file
+cli/lookup
+cli/symbolize

@@ -1,0 +1,17 @@
+<!doctype html>
+<html>
+<head><meta charset="utf-8"><title>cw_test scenario</title></head>
+<body>
+<canvas id="canvas"></canvas>
+<script>
+const say = (text) => parent.postMessage({ log: String(text) }, '*');
+window.Module = {
+	testRole: 'child',
+	testEnv: JSON.parse(decodeURIComponent(location.hash.slice(1))),
+	print: say,
+	printErr: say,
+};
+</script>
+<script src="cw_test.js"></script>
+</body>
+</html>
