@@ -162,6 +162,15 @@ test_dialog_show(void* user, const cw_consent_summary_t* summary) {
 	return consent_from_name(user);
 }
 
+/**
+ * Test collectors: each records which slot it ran from, so the runner
+ * can see both in the envelope.
+ */
+static void
+test_collect(void* user) {
+	cw_set_env(user, "1");
+}
+
 int
 test_fixture_main(const char* name) {
 	/* A fresh process, and the watcher after it, so logging starts here. */
@@ -184,6 +193,8 @@ test_fixture_main(const char* name) {
 	cw_transport_t transport = { .send = test_send };
 	const char* dialog_answer = getenv("CW_TEST_DIALOG");
 	cw_consent_dialog_t dialog = { .show = test_dialog_show, .user = (void*)dialog_answer };
+	cw_collector_t at_init = { .collect = test_collect, .user = "collected_at_init" };
+	cw_collector_t at_report = { .collect = test_collect, .user = "collected_at_report" };
 	const char* hang_ms = getenv("CW_TEST_HANG_MS");
 	cw_config_t cfg = {
 		.app = "cw-test",
@@ -194,6 +205,8 @@ test_fixture_main(const char* name) {
 		.hang_timeout_ms = hang_ms != NULL ? (uint32_t)strtoul(hang_ms, NULL, 10) : 0,
 		.transport = &transport,
 		.consent_dialog = dialog_answer != NULL && dialog_answer[0] != '\0' ? &dialog : NULL,
+		.collect_at_init = &at_init,
+		.collect_at_report = &at_report,
 		.log = test_cw_log,
 	};
 	cw_init(&cfg);

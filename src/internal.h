@@ -20,6 +20,7 @@
 #define CW_REGION_MAGIC   0x30575243u /* "CRW0" */
 #define CW_CRUMB_COUNT    128
 #define CW_STATE_COUNT    32
+#define CW_ENV_COUNT      32
 #define CW_MAX_MODULES    64
 #define CW_MAX_FRAMES     64
 #define CW_STR_CAP        256
@@ -65,6 +66,18 @@ typedef struct {
 } cw_state_slot_t;
 
 /**
+ * One key/value environment slot.
+ *
+ * `seq` is 0 when the slot is free, otherwise the stamp of the last
+ * write. Slots are never evicted.
+ */
+typedef struct {
+	_Atomic uint64_t seq;
+	char key[24];
+	char value[96];
+} cw_env_slot_t;
+
+/**
  * Cross-platform head of the shared region.
  */
 typedef struct {
@@ -73,8 +86,10 @@ typedef struct {
 	_Atomic uint32_t heartbeat_tid; /**< Thread of the last cw_heartbeat() call. */
 	_Atomic uint64_t crumb_next;
 	_Atomic uint64_t state_seq;
+	_Atomic uint64_t env_seq;
 	cw_crumb_t crumbs[CW_CRUMB_COUNT];
 	cw_state_slot_t state[CW_STATE_COUNT];
+	cw_env_slot_t env[CW_ENV_COUNT];
 } cw_shared_t;
 
 /**
@@ -89,6 +104,8 @@ typedef struct {
 	char report_dir[CW_STR_CAP]; /**< Resolved report directory; empty until cw_init() accepted the config. */
 	cw_transport_t transport;  /**< Copy of the caller's transport; `cfg.transport` points here or is `NULL`. */
 	cw_consent_dialog_t dialog; /**< Copy of the caller's prompt; `cfg.consent_dialog` points here or is `NULL`. */
+	cw_collector_t collect_at_init;   /**< Copy of the caller's collector; `cfg.collect_at_init` points here or is `NULL`. */
+	cw_collector_t collect_at_report; /**< Copy of the caller's collector; `cfg.collect_at_report` points here or is `NULL`. */
 	cw_shared_t* shared;       /**< Mapped region, or `NULL` when inactive. */
 	bool initialized;          /**< cw_init() has run, whatever the outcome. */
 	bool active;               /**< Capture is armed in this process. */

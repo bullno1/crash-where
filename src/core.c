@@ -95,6 +95,14 @@ cw_init(const cw_config_t* cfg) {
 		cw_ctx.dialog = *cfg->consent_dialog;
 		cw_ctx.cfg.consent_dialog = &cw_ctx.dialog;
 	}
+	if (cfg->collect_at_init != NULL) {
+		cw_ctx.collect_at_init = *cfg->collect_at_init;
+		cw_ctx.cfg.collect_at_init = &cw_ctx.collect_at_init;
+	}
+	if (cfg->collect_at_report != NULL) {
+		cw_ctx.collect_at_report = *cfg->collect_at_report;
+		cw_ctx.cfg.collect_at_report = &cw_ctx.collect_at_report;
+	}
 	if (cw_ctx.cfg.hang_timeout_ms == 0) {
 		cw_ctx.cfg.hang_timeout_ms = CW_HANG_DEFAULT_MS;
 	}
@@ -122,6 +130,9 @@ cw_init(const cw_config_t* cfg) {
 		cw_platform_run_watcher(spec);
 	}
 	cw_ctx.active = cw_platform_run_game();
+	if (cw_ctx.active && cw_ctx.collect_at_init.collect != NULL) {
+		cw_ctx.collect_at_init.collect(cw_ctx.collect_at_init.user);
+	}
 }
 
 void
@@ -257,6 +268,44 @@ cw_set_state(const char* key, const char* value) {
 	}
 
 	uint64_t stamp = atomic_fetch_add_explicit(&shared->state_seq, 1, memory_order_relaxed) + 1;
+	atomic_store_explicit(&slot->seq, 0, memory_order_release);
+	copy_str(slot->key, sizeof(slot->key), key);
+	copy_str(slot->value, sizeof(slot->value), value);
+	atomic_store_explicit(&slot->seq, stamp, memory_order_release);
+}
+
+void
+cw_set_env(const char* key, const char* value) {
+	/* The watcher writes here too, from the report collector, so the gate is the mapping, not `active`. */
+	cw_shared_t* shared = cw_ctx.shared;
+	if (shared == NULL || key == NULL) {
+		return;
+	}
+
+	cw_env_slot_t* slot = NULL;
+	cw_env_slot_t* free_slot = NULL;
+	for (int i = 0; i < CW_ENV_COUNT; ++i) {
+		cw_env_slot_t* s = &shared->env[i];
+		if (atomic_load_explicit(&s->seq, memory_order_acquire) == 0) {
+			if (free_slot == NULL) {
+				free_slot = s;
+			}
+			continue;
+		}
+		if (strncmp(s->key, key, sizeof(s->key)) == 0) {
+			slot = s;
+			break;
+		}
+	}
+	if (slot == NULL) {
+		slot = free_slot;
+	}
+	if (slot == NULL) {
+		cw_log(CW_LOG_WARN, "env '%s' dropped, all %d slots in use", key, CW_ENV_COUNT);
+		return;
+	}
+
+	uint64_t stamp = atomic_fetch_add_explicit(&shared->env_seq, 1, memory_order_relaxed) + 1;
 	atomic_store_explicit(&slot->seq, 0, memory_order_release);
 	copy_str(slot->key, sizeof(slot->key), key);
 	copy_str(slot->value, sizeof(slot->value), value);

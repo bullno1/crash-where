@@ -194,6 +194,26 @@ put_state(FILE* f, const cw_shared_t* shared) {
 	fputs("}", f);
 }
 
+static void
+put_env(FILE* f, const cw_shared_t* shared) {
+	fputs("{", f);
+	bool first = true;
+	for (int i = 0; i < CW_ENV_COUNT; ++i) {
+		const cw_env_slot_t* s = &shared->env[i];
+		if (atomic_load_explicit(&s->seq, memory_order_acquire) == 0) {
+			continue;
+		}
+		if (!first) {
+			fputs(",", f);
+		}
+		first = false;
+		put_str(f, s->key, sizeof(s->key));
+		fputs(":", f);
+		put_str(f, s->value, sizeof(s->value));
+	}
+	fputs("}", f);
+}
+
 /**
  * Emit the file name of a module without its directory; the full
  * path can contain the user name.
@@ -246,6 +266,10 @@ cw_write_envelope(
 	const char* report_dir, const cw_crash_info_t* info,
 	const cw_shared_t* shared, char* out_path, size_t cap
 ) {
+	if (cw_ctx.collect_at_report.collect != NULL) {
+		cw_ctx.collect_at_report.collect(cw_ctx.collect_at_report.user);
+	}
+
 	const char* exe_build_id = info->main_module >= 0 ? info->modules[info->main_module].build_id : "";
 	uint64_t fp = fingerprint(info);
 	long long now = (long long)time(NULL);
@@ -274,7 +298,9 @@ cw_write_envelope(
 	put_str(f, exe_build_id, 41);
 	fputs(",\"channel\":", f);
 	put_str(f, cw_ctx.channel, sizeof(cw_ctx.channel));
-	fputs("},\"exception\":{\"type\":", f);
+	fputs("},\"env\":", f);
+	put_env(f, shared);
+	fputs(",\"exception\":{\"type\":", f);
 	put_str(f, info->type, sizeof(info->type));
 	fputs(",\"message_norm\":", f);
 	put_norm(f, info->message_raw, sizeof(info->message_raw));

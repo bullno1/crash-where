@@ -81,6 +81,8 @@ recurse(int depth) {
 CW_SCENARIO(null_write) {
 	cw_breadcrumb("test", "about to crash");
 	cw_set_state("mode", "null_write");
+	cw_set_env("renderer", "none");
+	cw_set_env("renderer", "test");
 	record_addr("base", test_image_base());
 	record_addr("fn0", (uintptr_t)write_null);
 	level_three(write_null);
@@ -236,6 +238,10 @@ BTEST(crash, null_write) {
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/app/name"), "cw-test") == 0);
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), TEST_EXC_SEGV) == 0);
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/state/mode"), "null_write") == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/env/renderer"), "test") == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/env/collected_at_init"), "1") == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/env/collected_at_report"), "1") == 0);
+	BTEST_EXPECT_EQUAL("%zu", yyjson_obj_size(test_json_get(ev, "/envelope/env")), (size_t)3);
 
 	yyjson_val* crumbs = test_json_get(ev, "/envelope/breadcrumbs");
 	BTEST_ASSERT_EQUAL("%zu", yyjson_arr_size(crumbs), (size_t)1);

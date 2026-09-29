@@ -9,9 +9,6 @@
  * Only the game process returns from @ref cw_init. The watcher will call
  * `exit` and never execute the rest of the program.
  *
- * Everything in this header except the cw_transport_t and
- * cw_consent_dialog_t callbacks runs in the game process.
- *
  * Two environment variables affect behaviour:
  * - `CW_WATCHER` is set by the game on the watcher to carry inherited
  *   handles. Never set it yourself.
@@ -169,6 +166,21 @@ typedef struct {
 } cw_transport_t;
 
 /**
+ * Gathers facts about the run into the report environment.
+ *
+ * The callback writes with cw_set_env(). Which process calls it, and
+ * when, depends on the cw_config_t slot it is plugged into.
+ */
+typedef struct {
+	/**
+	 * @param user  The `user` member of this struct.
+	 */
+	void (*collect)(void* user);
+
+	void* user; /**< Passed unchanged as the first argument of the callback. */
+} cw_collector_t;
+
+/**
  * Initialization parameters for cw_init().
  *
  * Zero-initialize the struct, then set the fields you need.
@@ -199,6 +211,21 @@ typedef struct {
 
 	const cw_transport_t* transport; /**< HTTP transport, or `NULL` to keep reports on disk unsent. */
 	const cw_consent_dialog_t* consent_dialog; /**< Native consent prompt, or `NULL` to ask in game only. */
+
+	/**
+	 * Collector called once from the game at the end of cw_init(),
+	 * before any window or GPU exists. `NULL` collects nothing.
+	 */
+	const cw_collector_t* collect_at_init;
+
+	/**
+	 * Collector called from the watcher before each report is written,
+	 * never from the game. The game is frozen or gone: the callback
+	 * must not signal it, read its memory, or use any of its
+	 * subsystems, and the `user` pointer must be valid in the watcher.
+	 * `NULL` collects nothing.
+	 */
+	const cw_collector_t* collect_at_report;
 
 	/**
 	 * Diagnostic log sink.
@@ -366,6 +393,30 @@ cw_breadcrumb(const char* category, const char* msg);
  */
 void
 cw_set_state(const char* key, const char* value);
+
+/**
+ * Set or overwrite a fact about the environment of this run.
+ *
+ * Environment answers "what machine and configuration was this", for
+ * example `"gpu"` = `"NVIDIA GeForce RTX 3070"` or `"renderer"` =
+ * `"vulkan"`.
+ *
+ * Setting an existing key replaces its value.
+ * There are 32 slots and entries are never evicted.
+ * A new key when all are in use is dropped and logged.
+ * Keys are truncated to 23 bytes and values to 95 bytes.
+ *
+ * Values appear in dashboards, so never put a username, path, or other
+ * personal data in one.
+ *
+ * Same safety guarantees as cw_breadcrumb(). Also callable from a
+ * cw_config_t::collect_at_report callback in the watcher.
+ *
+ * @param key    Slot name.
+ * @param value  New value.
+ */
+void
+cw_set_env(const char* key, const char* value);
 
 /**
  * Publish a binary snapshot such as level state or an RNG seed.
