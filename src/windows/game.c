@@ -272,7 +272,8 @@ cw_platform_shutdown(int result) {
 }
 
 void
-cw_platform_notify_auth(void) {
+cw_platform_notify_auth(unsigned what) {
+	atomic_fetch_or_explicit(&cw_win.region->auth, what, memory_order_release);
 	SetEvent(cw_win.handles.ev_auth);
 }
 

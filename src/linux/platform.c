@@ -19,8 +19,8 @@
 cw_linux_t cw_linux = { .sock = -1 };
 
 void
-cw_platform_notify_auth(void) {
-	cw_send_msg(cw_linux.sock, CW_MSG_AUTH, 0);
+cw_platform_notify_auth(unsigned what) {
+	cw_send_msg(cw_linux.sock, CW_MSG_AUTH, (int32_t)what);
 }
 
 void

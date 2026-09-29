@@ -145,7 +145,7 @@ cw_auth_proof(const char* store, const void* proof, size_t len) {
 		cw_log(CW_LOG_ERROR, "proof for store '%s' (%zu bytes) not stored", store, len);
 		return false;
 	}
-	cw_platform_notify_auth();
+	cw_platform_notify_auth(CW_AUTH_PROOF);
 	return true;
 }
 
@@ -154,7 +154,7 @@ cw_auth_token(const char* token, int64_t expires) {
 	if (!cw_ctx.active || token == NULL || !cw_token_store(token, expires)) {
 		return false;
 	}
-	cw_platform_notify_auth();
+	cw_platform_notify_auth(CW_AUTH_TOKEN);
 	return true;
 }
 

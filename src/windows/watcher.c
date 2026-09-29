@@ -180,7 +180,7 @@ cw_watch(const char* report_dir, cw_drain_t* drain) {
 		if (which == WAIT_OBJECT_0) {
 			cw_drain_consent(drain, (cw_consent_t)atomic_load_explicit(&cw_win.region->consent, memory_order_acquire));
 		} else if (which == WAIT_OBJECT_0 + 1) {
-			cw_drain_auth(drain);
+			cw_drain_auth(drain, atomic_exchange_explicit(&cw_win.region->auth, 0, memory_order_acq_rel));
 		} else if (which == WAIT_OBJECT_0 + 2) {
 			/* Reply first: the game is parked until it hears back. */
 			char path[CW_STR_CAP + 64];

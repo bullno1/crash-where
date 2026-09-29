@@ -225,9 +225,18 @@ cw_platform_attach_thread(void);
 void
 cw_platform_check_handlers(void);
 
-/** Tell the watcher that the token or proof file was rewritten. */
+/**
+ * What the game wrote before sending `auth refreshed`. Bits, since both
+ * may happen before the watcher wakes.
+ */
+typedef enum {
+	CW_AUTH_TOKEN = 1, /**< The token file holds a token the game obtained. */
+	CW_AUTH_PROOF = 2, /**< The proof file holds a new proof to exchange. */
+} cw_auth_event_t;
+
+/** Tell the watcher which authentication files were rewritten. */
 void
-cw_platform_notify_auth(void);
+cw_platform_notify_auth(unsigned what);
 
 /** Tell the watcher the player's decision. */
 void
@@ -410,9 +419,8 @@ cw_pending_summary(cw_consent_summary_t* out);
  */
 typedef struct {
 	cw_consent_t consent;      /**< From the file at start, then from messages. */
-	char token[CW_TOKEN_CAP];  /**< From the file at start and on `auth refreshed`; empty when there is none. */
+	char token[CW_TOKEN_CAP];  /**< From the file at start and when the game refreshes it; empty when there is none. */
 	int64_t token_expires;     /**< Unix seconds. */
-	bool auth_seen;            /**< The game refreshed the token or handed over a proof. */
 	bool proof_failed;         /**< The waiting proof could not be exchanged; not retried until a new one arrives. */
 	bool caught_up;            /**< The backlog was drained once this run. */
 	bool wrote_report;         /**< This run produced a report, so a native prompt is due. */
@@ -438,9 +446,14 @@ cw_drain_accepts(const cw_drain_t* d);
 void
 cw_drain_report(cw_drain_t* d, const char* path);
 
-/** The game sent `auth refreshed`: exchange the proof and drain. */
+/**
+ * The game sent `auth refreshed`: pick up the new token or try the new
+ * proof, then drain.
+ *
+ * @param what  cw_auth_event_t bits.
+ */
 void
-cw_drain_auth(cw_drain_t* d);
+cw_drain_auth(cw_drain_t* d, unsigned what);
 
 /** The game sent `consent(choice)`. */
 void

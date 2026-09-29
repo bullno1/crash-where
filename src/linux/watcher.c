@@ -305,7 +305,7 @@ cw_watch(pid_t game, int sock, const char* report_dir, cw_drain_t* drain) {
 					result = msg.value;
 					break;
 				case CW_MSG_AUTH:
-					cw_drain_auth(drain);
+					cw_drain_auth(drain, (unsigned)msg.value);
 					break;
 				case CW_MSG_CONSENT:
 					cw_drain_consent(drain, (cw_consent_t)msg.value);

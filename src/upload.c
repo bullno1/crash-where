@@ -156,7 +156,7 @@ load_token(cw_drain_t* d) {
 /**
  * Post the auth request body the game left in the report directory and
  * cache the token it buys. A transient failure keeps the proof for the
- * next `auth refreshed` or the next launch, not for the next drain.
+ * proof or the next launch, not for the next drain.
  */
 static void
 exchange_proof(cw_drain_t* d) {
@@ -392,11 +392,14 @@ cw_drain_report(cw_drain_t* d, const char* path) {
 }
 
 void
-cw_drain_auth(cw_drain_t* d) {
-	cw_log(CW_LOG_DEBUG, "auth refreshed");
-	d->auth_seen = true;
-	d->proof_failed = false;
-	load_token(d);
+cw_drain_auth(cw_drain_t* d, unsigned what) {
+	cw_log(CW_LOG_DEBUG, "auth refreshed: %s%s", what & CW_AUTH_TOKEN ? "token " : "", what & CW_AUTH_PROOF ? "proof" : "");
+	if (what & CW_AUTH_TOKEN) {
+		load_token(d);
+	}
+	if (what & CW_AUTH_PROOF) {
+		d->proof_failed = false;
+	}
 	catch_up(d);
 }
 
