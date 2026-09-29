@@ -45,7 +45,7 @@ typedef enum {
 	CWSYM_ERR_IO,          /**< The input cannot be opened or read, or a request failed. */
 	CWSYM_ERR_FORMAT,      /**< Not PE, ELF, Wasm, or `cwsym`, or the file is malformed. */
 	CWSYM_ERR_UNSUPPORTED, /**< The format is recognized but this host has no reader for it, such as PE on Linux. */
-	CWSYM_ERR_NO_DEBUG,    /**< Debug information is missing or unusable: no PDB, GUID/age mismatch, publics-only PDB, ELF with neither DWARF nor `.symtab`. */
+	CWSYM_ERR_NO_DEBUG,    /**< Debug information is missing or unusable: no PDB, GUID/age mismatch, publics-only PDB, ELF with neither DWARF nor `.symtab`, ELF whose linked debug file is missing or of another build. */
 	CWSYM_ERR_NO_BUILD_ID, /**< The input carries no build id. */
 	CWSYM_ERR_INVALID,     /**< A table invariant is broken: empty, overlapping ranges, bad nesting, wrong `rules`, string out of bounds, or a builder used out of order. */
 	CWSYM_ERR_NOMEM,
@@ -168,8 +168,11 @@ typedef struct {
  * The format is detected by magic. `path` names the executable: on PE the
  * PDB is located beside it through its CodeView record and a GUID/age
  * mismatch is ::CWSYM_ERR_NO_DEBUG; on ELF it may also be the `.debug`
- * file from `objcopy --only-keep-debug`. Functions without DWARF entries
- * fall back to `.symtab`. Names are copied verbatim from the debug info's
+ * file from `objcopy --only-keep-debug`. An ELF executable without DWARF
+ * that carries a `.gnu_debuglink` is read from the file the link names,
+ * which must sit beside the file `path` resolves to and carry the same
+ * build id; anything else is ::CWSYM_ERR_NO_DEBUG. Functions without DWARF entries fall back to
+ * `.symtab`. Names are copied verbatim from the debug info's
  * scope tree; nothing is demangled. Wasm yields no lines or sites.
  *
  * @param opts  Extra inputs, or `NULL` for the defaults.

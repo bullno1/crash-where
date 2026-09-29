@@ -51,6 +51,10 @@ target_include_directories(cw_test PRIVATE
 target_link_libraries(cw_test PRIVATE cw cw_http cw_host cw_sym cwsym_cli)
 # Golden files shared with the Worker repository; see test/table.c.
 target_compile_definitions(cw_test PRIVATE TEST_FIXTURE_DIR="${CMAKE_CURRENT_SOURCE_DIR}/fixtures")
+# Set by a toolchain that moves debug info into a file beside the binary.
+if(CW_SPLIT_DEBUG_SUFFIX)
+	target_compile_definitions(cw_test PRIVATE TEST_DEBUG_FILE="$<TARGET_FILE:cw_test>${CW_SPLIT_DEBUG_SUFFIX}")
+endif()
 
 if(MSVC)
 	target_compile_definitions(cw_test PRIVATE _CRT_SECURE_NO_WARNINGS)

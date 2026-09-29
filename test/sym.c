@@ -6,6 +6,7 @@
  */
 #include <stdint.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include <string.h>
 
 #include <blog.h>
@@ -289,6 +290,100 @@ BTEST(sym, rejects_foreign_files) {
 	fclose(f);
 	BTEST_EXPECT_EQUAL("%d", cwsym_read("work/not-a-debug-file.txt", NULL, &sink, &log), CWSYM_ERR_FORMAT);
 }
+
+/* Linked debug file {{{ */
+
+/* Only a build that splits its debug info names the file. */
+#ifdef TEST_DEBUG_FILE
+
+/** Contents of `path`, or `NULL` when it cannot be read. The caller frees them. */
+static uint8_t*
+read_bytes(const char* path, size_t* len) {
+	FILE* f = fopen(path, "rb");
+	if (f == NULL) {
+		return NULL;
+	}
+	fseek(f, 0, SEEK_END);
+	long size = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	uint8_t* data = size > 0 ? malloc((size_t)size) : NULL;
+	if (data != NULL && fread(data, 1, (size_t)size, f) != (size_t)size) {
+		free(data);
+		data = NULL;
+	}
+	fclose(f);
+	*len = data != NULL ? (size_t)size : 0;
+	return data;
+}
+
+static bool
+write_bytes(const char* path, const uint8_t* data, size_t len) {
+	FILE* f = fopen(path, "wb");
+	if (f == NULL) {
+		return false;
+	}
+	bool ok = fwrite(data, 1, len, f) == len;
+	return fclose(f) == 0 && ok;
+}
+
+/** First occurrence of `needle` in `data`, or `NULL`. */
+static uint8_t*
+find_bytes(uint8_t* data, size_t len, const uint8_t* needle, size_t needle_len) {
+	for (size_t i = 0; i + needle_len <= len; ++i) {
+		if (memcmp(data + i, needle, needle_len) == 0) {
+			return data + i;
+		}
+	}
+	return NULL;
+}
+
+/**
+ * A copy of this executable finds its debug file beside itself, and the
+ * read fails when that file is absent or of another build.
+ */
+BTEST(sym, follows_debug_link) {
+	size_t debug_len;
+	uint8_t* debug = read_bytes(TEST_DEBUG_FILE, &debug_len);
+	BTEST_ASSERT(debug != NULL);
+	size_t exe_len;
+	uint8_t* exe = read_bytes(self_path(), &exe_len);
+	BTEST_ASSERT(exe != NULL);
+
+	cwsym_log_t log = { .log = on_log };
+	capture_t c = { 0 };
+	cwsym_sink_t sink = { .begin = on_begin, .symbol = on_symbol, .line = on_line, .user = &c };
+	BTEST_ASSERT_EQUAL("%d", cwsym_read(self_path(), NULL, &sink, &log), CWSYM_OK);
+	uint8_t* id = find_bytes(debug, debug_len, c.mod.build_id, c.mod.build_id_len);
+	BTEST_ASSERT(id != NULL);
+
+	/* The link holds the debug file's name; the executable's is free. */
+	const char* name = strrchr(TEST_DEBUG_FILE, '/');
+	BTEST_ASSERT(name != NULL);
+	const char* exe_copy = "work/sym/exe";
+	char debug_copy[256];
+	snprintf(debug_copy, sizeof(debug_copy), "work/sym%s", name);
+	BTEST_ASSERT(test_remove_tree("work/sym") && test_mkdir("work") && test_mkdir("work/sym"));
+	BTEST_ASSERT(write_bytes(exe_copy, exe, exe_len));
+
+	BTEST_EXPECT_EQUAL("%d", cwsym_read(exe_copy, NULL, &sink, &log), CWSYM_ERR_NO_DEBUG);
+
+	id[0] ^= 0xff;
+	BTEST_ASSERT(write_bytes(debug_copy, debug, debug_len));
+	BTEST_EXPECT_EQUAL("%d", cwsym_read(exe_copy, NULL, &sink, &log), CWSYM_ERR_NO_DEBUG);
+
+	id[0] ^= 0xff;
+	BTEST_ASSERT(write_bytes(debug_copy, debug, debug_len));
+	c = (capture_t){ 0 };
+	BTEST_EXPECT_EQUAL("%d", cwsym_read(exe_copy, NULL, &sink, &log), CWSYM_OK);
+	BTEST_EXPECT_RELATION("%zu", c.lines, >, 1000u);
+
+	free(exe);
+	free(debug);
+}
+
+#endif /* TEST_DEBUG_FILE */
+
+/* }}} */
 
 /* C++ names {{{ */
 

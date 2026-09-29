@@ -92,6 +92,7 @@ static struct {
 	__typeof__(dwarf_getsrcfiles)* dwarf_getsrcfiles;
 	__typeof__(dwarf_filesrc)* dwarf_filesrc;
 	__typeof__(dwelf_elf_gnu_build_id)* dwelf_elf_gnu_build_id;
+	__typeof__(dwelf_elf_gnu_debuglink)* dwelf_elf_gnu_debuglink;
 } dw;
 
 /** Resolve `NAME` from `LIB` into the member of the same name; false when it is missing. */
@@ -152,7 +153,8 @@ load(const cwsym_log_t* log) {
 		&& DW_SYM(libdw, dwarf_lineendsequence)
 		&& DW_SYM(libdw, dwarf_getsrcfiles)
 		&& DW_SYM(libdw, dwarf_filesrc)
-		&& DW_SYM(libdw, dwelf_elf_gnu_build_id);
+		&& DW_SYM(libdw, dwelf_elf_gnu_build_id)
+		&& DW_SYM(libdw, dwelf_elf_gnu_debuglink);
 	if (!ok) {
 		cwsym_logf(log, "libdw is missing a required symbol: %s", dlerror());
 		goto fail;
@@ -225,7 +227,10 @@ typedef struct {
 	const char* path;
 	const cwsym_sink_t* sink;
 	const cwsym_log_t* log;
-	Elf* elf;
+	Elf* elf;                 /**< Where DWARF and `.symtab` are read from. */
+	Elf* exe;                 /**< The input when `elf` is its debug file, else `NULL`. */
+	int debug_fd;
+	char* debug_path;
 	Dwarf* dwarf;
 	uint64_t base;            /**< Address the client's offsets are relative to. */
 	bool stopped;             /**< A callback returned `false`. */
@@ -878,6 +883,48 @@ inspect_sections(reader_t* r, bool* has_dwarf, bool* has_symtab) {
 	}
 }
 
+/**
+ * Switch the read to the file `link` names beside the input, where the
+ * input is what its path resolves to. The file must carry the input's
+ * build id.
+ */
+static cwsym_status_t
+follow_debuglink(reader_t* r, const char* link, const cwsym_module_t* mod) {
+	char* real = realpath(r->path, NULL);
+	const char* exe = real != NULL ? real : r->path;
+	const char* slash = strrchr(exe, '/');
+	size_t dir_len = slash != NULL ? (size_t)(slash - exe) + 1 : 0;
+	size_t cap = dir_len + strlen(link) + 1;
+	r->debug_path = malloc(cap);
+	if (r->debug_path != NULL) {
+		snprintf(r->debug_path, cap, "%.*s%s", (int)dir_len, exe, link);
+	}
+	free(real);
+	if (r->debug_path == NULL) {
+		return CWSYM_ERR_NOMEM;
+	}
+
+	r->debug_fd = open(r->debug_path, O_RDONLY);
+	if (r->debug_fd < 0) {
+		cwsym_logf(r->log, "%s: debug file %s: %s", r->path, r->debug_path, strerror(errno));
+		return CWSYM_ERR_NO_DEBUG;
+	}
+	Elf* debug = dw.elf_begin(r->debug_fd, ELF_C_READ, NULL);
+	const void* id;
+	ssize_t id_len = debug != NULL ? dw.dwelf_elf_gnu_build_id(debug, &id) : -1;
+	if (id_len != (ssize_t)mod->build_id_len || memcmp(id, mod->build_id, (size_t)id_len) != 0) {
+		cwsym_logf(r->log, "%s: debug file %s is of another build", r->path, r->debug_path);
+		if (debug != NULL) {
+			dw.elf_end(debug);
+		}
+		return CWSYM_ERR_NO_DEBUG;
+	}
+	r->exe = r->elf;
+	r->elf = debug;
+	r->path = r->debug_path;
+	return CWSYM_OK;
+}
+
 cwsym_status_t
 cwsym_read_elf(
 	const char* path, const cwsym_read_options_t* opts,
@@ -890,7 +937,7 @@ cwsym_read_elf(
 	load_demangler(log);
 
 	cwsym_status_t status = CWSYM_ERR_FORMAT;
-	reader_t r = { .path = path, .sink = sink, .log = log };
+	reader_t r = { .path = path, .sink = sink, .log = log, .debug_fd = -1 };
 	int fd = open(path, O_RDONLY);
 	if (fd < 0) {
 		cwsym_logf(log, "%s: %s", path, strerror(errno));
@@ -951,15 +998,25 @@ cwsym_read_elf(
 	bool has_dwarf;
 	bool has_symtab;
 	inspect_sections(&r, &has_dwarf, &has_symtab);
+	GElf_Word crc;
+	const char* link = has_dwarf ? NULL : dw.dwelf_elf_gnu_debuglink(r.elf, &crc);
+	if (link != NULL) {
+		status = follow_debuglink(&r, link, &mod);
+		if (status != CWSYM_OK) {
+			goto done;
+		}
+		status = CWSYM_ERR_FORMAT;
+		inspect_sections(&r, &has_dwarf, &has_symtab);
+	}
 	if (!has_dwarf && !has_symtab) {
-		cwsym_logf(log, "%s: neither DWARF nor .symtab; build with -g or keep the .debug file", path);
+		cwsym_logf(log, "%s: neither DWARF nor .symtab; build with -g or keep the .debug file", r.path);
 		status = CWSYM_ERR_NO_DEBUG;
 		goto done;
 	}
 	if (has_dwarf) {
 		r.dwarf = dw.dwarf_begin_elf(r.elf, DWARF_C_READ, NULL);
 		if (r.dwarf == NULL) {
-			cwsym_logf(log, "%s: cannot read DWARF: %s", path, dw.dwarf_errmsg(-1));
+			cwsym_logf(log, "%s: cannot read DWARF: %s", r.path, dw.dwarf_errmsg(-1));
 			goto done;
 		}
 	}
@@ -986,6 +1043,13 @@ done:
 	if (r.elf != NULL) {
 		dw.elf_end(r.elf);
 	}
+	if (r.exe != NULL) {
+		dw.elf_end(r.exe);
+	}
+	if (r.debug_fd >= 0) {
+		close(r.debug_fd);
+	}
+	free(r.debug_path);
 	close(fd);
 	return status;
 }

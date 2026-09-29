@@ -4,7 +4,9 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../env.sh"
 
 cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
+	--toolchain "$ROOT/cmake/gcc.cmake" \
 	-DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+	-DCW_SPLIT_DEBUG="${CW_SPLIT_DEBUG:-ON}" \
 	-DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$BIN_DIR" \
 	-DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$BIN_DIR" \
 	-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY="$BIN_DIR"
