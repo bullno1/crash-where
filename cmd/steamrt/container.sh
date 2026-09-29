@@ -6,6 +6,7 @@ if ! grep -q '^ID=steamrt$' /etc/os-release 2>/dev/null; then
 	[ -t 0 ] && tty="-t"
 	exec "${STEAMRT_RUNTIME:-podman}" run --rm -i $tty \
 		-v "$ROOT:$ROOT" -w "$PWD" -e BUILD_TYPE="$BUILD_TYPE" \
+		-e CW_SPLIT_DEBUG="${CW_SPLIT_DEBUG:-ON}" \
 		"${STEAMRT_IMAGE:-registry.gitlab.steamos.cloud/steamrt/steamrt4/sdk:latest}" \
 		"$0" "$@"
 fi
