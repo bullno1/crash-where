@@ -336,7 +336,9 @@ cw_drain_accepts(const cw_drain_t* d) {
  * This is the only place the proof is exchanged.
  */
 static void
-drain_pending(cw_drain_t* d) {
+catch_up(cw_drain_t* d) {
+	d->caught_up = true;
+
 	if (d->consent == CW_CONSENT_NEVER) {
 		return;
 	}
@@ -371,12 +373,6 @@ drain_pending(cw_drain_t* d) {
 			upload_report(d, &list[i]);
 		}
 	}
-}
-
-static void
-catch_up(cw_drain_t* d) {
-	d->caught_up = true;
-	drain_pending(d);
 }
 
 void
