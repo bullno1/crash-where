@@ -380,6 +380,105 @@ addToLibrary({
 			};
 		},
 
+		// Function index to the file offset of the function's first
+		// instruction, for an engine that prints no offset. From the binary
+		// the game already downloaded, read again on the first report that
+		// needs it; null when it cannot be read.
+		async loadOffsets() {
+			if (cwWeb.offsets !== undefined) {
+				return;
+			}
+			cwWeb.offsets = null;
+			try {
+				const bytes = Module['wasmBinary']
+					? new Uint8Array(Module['wasmBinary'])
+					: new Uint8Array(await (await fetch(findWasmBinary(), { credentials: 'same-origin' })).arrayBuffer());
+				cwWeb.offsets = cwWeb.parseOffsets(bytes);
+			} catch (e) {
+				err(`crash reporter: function offsets unknown: ${e}`);
+			}
+		},
+
+		// Walks the import and code sections. Throws on a shape it does
+		// not know, rather than guess at offsets.
+		parseOffsets(b) {
+			let p = 8;
+			const leb = () => {
+				let v = 0;
+				let shift = 0;
+				let c;
+				do {
+					c = b[p++];
+					v += (c & 0x7f) * 2 ** shift;
+					shift += 7;
+				} while (c & 0x80);
+				return v;
+			};
+			// A value type: one byte, or a reference type with a heap type after it.
+			const type = () => {
+				const t = b[p++];
+				if (t === 0x63 || t === 0x64) {
+					leb();
+				}
+			};
+			const limits = () => {
+				const flags = b[p++];
+				leb();
+				if (flags & 1) {
+					leb();
+				}
+			};
+			let imports = 0;
+			while (p < b.length) {
+				const id = b[p++];
+				const size = leb();
+				const end = p + size;
+				if (id === 2) {
+					for (let n = leb(); n > 0; --n) {
+						// Module and field names.
+						for (let k = 0; k < 2; ++k) {
+							const len = leb();
+							p += len;
+						}
+						const kind = b[p++];
+						if (kind === 0) {
+							leb();
+							++imports;
+						} else if (kind === 1) {
+							type();
+							limits();
+						} else if (kind === 2) {
+							limits();
+						} else if (kind === 3) {
+							type();
+							++p;
+						} else if (kind === 4) {
+							++p;
+							leb();
+						} else {
+							throw new Error(`import kind ${kind}`);
+						}
+					}
+				} else if (id === 10) {
+					const offsets = [];
+					for (let n = leb(); n > 0; --n) {
+						const size = leb();
+						const start = p;
+						// Past the locals.
+						for (let l = leb(); l > 0; --l) {
+							leb();
+							type();
+						}
+						offsets.push(p);
+						p = start + size;
+					}
+					return { imports, offsets };
+				}
+				p = end;
+			}
+			throw new Error('no code section');
+		},
+
 		// One call into the instance at a time: a suspended call leaves its
 		// frames on the C stack, and a second call would run over them.
 		enqueue(m) {
@@ -397,6 +496,10 @@ addToLibrary({
 			};
 			if (m['report']) {
 				const r = m['report'];
+				// An engine that names a frame by function index alone.
+				if (/wasm-function\[\d+\](?!:0x)/.test(r['stack'])) {
+					await cwWeb.loadOffsets();
+				}
 				const message = stringToNewUTF8(r['message']);
 				const stack = stringToNewUTF8(r['stack']);
 				const region = _malloc(r['region'].length);
@@ -529,6 +632,13 @@ addToLibrary({
 		const len = Math.min(bytes[0], bytes.length - 1, cap);
 		HEAPU8.set(bytes.subarray(1, 1 + len), out);
 		return len;
+	},
+
+	cw_web_function_offset__deps: ['$cwWeb'],
+	cw_web_function_offset: (index) => {
+		const table = cwWeb.offsets;
+		const i = table ? index - table.imports : -1;
+		return i >= 0 && i < table.offsets.length ? table.offsets[i] : 0;
 	},
 
 	cw_web_module_name__deps: ['$stringToUTF8', '$lengthBytesUTF8'],

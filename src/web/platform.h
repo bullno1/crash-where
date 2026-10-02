@@ -148,11 +148,20 @@ cw_web_store_lock(const char* path);
 /* Stack text. */
 
 /**
+ * File offset of the first instruction of the function at `index`, for
+ * a frame printed by index alone; 0 when unknown.
+ */
+uint32_t
+cw_web_function_offset(uint32_t index);
+
+/**
  * Frames of a stack text, innermost first.
  *
- * Takes every `wasm-function[N]:0x...` token, which V8 and SpiderMonkey
- * both print, and ignores the rest of each line. Every frame belongs to
- * module 0 and its offset counts from the start of the file.
+ * Takes every `wasm-function[N]` token and ignores the rest of each
+ * line. V8 and SpiderMonkey follow it with `:0x` and the offset of the
+ * instruction; JavaScriptCore prints the index alone, and such a frame
+ * gets the offset of its function's first instruction. Every frame
+ * belongs to module 0 and its offset counts from the start of the file.
  *
  * @return The number of frames written to `frames`, at most `cap`.
  */

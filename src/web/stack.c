@@ -15,21 +15,26 @@ cw_web_parse_stack(const char* stack, cw_frame_t* frames, int cap) {
 	const char* p = stack;
 	while (count < cap && (p = strstr(p, token)) != NULL) {
 		p += sizeof(token) - 1;
-		/* The function index; the offset alone names the place. */
-		while (*p >= '0' && *p <= '9') {
-			++p;
-		}
-		if (p[0] != ']' || p[1] != ':' || p[2] != '0' || p[3] != 'x') {
-			continue;
-		}
-		p += 4;
 		char* end;
-		unsigned long long offset = strtoull(p, &end, 16);
-		if (end == p) {
+		unsigned long index = strtoul(p, &end, 10);
+		if (end == p || *end != ']') {
 			continue;
+		}
+		p = end + 1;
+		unsigned long long offset;
+		if (p[0] == ':' && p[1] == '0' && p[2] == 'x') {
+			offset = strtoull(p + 3, &end, 16);
+			if (end == p + 3) {
+				continue;
+			}
+			p = end;
+		} else {
+			offset = cw_web_function_offset((uint32_t)index);
+			if (offset == 0) {
+				continue;
+			}
 		}
 		frames[count++] = (cw_frame_t){ .module = 0, .offset = offset };
-		p = end;
 	}
 	return count;
 }
