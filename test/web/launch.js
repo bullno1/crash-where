@@ -1,4 +1,4 @@
-// Runs cw_test in a headless browser and exits with its status.
+// Runs cw_test in a browser and exits with its status.
 //
 // usage: node launch.js --bin <dir> --work <dir> --browser <name>[=<command>] [suite [test]]
 //
@@ -6,8 +6,14 @@
 // logs as it arrives, and keeps the run directories the page hands back
 // under <work>. Also starts the HTTP servers the transport tests ask
 // for. Needs nothing beyond Node.
+//
+// Chromium and Firefox run headless, from the command line. Safari has
+// no headless mode and takes no URL on its command line: it is driven
+// over WebDriver through safaridriver, whose <command> is then the
+// driver, not the browser.
 const fs = require('fs');
 const http = require('http');
+const net = require('net');
 const path = require('path');
 const { spawn } = require('child_process');
 
@@ -29,7 +35,7 @@ if (!opts.bin || !opts.work || !opts.browser) {
 	console.error('usage: node launch.js --bin <dir> --work <dir> --browser <name>[=<command>] [suite [test]]');
 	process.exit(2);
 }
-const [browser, command = browser] = opts.browser.split('=');
+const [browser, command = browser === 'safari' ? 'safaridriver' : browser] = opts.browser.split('=');
 
 const PAGES = { '/runner.html': 'runner.html', '/child.html': 'child.html' };
 const TYPES = {
@@ -42,6 +48,9 @@ fs.rmSync(profile, { recursive: true, force: true });
 fs.mkdirSync(profile, { recursive: true });
 
 let child;
+// Closes the browser before the process it came from is killed; set by
+// the way the browser was started, when a kill alone does not close it.
+let close = async () => {};
 let finished = false;
 function finish(code) {
 	if (finished) {
@@ -49,12 +58,16 @@ function finish(code) {
 	}
 	finished = true;
 	clearTimeout(idle);
-	child?.kill('SIGKILL');
-	// The browser may still be writing its profile.
-	setTimeout(() => {
-		fs.rmSync(profile, { recursive: true, force: true });
-		process.exit(code);
-	}, 300);
+	// Bounded: the browser is killed either way.
+	const grace = new Promise((resolve) => setTimeout(resolve, 3000));
+	Promise.race([close().catch(() => {}), grace]).then(() => {
+		child?.kill('SIGKILL');
+		// The browser may still be writing its profile.
+		setTimeout(() => {
+			fs.rmSync(profile, { recursive: true, force: true });
+			process.exit(code);
+		}, 300);
+	});
 }
 
 function body(req, fn) {
@@ -194,11 +207,69 @@ const server = http.createServer((req, res) => {
 	res.end(content);
 });
 
-server.listen(0, '127.0.0.1', () => {
-	// The runner sees the test variables of this process, as a native one would.
-	const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('CW_TEST_')));
-	const query = new URLSearchParams({ args: JSON.stringify(opts.args), env: JSON.stringify(env) });
-	const url = `http://127.0.0.1:${server.address().port}/runner.html?${query}`;
+// One request to a WebDriver server; resolves to the `value` it answers.
+function webdriver(port, method, route, data) {
+	return new Promise((resolve, reject) => {
+		const req = http.request({ host: '127.0.0.1', port, method, path: route, headers: { 'Content-Type': 'application/json' } }, (res) => {
+			body(res, (b) => {
+				const reply = b.length ? JSON.parse(b.toString()) : {};
+				if (res.statusCode >= 400) {
+					reject(new Error(reply.value?.message || `${method} ${route}: ${res.statusCode}`));
+				} else {
+					resolve(reply.value);
+				}
+			});
+		});
+		req.on('error', reject);
+		req.end(data === undefined ? undefined : JSON.stringify(data));
+	});
+}
+
+// A port nothing listens on right now.
+function freePort() {
+	return new Promise((resolve, reject) => {
+		const probe = net.createServer();
+		probe.on('error', reject);
+		probe.listen(0, '127.0.0.1', () => {
+			const { port } = probe.address();
+			probe.close(() => resolve(port));
+		});
+	});
+}
+
+// Opens `url` in a WebDriver session of safaridriver. The session's
+// window starts clean and shares nothing with the user's own browsing,
+// like a private window; deleting the session closes it. Safari must
+// have been allowed once: `safaridriver --enable`.
+async function startSafari(url) {
+	const port = await freePort();
+	child = spawn(command, ['-p', String(port)], { stdio: 'ignore' });
+	const died = new Promise((resolve) => {
+		child.on('error', (e) => resolve(`cannot start ${command}: ${e.message}`));
+		child.on('exit', (code) => resolve(`${command} exited with ${code}`));
+	});
+	// Until the driver answers, or dies.
+	for (let tries = 0; ; ++tries) {
+		const result = await Promise.race([
+			webdriver(port, 'GET', '/status').then(() => null, (e) => e),
+			died,
+		]);
+		if (result === null) {
+			break;
+		}
+		if (typeof result === 'string' || tries >= 100) {
+			throw new Error(typeof result === 'string' ? result : `${command} does not answer on port ${port}`);
+		}
+		await new Promise((resolve) => setTimeout(resolve, 100));
+	}
+	const session = await webdriver(port, 'POST', '/session', {
+		capabilities: { alwaysMatch: { browserName: 'safari' } },
+	});
+	close = () => webdriver(port, 'DELETE', `/session/${session.sessionId}`);
+	await webdriver(port, 'POST', `/session/${session.sessionId}/url`, { url });
+}
+
+function startHeadless(url) {
 	const flags = browser === 'firefox'
 		? ['--headless', '--no-remote', '--profile', profile, url]
 		// No sandbox: containers and CI runners cannot create one.
@@ -208,5 +279,20 @@ server.listen(0, '127.0.0.1', () => {
 		console.error(`cannot start ${command}: ${e.message}`);
 		finish(EXIT_NO_BROWSER);
 	});
+}
+
+server.listen(0, '127.0.0.1', () => {
+	// The runner sees the test variables of this process, as a native one would.
+	const env = Object.fromEntries(Object.entries(process.env).filter(([k]) => k.startsWith('CW_TEST_')));
+	const query = new URLSearchParams({ args: JSON.stringify(opts.args), env: JSON.stringify(env) });
+	const url = `http://127.0.0.1:${server.address().port}/runner.html?${query}`;
+	if (browser === 'safari') {
+		startSafari(url).catch((e) => {
+			console.error(`cannot start safari: ${e.message}`);
+			finish(EXIT_NO_BROWSER);
+		});
+	} else {
+		startHeadless(url);
+	}
 	alive();
 });

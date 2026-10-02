@@ -1,6 +1,6 @@
 # Web test harness
 
-Runs `cw_test`, the same test binary as on every other platform, inside a headless browser.
+Runs `cw_test`, the same test binary as on every other platform, inside a browser.
 Nothing here is a second test suite: the tests are the shared ones under `test/`, and this directory supplies what `test/platform.h` needs from a browser.
 
 ```
@@ -28,7 +28,7 @@ It is not test code, but a child cannot run without it.
 cmd/emscripten/test
 └─ node launch.js              one per browser
    ├─ HTTP server on 127.0.0.1, any free port
-   └─ headless browser
+   └─ browser
       └─ runner.html           cw_test as the runner, shim off
          └─ child.html         cw_test as the game, one frame per scenario
             └─ Worker          cw_test as the watcher, started by the shim
@@ -143,8 +143,9 @@ The page talks back through these requests:
 | `GET /http/<id>/request/<n>` | The `<n>`th request it recorded, as JSON |
 | `POST /http/<id>/stop` | Close that server |
 
-The browser gets a fresh profile under `<work>`, removed afterwards.
+Chromium and Firefox run headless and get a fresh profile under `<work>`, removed afterwards.
 Chromium runs without its sandbox, since containers and CI runners cannot create one.
+Safari has no headless mode and takes no URL on its command line so `safaridriver` is used instead.
 
 | Exit status | Meaning |
 |---|---|
@@ -158,7 +159,7 @@ Chromium runs without its sandbox, since containers and CI runners cannot create
 
 | Variable | Meaning |
 |---|---|
-| `CW_TEST_BROWSERS` | Browsers to run in, separated by spaces: `chromium`, `firefox`, each optionally `<name>=<command>`. Unset: each of them found on `PATH`. |
+| `CW_TEST_BROWSERS` | Browsers to run in, separated by spaces: `chromium`, `firefox`, `safari`, each optionally `<name>=<command>`. Unset: each of them found on `PATH`, Safari by `safaridriver`. |
 | `CW_TEST_SKIP` | Tests to leave out, as `suite/test` separated by spaces. Unset: the contents of `skip`. Set to nothing: run everything. |
 | `CW_TEST_WEB_TRANSPORT` | `xhr` makes the transport send synchronously, the way it does in a browser that cannot suspend. Unset: `fetch`. |
 
@@ -181,9 +182,10 @@ A run of everything, with no suite named, also runs the `http` suite a second ti
 
 ## Requirements and limits
 
-- Node, and Chromium or Firefox.
-  The browser must support JavaScript Promise Integration: Chrome 137 or Firefox 153, and later.
+- Node, and Chromium, Firefox or Safari.
+  The browser must support JavaScript Promise Integration: Chrome 137, Firefox 153 or Safari 27, and later.
   The launcher knows how to start no other browser.
+- Safari runs on macOS alone, in a visible window, one session at a time.
 - A browser that dies takes its status with it.
   The launcher then waits out the 60 s and exits with 124.
 - There is no mode that leaves the page open for developer tools.

@@ -103,7 +103,8 @@ addToLibrary({
 				handle.flush();
 				handle.close();
 				if (renames) {
-					await file.move(name);
+					// With the directory: the name alone is not accepted everywhere.
+					await file.move(dir, name);
 				} else {
 					await dir.removeEntry(name + cwStore.PARTIAL);
 				}

@@ -43,17 +43,31 @@ jobs:
 
   web:
     name: emscripten (${{ matrix.browser }})
-    runs-on: ubuntu-24.04
+    runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
-        browser: [chromium, firefox]
+        include:
+          - browser: chromium
+            os: ubuntu-24.04
+          - browser: firefox
+            os: ubuntu-24.04
+          - browser: safari
+            # Safari 27 is the first with JavaScript Promise Integration,
+            # which the test runner needs. The macOS 26 images carry Safari
+            # 26; this preview image, macOS 27, carries 27.
+            os: xcode-27
     steps:
       - uses: actions/checkout@v4
       - name: Install Emscripten
         uses: emscripten-core/setup-emsdk@v16
         with:
           version: 6.0.10
+      - name: Allow remote automation of Safari
+        if: matrix.browser == 'safari'
+        # Safari has no headless mode; the launcher drives it through
+        # safaridriver, which Safari must have been told once to accept.
+        run: sudo safaridriver --enable
       - name: Build and test
         env:
           # Named, so that a missing browser fails the job. Left unset, the

@@ -1,7 +1,8 @@
 #!/bin/sh
 # Runs cw_test in every browser named by CW_TEST_BROWSERS, a space
-# separated list of chromium and firefox, each optionally as
-# <name>=<command>. Unset, every one of them found on PATH.
+# separated list of chromium, firefox and safari, each optionally as
+# <name>=<command>. Unset, every one of them found on PATH; safari by
+# its driver, safaridriver, which must have been enabled once.
 #
 # Leaves out the tests listed in test/web/skip, unless CW_TEST_SKIP is
 # set, even to nothing. A test named on the command line always runs.
@@ -35,6 +36,9 @@ if [ -z "${CW_TEST_BROWSERS:-}" ]; then
 	done
 	if command -v firefox >/dev/null 2>&1; then
 		CW_TEST_BROWSERS="$CW_TEST_BROWSERS firefox"
+	fi
+	if command -v safaridriver >/dev/null 2>&1; then
+		CW_TEST_BROWSERS="$CW_TEST_BROWSERS safari"
 	fi
 fi
 if [ -z "$(echo "$CW_TEST_BROWSERS" | tr -d ' ')" ]; then
