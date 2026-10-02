@@ -54,9 +54,11 @@ elseif(EMSCRIPTEN)
 		-sEXIT_RUNTIME=1
 		-sSTACK_SIZE=1MB
 		"SHELL:--js-library ${CMAKE_CURRENT_SOURCE_DIR}/web/testlib.js"
+		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/fixtures@${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
 	)
+	file(GLOB TEST_FIXTURES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/*)
 	set_property(TARGET cw_test APPEND PROPERTY
-		LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/web/testlib.js
+		LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/web/testlib.js ${TEST_FIXTURES}
 	)
 endif()
 target_include_directories(cw_test PRIVATE

@@ -45,14 +45,6 @@ hang/stopped
 # The host backend records nothing.
 host/collects_standard_keys
 
-# Reads fixtures, or this executable, from the host's files.
-table/golden
-cli/usage
-cli/dump_matches_golden
-cli/convert
+# Converts this executable. A page has no file for it, and the Wasm reader
+# is not written.
 cli/convert_debug_file
-cli/lookup
-cli/symbolize
-cli/upload
-cli/upload_reports_refusal
-cli/upload_refuses_prefix

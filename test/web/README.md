@@ -101,6 +101,8 @@ Only the watcher's files come back.
 The game's own copy of the store does not.
 Nothing travels the other way either: a child's store always starts empty, so tests that keep a report directory from one child to the next cannot pass yet.
 
+The fixtures under `test/fixtures` is preloaded into the test.
+
 The runner also posts each file to the launcher, which writes it under `.build/emscripten/<config>/test/work/<browser>/`.
 For inspection, the event log of a test is then at `.build/emscripten/<config>/test/work/<browser>/work/<test>/events.jsonl`.
 
