@@ -41,6 +41,26 @@ jobs:
       - name: Build and test
         run: cmd/steamrt/test
 
+  web:
+    name: emscripten (${{ matrix.browser }})
+    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        browser: [chromium, firefox]
+    steps:
+      - uses: actions/checkout@v4
+      - name: Install Emscripten
+        uses: emscripten-core/setup-emsdk@v16
+        with:
+          version: 6.0.10
+      - name: Build and test
+        env:
+          # Named, so that a missing browser fails the job. Left unset, the
+          # script runs whichever browsers it finds.
+          CW_TEST_BROWSERS: ${{ matrix.browser }}
+        run: cmd/emscripten/test
+
   msvc:
     name: msvc (Windows)
     runs-on: windows-latest
