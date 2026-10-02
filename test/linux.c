@@ -237,3 +237,12 @@ bool
 test_displace_crash_handler(void) {
 	return false;
 }
+
+bool
+test_host_can_throw(void) {
+	return false;
+}
+
+void
+test_host_throw(void) {
+}

@@ -16,7 +16,7 @@
 static cw_drain_t drain;
 
 static void
-on_report(const char* message, const char* stack, cw_shared_t* region) {
+on_report(const char* name, const char* message, const char* stack, cw_shared_t* region) {
 	if (region->magic != CW_REGION_MAGIC) {
 		cw_log(CW_LOG_ERROR, "region header mismatch, trap not reported");
 		return;
@@ -29,7 +29,7 @@ on_report(const char* message, const char* stack, cw_shared_t* region) {
 		.main_module = 0,
 		.module_count = 1,
 	};
-	cw_web_trap_type(message, info.type, sizeof(info.type));
+	cw_web_trap_type(name, message, info.type, sizeof(info.type));
 	snprintf(info.message_raw, sizeof(info.message_raw), "%s", message);
 
 	cw_module_t* module = &info.modules[0];
@@ -40,7 +40,7 @@ on_report(const char* message, const char* stack, cw_shared_t* region) {
 		snprintf(module->build_id + 2 * i, 3, "%02x", id[i]);
 	}
 
-	info.frame_count = cw_web_parse_stack(stack, info.frames, CW_MAX_FRAMES);
+	cw_web_parse_stack(stack, &info);
 	if (info.frame_count == 0) {
 		cw_log(CW_LOG_WARN, "stack text holds no frames");
 	}

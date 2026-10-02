@@ -181,3 +181,17 @@ bool
 test_displace_crash_handler(void) {
 	return false;
 }
+
+EM_JS(void, test_web_host_throw, (void), {
+	throw new TypeError('host');
+});
+
+bool
+test_host_can_throw(void) {
+	return true;
+}
+
+void
+test_host_throw(void) {
+	test_web_host_throw();
+}

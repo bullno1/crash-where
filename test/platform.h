@@ -186,4 +186,18 @@ test_under_wine(void);
 bool
 test_displace_crash_handler(void);
 
+/**
+ * Whether the host language can throw through C frames, as a
+ * JavaScript import does on the web.
+ */
+bool
+test_host_can_throw(void);
+
+/**
+ * Throw a `TypeError` from the host language, with the message `host`.
+ * Does not return where test_host_can_throw(); does nothing elsewhere.
+ */
+void
+test_host_throw(void);
+
 #endif /* CW_TEST_PLATFORM_H */

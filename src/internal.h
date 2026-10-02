@@ -179,6 +179,7 @@ typedef struct {
 typedef struct {
 	int module;
 	uint64_t offset;
+	char raw[128];             /**< The line it was read from, where a text is the source; empty elsewhere. */
 } cw_frame_t;
 
 /**

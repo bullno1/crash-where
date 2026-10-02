@@ -18,13 +18,17 @@
 #define CW_WEB_BUILD_ID_CAP 20
 
 /**
- * Watcher: one trap of the game.
+ * Watcher: one fatal error of the game.
  *
+ * @param name     Name of the error's class, such as `TypeError`; empty
+ *                 for a trap or an abort.
  * @param message  Message of the exception, as the engine worded it.
  * @param stack    Stack text of the exception.
  * @param region   Copy of the game's region, owned by the caller.
  */
-typedef void (*cw_web_report_fn_t)(const char* message, const char* stack, cw_shared_t* region);
+typedef void (*cw_web_report_fn_t)(
+	const char* name, const char* message, const char* stack, cw_shared_t* region
+);
 
 /** Watcher: the player decided; `choice` is a cw_consent_t. */
 typedef void (*cw_web_consent_fn_t)(int choice);
@@ -155,25 +159,31 @@ uint32_t
 cw_web_function_offset(uint32_t index);
 
 /**
- * Frames of a stack text, innermost first.
+ * Frames of a stack text into `info`, innermost first, one per line.
  *
- * Takes every `wasm-function[N]` token and ignores the rest of each
- * line. V8 and SpiderMonkey follow it with `:0x` and the offset of the
- * instruction; JavaScriptCore prints the index alone, and such a frame
- * gets the offset of its function's first instruction. Every frame
- * belongs to module 0 and its offset counts from the start of the file.
+ * A line with a `wasm-function[N]` token is a frame of module 0, with
+ * an offset from the start of the file: the one after `:0x` where V8
+ * and SpiderMonkey print it, or that of the function's first
+ * instruction where JavaScriptCore prints the index alone. Any other
+ * line is a JavaScript frame, best effort: its module is named
+ * `javascript:` and the function, `<anonymous>` for a frame without
+ * one and `<unknown>` for a line in no known shape, its offset is 0,
+ * and the line itself is kept as the frame's raw text. Such modules
+ * are added to `info` as met, with `0` as their build id. Lines before the
+ * first frame, where an engine repeats the message, are skipped.
  *
- * @return The number of frames written to `frames`, at most `cap`.
- */
-int
-cw_web_parse_stack(const char* stack, cw_frame_t* frames, int cap);
-
-/**
- * Exception type for a trap message, the same for every engine.
- *
- * A message that matches nothing known becomes `TRAP`.
+ * Stops at the frame or module capacity of `info`.
  */
 void
-cw_web_trap_type(const char* message, char* out, size_t cap);
+cw_web_parse_stack(const char* stack, cw_crash_info_t* info);
+
+/**
+ * Exception type, the same for every engine.
+ *
+ * The error's `name` when there is one. For a trap or an abort, the
+ * message decides; one that matches nothing known becomes `TRAP`.
+ */
+void
+cw_web_trap_type(const char* name, const char* message, char* out, size_t cap);
 
 #endif /* CW_WEB_PLATFORM_H */

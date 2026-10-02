@@ -303,16 +303,24 @@ addToLibrary({
 			}
 		},
 
-		// After the trap. Reads memory; never calls into the instance.
+		// After a fatal error. Reads memory; never calls into the instance.
+		// Fatal: a trap, which includes Emscripten's abort, or any error
+		// thrown while C frames were on the stack, since it unwound them.
 		trap(e) {
-			if (cwWeb.trapped || !cwWeb.watcher || !cwWeb.regionLen || !(e instanceof WebAssembly.RuntimeError)) {
+			if (cwWeb.trapped || !cwWeb.watcher || !cwWeb.regionLen) {
+				return;
+			}
+			const trap = e instanceof WebAssembly.RuntimeError;
+			const stack = String(e?.stack ?? '');
+			if (!trap && !/wasm-function\[/.test(stack)) {
 				return;
 			}
 			cwWeb.trapped = true;
 			cwWeb.pending++;
 			cwWeb.post({ 'report': {
-				'message': String(e.message),
-				'stack': String(e.stack),
+				'name': trap ? '' : String(e?.name || 'Error'),
+				'message': String(e?.message ?? e),
+				'stack': stack,
 				'region': HEAPU8.slice(cwWeb.region, cwWeb.region + cwWeb.regionLen),
 			} });
 		},
@@ -500,14 +508,16 @@ addToLibrary({
 				if (/wasm-function\[\d+\](?!:0x)/.test(r['stack'])) {
 					await cwWeb.loadOffsets();
 				}
+				const name = stringToNewUTF8(r['name']);
 				const message = stringToNewUTF8(r['message']);
 				const stack = stringToNewUTF8(r['stack']);
 				const region = _malloc(r['region'].length);
 				HEAPU8.set(r['region'], region);
-				await call(cwWeb.entries.report, message, stack, region);
+				await call(cwWeb.entries.report, name, message, stack, region);
 				_free(region);
 				_free(stack);
 				_free(message);
+				_free(name);
 				postMessage({ 'done': { 'kind': 'trap', 'message': r['message'] } });
 			} else if (m['consent'] !== undefined) {
 				await call(cwWeb.entries.consent, m['consent']);

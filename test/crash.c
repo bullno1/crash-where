@@ -68,6 +68,13 @@ level_three(void (*crash)(void)) {
 	sink++;
 }
 
+/* The crash starts in the host, with C frames below it. */
+TEST_NOINLINE static void
+throw_from_host(void) {
+	test_host_throw();
+	sink++;
+}
+
 TEST_NOINLINE static int
 recurse(int depth) {
 	volatile char pad[1024];
@@ -95,6 +102,11 @@ CW_SCENARIO(null_write_displaced) {
 	test_displace_crash_handler();
 	cw_heartbeat();
 	level_three(write_null);
+}
+
+CW_SCENARIO(host_throw) {
+	cw_set_state("mode", "host_throw");
+	level_three(throw_from_host);
 }
 
 CW_SCENARIO(null_write_leaf) {
@@ -287,6 +299,31 @@ BTEST(crash, abort) {
 	yyjson_doc* ev = run->events[0];
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), TEST_EXC_ABORT) == 0);
 	BTEST_EXPECT_RELATION("%zu", yyjson_arr_size(test_json_get(ev, "/envelope/frames")), >=, 1);
+}
+
+/** An error thrown by the host through C frames is a crash: named frame first, C caller below. */
+BTEST(crash, host_throw) {
+	if (!test_host_can_throw()) {
+		BLOG_WARN("skipped: the host cannot throw through C frames on this platform");
+		return;
+	}
+	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(host_throw));
+	BTEST_ASSERT(run != NULL);
+	BTEST_EXPECT(run->exit.signaled);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	yyjson_doc* ev = run->events[0];
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), "TypeError") == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/message_raw"), "host") == 0);
+	BTEST_ASSERT_RELATION("%zu", yyjson_arr_size(test_json_get(ev, "/envelope/frames")), >=, 2);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/frames/0/module"), "javascript:test_web_host_throw") == 0);
+	BTEST_EXPECT_EQUAL("%" PRIu64, yyjson_get_uint(test_json_get(ev, "/envelope/frames/0/offset")), (uint64_t)0);
+	BTEST_EXPECT(test_json_str(ev, "/envelope/frames/0/raw") != NULL);
+	const char* below = test_json_str(ev, "/envelope/frames/1/module");
+	BTEST_EXPECT_EX(
+		below != NULL && strlen(below) > 5 && strcmp(below + strlen(below) - 5, ".wasm") == 0,
+		"frame 1 is in %s, want the module", below != NULL ? below : "(none)"
+	);
+	BTEST_EXPECT_RELATION("%" PRIu64, yyjson_get_uint(test_json_get(ev, "/envelope/frames/1/offset")), >, (uint64_t)0);
 }
 
 BTEST(crash, stack_overflow) {

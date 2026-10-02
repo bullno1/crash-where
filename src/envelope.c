@@ -256,7 +256,12 @@ put_frames(FILE* f, const cw_crash_info_t* info) {
 		} else {
 			fputs("null,\"build_id\":null", f);
 		}
-		fprintf(f, ",\"offset\":%" PRIu64 "}", fr->offset);
+		fprintf(f, ",\"offset\":%" PRIu64, fr->offset);
+		if (fr->raw[0] != '\0') {
+			fputs(",\"raw\":", f);
+			put_str(f, fr->raw, sizeof(fr->raw));
+		}
+		fputs("}", f);
 	}
 	fputs("]", f);
 }
