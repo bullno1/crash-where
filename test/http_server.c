@@ -102,10 +102,6 @@ log_from_wby(const char* msg) {
 
 test_http_server_t*
 test_http_start(const test_http_reply_t* reply) {
-	if (!test_sockets_init()) {
-		BLOG_ERROR("no socket layer");
-		return NULL;
-	}
 	test_http_server_t* server = calloc(1, sizeof(*server));
 	if (server == NULL) {
 		return NULL;

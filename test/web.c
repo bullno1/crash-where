@@ -80,9 +80,8 @@ test_run_thread(void (*fn)(void)) {
 	return false;
 }
 
-bool
-test_sockets_init(void) {
-	return false;
+void
+test_platform_init(void) {
 }
 
 bool

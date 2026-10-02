@@ -142,10 +142,19 @@ test_run_thread(void (*fn)(void)) {
 	return true;
 }
 
-bool
-test_sockets_init(void) {
+static LONG WINAPI
+end_on_crash(EXCEPTION_POINTERS* info) {
+	(void)info;
+	return EXCEPTION_EXECUTE_HANDLER;
+}
+
+void
+test_platform_init(void) {
 	WSADATA data;
-	return WSAStartup(MAKEWORD(2, 2), &data) == 0;
+	WSAStartup(MAKEWORD(2, 2), &data);
+	/* Consulted before any debugger is started; the library replaces it with its own. */
+	SetUnhandledExceptionFilter(end_on_crash);
+	SetErrorMode(SetErrorMode(0) | SEM_FAILCRITICALERRORS | SEM_NOGPFAULTERRORBOX);
 }
 
 bool
@@ -259,7 +268,19 @@ test_stop_helper_main(const char* spec) {
 	DebugSetProcessKillOnExit(FALSE);
 	/* Without a duration the target is debugged rather than stopped. */
 	if (fields < 2) {
-		return debug_until_exit();
+		int result = debug_until_exit();
+		/*
+		 * Outlive the target: a debugger that quits while its dead target is
+		 * still being torn down leaves that process half alive under Wine,
+		 * holding every handle it inherited.
+		 */
+		HANDLE target = OpenProcess(SYNCHRONIZE, FALSE, pid);
+		if (target != NULL) {
+			WaitForSingleObject(target, INFINITE);
+			CloseHandle(target);
+		}
+		DebugActiveProcessStop(pid);
+		return result;
 	}
 	/* Attaching queues a debug event that is never continued, so the target stays frozen. */
 	Sleep(ms);

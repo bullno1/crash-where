@@ -39,6 +39,7 @@ test_listed(const char* list, const char* suite, const char* test) {
 
 int
 main(int argc, const char* argv[]) {
+	test_platform_init();
 	/* Set by a scenario on the helper that stops or debugs it from outside; it inherits the scenario variable too. */
 	const char* stop = getenv("CW_TEST_STOP");
 	if (stop != NULL) {

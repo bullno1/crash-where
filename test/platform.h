@@ -85,12 +85,10 @@ bool
 test_run_thread(void (*fn)(void));
 
 /**
- * Make sockets usable in this process. Safe to call repeatedly.
- *
- * @return `false` when the socket layer is unavailable.
+ * Prepare this process for the tests.
  */
-bool
-test_sockets_init(void);
+void
+test_platform_init(void);
 
 /**
  * Create one directory level. Succeeds when it already exists.

@@ -124,9 +124,8 @@ test_run_thread(void (*fn)(void)) {
 	return true;
 }
 
-bool
-test_sockets_init(void) {
-	return true;
+void
+test_platform_init(void) {
 }
 
 bool

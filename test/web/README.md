@@ -174,7 +174,6 @@ A run of everything, with no suite named, also runs the `http` suite a second ti
 `test/web.c` answers `false` where the web has no equivalent, and the tests that depend on it are in `skip`:
 
 - `test_run_thread`: the build has no threads.
-- `test_sockets_init`: a page has no sockets.
   The HTTP server the tests need comes from the launcher instead.
 - `test_stop_self` and `test_debug_self`: a page can neither stop itself nor attach a debugger to itself.
 - `test_image_base` and `TEST_RETURN_ADDRESS` are 0.
