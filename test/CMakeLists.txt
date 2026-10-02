@@ -13,6 +13,7 @@ add_executable(cw_test
 	table.c
 	upload.c
 	cli.c
+	wasm.c
 	vendor/yyjson.c
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")

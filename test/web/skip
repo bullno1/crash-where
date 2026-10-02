@@ -35,6 +35,5 @@ hang/stopped
 # The host backend records nothing.
 host/collects_standard_keys
 
-# Converts this executable. A page has no file for it, and the Wasm reader
-# is not written.
+# Converts this executable. A page has no file for it.
 cli/convert_debug_file

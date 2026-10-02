@@ -64,7 +64,7 @@ typedef enum {
  * `build_id` holds the bytes whose lowercase hex is the id string the
  * client sends and the R2 key: ELF note bytes as they are; PDB GUID in
  * its printed field order followed by the age as four big-endian bytes;
- * the content hash for Wasm.
+ * the `build_id` custom section's bytes for Wasm.
  */
 typedef struct {
 	cwsym_arch_t arch;
@@ -93,7 +93,7 @@ typedef struct {
  * arrives as a single component.
  */
 typedef struct {
-	uint32_t start;      /**< Module-relative start in the client's offset convention: RVA on PE, address minus the first `PT_LOAD` address on ELF, code-section byte offset on Wasm. */
+	uint32_t start;      /**< Module-relative start in the client's offset convention: RVA on PE, address minus the first `PT_LOAD` address on ELF, file offset of the function body on Wasm. */
 	uint32_t size;       /**< Length in bytes; 0 when the format does not record one. */
 	const char** scope;  /**< Scope components, outermost first; the last is the function. An unnamed namespace is `""`. A component may itself be qualified, as when the debug info stores names flat; the normalizer splits it. Template arguments and MSVC type keywords may be present; the normalizer removes them. */
 	int scope_len;       /**< Number of components, at least 1. */
@@ -159,7 +159,7 @@ typedef struct {
  */
 typedef struct {
 	const char* dia;        /**< Path of `msdia140.dll`, or `NULL` to locate it through `VSINSTALLDIR` and vswhere. PE only. */
-	const char* symbol_map; /**< Emscripten `--emit-symbol-map` output for a Wasm module with a stripped name section, or `NULL`. */
+	const char* symbol_map; /**< The `.symbols` file Emscripten's `--emit-symbol-map` writes beside its output, for a Wasm module with a stripped name section, or `NULL`. */
 } cwsym_read_options_t;
 
 /**
@@ -173,7 +173,12 @@ typedef struct {
  * which must sit beside the file `path` resolves to and carry the same
  * build id; anything else is ::CWSYM_ERR_NO_DEBUG. Functions without DWARF entries fall back to
  * `.symtab`. Names are copied verbatim from the debug info's
- * scope tree; nothing is demangled. Wasm yields no lines or sites.
+ * scope tree; nothing is demangled. A Wasm module names its functions
+ * from its name section, or from `opts->symbol_map` when that section
+ * was stripped; neither is ::CWSYM_ERR_NO_DEBUG, and a function both
+ * leave unnamed is listed as `wasm-function[N]`, the engines' spelling.
+ * Its build id is the `build_id` custom section; a module without one
+ * is ::CWSYM_ERR_NO_BUILD_ID. Wasm yields no lines or sites.
  *
  * @param opts  Extra inputs, or `NULL` for the defaults.
  */
@@ -186,13 +191,16 @@ cwsym_read(
 /**
  * Apply the naming rules of ::CWSYM_RULES to one symbol.
  *
- * Pure: splits every component on `::` outside template arguments and
- * parentheses, keeping `operator` names whole; strips template argument
- * lists; maps anonymous namespaces to `$anon` and lambdas to `$lambda`;
- * drops `class`/`struct`/`enum` and `[abi:...]` tags; prefixes a static
+ * Pure: cuts what a demangler prints around a name, the parameter list,
+ * the qualifiers after it and a leading return type; splits every
+ * component on `::` outside template arguments and parentheses, keeping
+ * `operator` names whole; strips template argument lists; maps anonymous
+ * namespaces to `$anon` and lambdas to `$lambda`; drops
+ * `class`/`struct`/`enum` and `[abi:...]` tags; prefixes a static
  * function with the stem of its unit and `:`; joins with `::`. A flat
- * `ns::Class::method` and the components `ns`, `Class`, `method` yield
- * identical bytes, as do a GCC and an MSVC reading of one function.
+ * `ns::Class::method`, the components `ns`, `Class`, `method`, and a
+ * demangled `ns::Class::method(int) const` yield identical bytes, as do
+ * a GCC and an MSVC reading of one function.
  *
  * @param buf  Receives the NUL-terminated normalized name.
  * @param cap  Capacity of `buf`. A name that does not fit is truncated and the call returns `false`.

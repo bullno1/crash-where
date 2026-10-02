@@ -89,16 +89,39 @@ BTEST(normalize, rules) {
 		{ .scope = { "operators", "run" }, .want = "operators::run" },
 		/* A mangled fallback stays whole. */
 		{ .scope = { "_ZN2ns3fooEv" }, .is_static = true, .unit = "x.c", .want = "x:_ZN2ns3fooEv" },
+		/* Demangled signatures, as a Wasm name section spells them. */
+		{ .scope = { "outer(int volatile*)" }, .want = "outer" },
+		{ .scope = { "ns::Foo::bar(int volatile*)" }, .want = "ns::Foo::bar" },
+		{ .scope = { "foo(int (*)(int), char const*)" }, .want = "foo" },
+		{ .scope = { "ns::Foo::operator()(int) const" }, .want = "ns::Foo::operator()" },
+		{ .scope = { "ns::Foo::operator()<int>(int)" }, .want = "ns::Foo::operator()" },
+		{ .scope = { "ns::Foo::operator unsigned int() const" }, .want = "ns::Foo::operator unsigned int" },
+		{ .scope = { "Foo::operator&&(Foo const&) const &" }, .want = "Foo::operator&&" },
+		{ .scope = { "Foo::operator&" }, .want = "Foo::operator&" },
+		{ .scope = { "operator new(unsigned long)" }, .want = "operator new" },
+		{ .scope = { "(anonymous namespace)::hidden(int)" }, .want = "$anon::hidden" },
+		{ .scope = { "int tpl<int>(int)" }, .want = "tpl" },
+		{ .scope = { "std::vector<int, std::allocator<int> > ns::make<int>(unsigned int)" }, .want = "ns::make" },
+		{ .scope = { "ns::T const* ns::make<ns::T>()" }, .want = "ns::make" },
+		{ .scope = { "outer(int volatile*)::$_0::operator()(int) const" }, .want = "outer::$lambda::operator()" },
+		{ .scope = { "outer(int volatile*)::'lambda'(int)::operator()(int) const" }, .want = "outer::$lambda::operator()" },
+		{ .scope = { "load(char const*)::Local::run()" }, .want = "load::Local::run" },
+		{ .scope = { "wasm-function[12]" }, .want = "wasm-function[12]" },
 	};
 	for (size_t i = 0; i < sizeof(cases) / sizeof(cases[0]); ++i) {
 		check(&cases[i]);
 	}
 }
 
-/** One function, as DWARF hands it and as DIA hands it. */
+/**
+ * One function, as DWARF hands it, as DIA hands it, and as a Wasm name
+ * section spells it; the last is left empty where the name section
+ * cannot say the same, as for a static's unit.
+ */
 typedef struct {
 	case_t elf;
 	case_t pdb;
+	case_t wasm;
 } pair_t;
 
 BTEST(normalize, readers_agree) {
@@ -106,10 +129,12 @@ BTEST(normalize, readers_agree) {
 		{
 			.elf = { .scope = { "ns", "Mesh", "draw" } },
 			.pdb = { .scope = { "ns::Mesh::draw" } },
+			.wasm = { .scope = { "ns::Mesh::draw(ns::Frame const&, int)" } },
 		},
 		{
 			.elf = { .scope = { "std", "vector<int, std::allocator<int> >", "push_back" } },
 			.pdb = { .scope = { "std::vector<int,class std::allocator<int> >::push_back" } },
+			.wasm = { .scope = { "std::vector<int, std::allocator<int> >::push_back(int const&)" } },
 		},
 		{
 			.elf = { .scope = { "ns", "", "hidden" }, .unit = "../src/a.cpp", .is_static = true },
@@ -118,18 +143,27 @@ BTEST(normalize, readers_agree) {
 		{
 			.elf = { .scope = { "Game", "tick", "<lambda(int)>", "operator()" } },
 			.pdb = { .scope = { "Game::tick::<lambda_1>::operator()" } },
+			.wasm = { .scope = { "Game::tick()::$_0::operator()(int) const" } },
 		},
 		{
 			.elf = { .scope = { "Game", "tick", "", "operator()" } },
 			.pdb = { .scope = { "`Game::tick'::`2'::<lambda_1>::operator()" } },
+			.wasm = { .scope = { "Game::tick()::'lambda'(int)::operator()(int) const" } },
 		},
 		{
 			.elf = { .scope = { "Foo", "operator<<" } },
 			.pdb = { .scope = { "Foo::operator<<" } },
+			.wasm = { .scope = { "Foo::operator<<(std::ostream&) const" } },
 		},
 		{
 			.elf = { .scope = { "Foo", "operator ns::T<int>" } },
 			.pdb = { .scope = { "Foo::operator struct ns::T<int>" } },
+			.wasm = { .scope = { "Foo::operator ns::T<int>() const" } },
+		},
+		{
+			.elf = { .scope = { "ns", "twice<int>" } },
+			.pdb = { .scope = { "ns::twice<int>" } },
+			.wasm = { .scope = { "int ns::twice<int>(int)" } },
 		},
 		{
 			.elf = { .scope = { "init" }, .unit = "../src/render.c", .is_static = true },
@@ -142,6 +176,11 @@ BTEST(normalize, readers_agree) {
 		BTEST_EXPECT(run(&pairs[i].elf, a, sizeof(a)));
 		BTEST_EXPECT(run(&pairs[i].pdb, b, sizeof(b)));
 		BTEST_EXPECT_EX(strcmp(a, b) == 0, "ELF %s, PDB %s", a, b);
+		if (pairs[i].wasm.scope[0] != NULL) {
+			char w[256];
+			BTEST_EXPECT(run(&pairs[i].wasm, w, sizeof(w)));
+			BTEST_EXPECT_EX(strcmp(a, w) == 0, "ELF %s, Wasm %s", a, w);
+		}
 	}
 }
 

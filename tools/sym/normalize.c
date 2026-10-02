@@ -5,8 +5,10 @@
  *
  * Every component is first cut into pieces at top-level `::`, so a flat
  * `ns::Foo::bar` from a PDB and the components `ns`, `Foo`, `bar` from
- * DWARF meet here as the same pieces. Each piece is then rendered by the
- * rules below, in order, and the pieces are joined with `::`.
+ * DWARF meet here as the same pieces, and so does a demangler's
+ * `ns::Foo::bar(int)` from a Wasm name section once its signature is
+ * trimmed. Each piece is then rendered by the rules below, in order, and
+ * the pieces are joined with `::`.
  */
 #include <stdbool.h>
 #include <stddef.h>
@@ -86,6 +88,101 @@ is_block_number(piece_t p) {
 static int
 split(const char* comp, size_t len, piece_t* out, int n);
 
+static bool
+ends_with(const char* s, size_t len, const char* suffix) {
+	size_t n = strlen(suffix);
+	return len >= n && memcmp(s + len - n, suffix, n) == 0;
+}
+
+/**
+ * Length of `comp` without what a demangler prints around a function's
+ * name: the qualifiers after its parameter list, and the return type a
+ * template specialization is printed with, which ends at the last space
+ * outside brackets and quotes. An operator's own type keeps its spaces.
+ * The parameter list itself comes off per piece, since the enclosing
+ * function of a lambda or local type keeps one mid-name. Advances
+ * `comp` past the return type.
+ */
+static size_t
+trim_signature(const char** comp, size_t len) {
+	const char* s = *comp;
+	static const char* const qualifiers[] = { " const", " volatile", " &&", " &", "&&", "&" };
+	size_t end = len;
+	for (bool again = true; again;) {
+		again = false;
+		for (size_t k = 0; k < sizeof(qualifiers) / sizeof(qualifiers[0]); ++k) {
+			size_t n = strlen(qualifiers[k]);
+			if (end > n && ends_with(s, end, qualifiers[k])) {
+				end -= n;
+				again = true;
+				break;
+			}
+		}
+	}
+	/* Qualifiers only ever follow a parameter list; `operator&&` keeps its symbol. */
+	if (s[end - 1] == ')') {
+		len = end;
+	}
+
+	size_t cut = 0;
+	size_t start = 0;
+	int depth = 0;
+	bool quoted = false;
+	for (size_t i = 0; i < len; ++i) {
+		if (i == start && is_operator(s + i, len - i)) {
+			break;
+		}
+		char c = s[i];
+		if (quoted) {
+			quoted = c != '\'';
+		} else if (c == '`') {
+			quoted = true;
+		} else if (c == '<' || c == '(' || c == '[') {
+			++depth;
+		} else if ((c == '>' || c == ')' || c == ']') && depth > 0) {
+			--depth;
+		} else if (depth == 0 && c == ' ') {
+			cut = i + 1;
+		} else if (depth == 0 && c == ':' && i + 1 < len && s[i + 1] == ':') {
+			start = i + 2;
+			++i;
+		}
+	}
+	if (cut < len) {
+		*comp = s + cut;
+		len -= cut;
+	}
+	return len;
+}
+
+/**
+ * Length of `p` without a trailing parameter list. The parentheses of
+ * `operator()` are its name and stay.
+ */
+static size_t
+without_parameters(piece_t p) {
+	if (p.len == 0 || p.s[p.len - 1] != ')') {
+		return p.len;
+	}
+	int depth = 0;
+	for (size_t i = p.len; i-- > 0;) {
+		if (p.s[i] == ')') {
+			++depth;
+		} else if (p.s[i] == '(' && --depth == 0) {
+			bool call_operator = i >= 8 && is_operator(p.s + i - 8, p.len - i + 8)
+				&& (i == 8 || !is_ident_char(p.s[i - 9]));
+			return call_operator ? p.len : i;
+		}
+	}
+	return p.len;
+}
+
+static bool
+is_call_operator(piece_t p) {
+	p.len = without_parameters(p);
+	return equals(p, "operator()");
+}
+
 /**
  * Add one piece. MSVC spells a function used as a scope as `` `name' ``,
  * and the name inside is itself qualified, so the quotes come off and
@@ -119,6 +216,7 @@ split(const char* comp, size_t len, piece_t* out, int n) {
 		}
 		return n;
 	}
+	len = trim_signature(&comp, len);
 	size_t start = 0;
 	int depth = 0;
 	bool quoted = false;
@@ -259,6 +357,7 @@ put_piece(out_t* o, piece_t p, bool next_is_call_operator) {
 		put_str(o, "$anon");
 		return;
 	}
+	p.len = without_parameters(p);
 	if (is_operator(p.s, p.len)) {
 		put_operator(o, p.s, p.len);
 	} else {
@@ -314,7 +413,7 @@ cwsym_normalize(const cwsym_symbol_t* sym, char* buf, size_t cap) {
 			put(&o, "::", 2);
 		}
 		first = false;
-		bool next_is_call_operator = i + 2 == n && equals(pieces[i + 1], "operator()");
+		bool next_is_call_operator = i + 2 == n && is_call_operator(pieces[i + 1]);
 		put_piece(&o, pieces[i], next_is_call_operator);
 	}
 	buf[o.pos] = '\0';
