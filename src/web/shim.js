@@ -6,6 +6,9 @@
 //
 // CW_DISABLE=1 in the page's ENV stops the watcher before main().
 //
+// The watcher owns the store. Where it can suspend, the store is kept in
+// the origin private file system; elsewhere it lives in memory.
+//
 // What a page may set on Module:
 //   cwRole    'none' keeps the shim out of this instance.
 //   cwOnDone  called with { kind, ... } once the watcher has dealt with a
@@ -15,9 +18,142 @@
 // Message fields are quoted throughout: the watcher's bootstrap is a
 // string, which a minifier does not rename.
 addToLibrary({
+	// The store on disk: a tree in the origin private file system that
+	// mirrors the watcher's memory filesystem below one directory.
+	//
+	// Memory is what the C code reads and writes. A file is copied out when
+	// it is renamed into place and deleted when it is removed, and the C
+	// caller is suspended until that is done.
+	$cwStore__deps: ['$FS', '$PATH', '$PATH_FS', '$UTF8ToString'],
+	$cwStore: {
+		ROOT: 'crash-where',
+		// How long the load may take before the watcher starts without it.
+		LOAD_MS: 2000,
+		// A file being copied out carries this suffix until it is whole.
+		PARTIAL: '.partial',
+
+		root: null,
+		abandoned: false,
+
+		// Before main(): every stored file into memory, at its own path. The
+		// whole tree, since the report directory is not known before cw_init().
+		async open() {
+			if (!navigator.storage?.getDirectory) {
+				return;
+			}
+			const top = await navigator.storage.getDirectory();
+			const root = await top.getDirectoryHandle(cwStore.ROOT, { create: true });
+			const files = [];
+			const load = async (dir, path) => {
+				const jobs = [];
+				for await (const [name, handle] of dir.entries()) {
+					if (handle.kind === 'directory') {
+						jobs.push(load(handle, path + name + '/'));
+					} else if (name.endsWith(cwStore.PARTIAL)) {
+						// Left by a watcher that ended in the middle of a copy.
+						jobs.push(dir.removeEntry(name));
+					} else {
+						jobs.push(handle.getFile().then((f) => f.arrayBuffer()).then((bytes) => {
+							files.push({ dir: path, path: path + name, bytes: new Uint8Array(bytes) });
+						}));
+					}
+				}
+				await Promise.all(jobs);
+			};
+			await load(root, '/');
+			// All or nothing: a watcher that started without the store keeps none.
+			if (cwStore.abandoned) {
+				return;
+			}
+			for (const file of files) {
+				FS.mkdirTree(file.dir);
+				FS.writeFile(file.path, file.bytes);
+			}
+			cwStore.root = root;
+		},
+
+		// The directory of an absolute path, and the name within it.
+		async locate(path, create) {
+			const parts = path.split('/').filter(Boolean);
+			const name = parts.pop();
+			let dir = cwStore.root;
+			for (const part of parts) {
+				dir = await dir.getDirectoryHandle(part, { create });
+			}
+			return { dir, name };
+		},
+
+		async put(pathPtr) {
+			if (!cwStore.root) {
+				return;
+			}
+			const path = PATH_FS.resolve(UTF8ToString(pathPtr));
+			try {
+				// Read now: memory is this call's until it returns.
+				const bytes = FS.readFile(path);
+				const { dir, name } = await cwStore.locate(path, true);
+				// Whole under another name first, then renamed, as it was in memory.
+				// Without a rename the file is written in place.
+				const probe = await dir.getFileHandle(name + cwStore.PARTIAL, { create: true });
+				const renames = typeof probe.move === 'function';
+				const file = renames ? probe : await dir.getFileHandle(name, { create: true });
+				const handle = await file.createSyncAccessHandle();
+				handle.truncate(0);
+				handle.write(bytes, { at: 0 });
+				handle.flush();
+				handle.close();
+				if (renames) {
+					await file.move(name);
+				} else {
+					await dir.removeEntry(name + cwStore.PARTIAL);
+				}
+			} catch (e) {
+				err(`crash reporter: ${path} not saved: ${e}`);
+			}
+		},
+
+		async remove(pathPtr) {
+			if (!cwStore.root) {
+				return;
+			}
+			const path = PATH_FS.resolve(UTF8ToString(pathPtr));
+			try {
+				const { dir, name } = await cwStore.locate(path, false);
+				await dir.removeEntry(name);
+			} catch (e) {
+				// Never stored, or gone already.
+				if (e.name !== 'NotFoundError') {
+					err(`crash reporter: ${path} not deleted: ${e}`);
+				}
+			}
+		},
+
+		lock(pathPtr) {
+			if (!navigator.locks) {
+				return 1;
+			}
+			const name = cwStore.ROOT + PATH_FS.resolve(UTF8ToString(pathPtr));
+			return new Promise((resolve) => {
+				navigator.locks.request(name, { ifAvailable: true }, (lock) => {
+					resolve(lock ? 1 : 0);
+					// Held for as long as this promise is pending: until the watcher ends.
+					return lock ? new Promise(() => {}) : undefined;
+				});
+			});
+		},
+	},
+
+	cw_web_store_put__deps: ['$cwStore'],
+	cw_web_store_put: (path) => {},
+	cw_web_store_delete__deps: ['$cwStore'],
+	cw_web_store_delete: (path) => {},
+	cw_web_store_lock__deps: ['$cwStore'],
+	cw_web_store_lock: (path) => 1,
+
 	$cwWeb__deps: [
 		'$addRunDependency', '$removeRunDependency', '$ENV', '$wasmTable',
 		'$stringToNewUTF8', '$stringToUTF8', '$UTF8ToString', 'malloc', 'free',
+		'$cwStore', 'cw_web_store_put', 'cw_web_store_delete', 'cw_web_store_lock',
 	],
 	$cwWeb__postset: () => {
 		// Emitted into preRun(), after the entries of Module.preRun.
@@ -33,6 +169,7 @@ addToLibrary({
 		module: null,
 		// Imports that return a promise, as { stub, run }: `run` replaces
 		// `stub` where an instance can suspend. Other libraries add theirs.
+		// One marked `watcher` is replaced in the watcher alone.
 		suspending: [],
 
 		// Game.
@@ -77,7 +214,7 @@ addToLibrary({
 			for (const ns of Object.values(imports)) {
 				for (const k of Object.keys(ns)) {
 					const s = cwWeb.suspending.find((s) => s.stub === ns[k]);
-					if (s) {
+					if (s && (!s.watcher || cwWeb.role === 'watcher')) {
 						ns[k] = new WebAssembly.Suspending(s.run);
 					}
 				}
@@ -191,6 +328,25 @@ addToLibrary({
 			cwWeb.queue = Promise.resolve();
 			// main() needs the game's environment, which the game knows only in its preRun().
 			addRunDependency('cw-env');
+			// And the store, when this watcher will be able to keep one.
+			if (typeof WebAssembly.Suspending === 'function') {
+				cwWeb.suspending.push(
+					{ stub: _cw_web_store_put, run: cwStore.put, watcher: true },
+					{ stub: _cw_web_store_delete, run: cwStore.remove, watcher: true },
+					{ stub: _cw_web_store_lock, run: cwStore.lock, watcher: true },
+				);
+				addRunDependency('cw-store');
+				const giveUp = new Promise((resolve) => setTimeout(resolve, cwStore.LOAD_MS, 'late'));
+				Promise.race([cwStore.open(), giveUp])
+					.then((late) => {
+						if (late) {
+							cwStore.abandoned = true;
+							err('crash reporter: the store did not load in time, reports are kept in memory');
+						}
+					})
+					.catch((e) => err(`crash reporter: no store, reports are kept in memory: ${e}`))
+					.then(() => removeRunDependency('cw-store'));
+			}
 			addEventListener('message', (e) => {
 				const m = e.data;
 				if (m['module'] !== undefined) {

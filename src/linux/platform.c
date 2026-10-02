@@ -103,6 +103,11 @@ cw_platform_replace(const char* from, const char* to) {
 	return rename(from, to) == 0;
 }
 
+void
+cw_platform_remove(const char* path) {
+	remove(path);
+}
+
 bool
 cw_platform_list_dir(const char* path, void (*fn)(void* user, const char* name), void* user) {
 	DIR* dir = opendir(path);

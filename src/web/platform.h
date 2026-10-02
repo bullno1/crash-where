@@ -116,6 +116,31 @@ cw_web_build_id(uint8_t* out, size_t cap);
 void
 cw_web_module_name(char* out, size_t cap);
 
+/* Shim, the store. */
+
+/**
+ * Make the file at `path` durable, as it is in memory now.
+ *
+ * Returns once it is, in a watcher that can suspend. Anywhere else it
+ * does nothing, and the store lives in memory.
+ */
+void
+cw_web_store_put(const char* path);
+
+/** Forget the file at `path`; the counterpart of cw_web_store_put(). */
+void
+cw_web_store_delete(const char* path);
+
+/**
+ * Take the lock named by `path` against every other watcher of this
+ * origin, until this one ends.
+ *
+ * @return `false` when another watcher holds it. Always `true` in an
+ *         instance that cannot suspend.
+ */
+bool
+cw_web_store_lock(const char* path);
+
 /* Stack text. */
 
 /**

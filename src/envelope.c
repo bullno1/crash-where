@@ -316,9 +316,9 @@ cw_write_envelope(
 	put_state(f, shared);
 	fputs(",\"attachments\":{\"log_tail\":false,\"minidump\":false,\"snapshot\":false}}\n", f);
 
-	if (fclose(f) != 0 || rename(tmp_path, out_path) != 0) {
+	if (fclose(f) != 0 || !cw_platform_replace(tmp_path, out_path)) {
 		cw_log(CW_LOG_ERROR, "cannot finish %s", out_path);
-		remove(tmp_path);
+		cw_platform_remove(tmp_path);
 		return false;
 	}
 	return true;

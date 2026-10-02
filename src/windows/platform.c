@@ -68,6 +68,11 @@ cw_platform_replace(const char* from, const char* to) {
 	return MoveFileExA(from, to, MOVEFILE_REPLACE_EXISTING) != 0;
 }
 
+void
+cw_platform_remove(const char* path) {
+	DeleteFileA(path);
+}
+
 bool
 cw_platform_list_dir(const char* path, void (*fn)(void* user, const char* name), void* user) {
 	char pattern[CW_STR_CAP + 32];

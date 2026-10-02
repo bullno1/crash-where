@@ -99,7 +99,6 @@ A child run with `CW_DISABLE=1` has no watcher, so nothing comes back.
 
 Only the watcher's files come back.
 The game's own copy of the store does not.
-Nothing travels the other way either: a child's store always starts empty, so tests that keep a report directory from one child to the next cannot pass yet.
 
 The fixtures under `test/fixtures` is preloaded into the test.
 

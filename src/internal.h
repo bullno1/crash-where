@@ -289,6 +289,10 @@ cw_platform_list_dir(const char* path, void (*fn)(void* user, const char* name),
 bool
 cw_platform_replace(const char* from, const char* to);
 
+/** Delete a file. An absent one is not an error. */
+void
+cw_platform_remove(const char* path);
+
 /**
  * Take an exclusive lock on a file, held until the process exits.
  *

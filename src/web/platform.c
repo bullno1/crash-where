@@ -68,7 +68,17 @@ cw_platform_tid(void) {
 
 bool
 cw_platform_replace(const char* from, const char* to) {
-	return rename(from, to) == 0;
+	if (rename(from, to) != 0) {
+		return false;
+	}
+	cw_web_store_put(to);
+	return true;
+}
+
+void
+cw_platform_remove(const char* path) {
+	remove(path);
+	cw_web_store_delete(path);
 }
 
 bool
@@ -88,7 +98,5 @@ cw_platform_list_dir(const char* path, void (*fn)(void* user, const char* name),
 
 bool
 cw_platform_lock(const char* path) {
-	/* The store lives in this instance's memory; nobody else can drain it. */
-	(void)path;
-	return true;
+	return cw_web_store_lock(path);
 }

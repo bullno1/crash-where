@@ -7,8 +7,8 @@
 // message, with the directories and files of the run directory.
 addToLibrary({
 	$testWeb__deps: [
-		'$cwWeb', '$ENV', '$FS', '$wasmTable', '$stringToNewUTF8', '$UTF8ToString', 'malloc',
-		'cw_http_web_fetch',
+		'$cwWeb', '$cwStore', '$ENV', '$FS', '$PATH_FS', '$wasmTable', '$stringToNewUTF8',
+		'$UTF8ToString', 'malloc', 'cw_http_web_fetch',
 	],
 	$testWeb__postset: () => 'testWeb.boot();',
 	$testWeb: {
@@ -20,6 +20,22 @@ addToLibrary({
 		FILES_MS: 5000,
 		// How long a child may run. One that neither exits nor dies would hold the suite forever.
 		SPAWN_MS: 30000,
+
+		// The event log of a run, written by the game and by its watcher.
+		EVENTS: '/events.jsonl',
+
+		// Hand every append to the event log to `send` as it happens. Game and
+		// watcher each write their own copy; the runner's is the one in order.
+		streamEvents(send) {
+			const write = FS.write;
+			FS.write = (stream, buffer, offset, length, ...rest) => {
+				const n = write(stream, buffer, offset, length, ...rest);
+				if (stream.path?.endsWith(testWeb.EVENTS)) {
+					send(new Uint8Array(buffer.buffer, buffer.byteOffset + offset, n).slice());
+				}
+				return n;
+			};
+		},
 
 		boot() {
 			if (Module['cwRole'] === 'watcher') {
@@ -59,7 +75,109 @@ addToLibrary({
 			};
 		},
 
-		spawn(env) {
+		// Put the runner's copy of a directory where the child's watcher will
+		// load its store from, in place of whatever an earlier child left.
+		// The runner's files stand in for a disk the children would share.
+		async pushStore(dir) {
+			if (!navigator.storage?.getDirectory) {
+				return;
+			}
+			const path = PATH_FS.resolve(dir);
+			const parts = path.split('/').filter(Boolean);
+			const name = parts.pop();
+			let parent = await (await navigator.storage.getDirectory()).getDirectoryHandle(cwStore.ROOT, { create: true });
+			for (const part of parts) {
+				parent = await parent.getDirectoryHandle(part, { create: true });
+			}
+			await parent.removeEntry(name, { recursive: true }).catch(() => {});
+			if (!FS.analyzePath(path).exists) {
+				return;
+			}
+			const copy = async (from, into, as) => {
+				const to = await into.getDirectoryHandle(as, { create: true });
+				for (const entry of FS.readdir(from)) {
+					if (entry === '.' || entry === '..') {
+						continue;
+					}
+					const source = from + '/' + entry;
+					if (FS.isDir(FS.stat(source).mode)) {
+						await copy(source, to, entry);
+					} else {
+						const out = await (await to.getFileHandle(entry, { create: true })).createWritable();
+						await out.write(FS.readFile(source));
+						await out.close();
+					}
+				}
+			};
+			await copy(path, parent, name);
+		},
+
+		// Whether the stored copy of a directory holds exactly `files`, a map
+		// of path to bytes: what the watcher had in memory when it ended.
+		async storeMatches(dir, files) {
+			if (!navigator.storage?.getDirectory) {
+				return true;
+			}
+			const path = PATH_FS.resolve(dir);
+			const stored = {};
+			const walk = async (handle, at) => {
+				for await (const [name, entry] of handle.entries()) {
+					if (entry.kind === 'directory') {
+						await walk(entry, at + '/' + name);
+					} else {
+						stored[at + '/' + name] = new Uint8Array(await (await entry.getFile()).arrayBuffer());
+					}
+				}
+			};
+			try {
+				let handle = await (await navigator.storage.getDirectory()).getDirectoryHandle(cwStore.ROOT);
+				for (const part of path.split('/').filter(Boolean)) {
+					handle = await handle.getDirectoryHandle(part);
+				}
+				await walk(handle, path);
+			} catch (e) {
+				// No stored directory: right only when memory has no file either.
+			}
+			const kept = {};
+			for (const [name, bytes] of Object.entries(files)) {
+				const full = PATH_FS.resolve(name);
+				if (full.startsWith(path + '/')) {
+					kept[full] = bytes;
+				}
+			}
+			let same = true;
+			for (const name of new Set([...Object.keys(stored), ...Object.keys(kept)])) {
+				const a = stored[name];
+				const b = kept[name];
+				if (!a || !b || a.length !== b.length || a.some((byte, i) => byte !== b[i])) {
+					err(`store: ${name} is ${a ? `${a.length} bytes` : 'absent'} on disk, ${b ? `${b.length} bytes` : 'absent'} in the watcher`);
+					same = false;
+				}
+			}
+			return same;
+		},
+
+		removeTree(path) {
+			if (!FS.analyzePath(path).exists) {
+				return;
+			}
+			for (const entry of FS.readdir(path)) {
+				if (entry === '.' || entry === '..') {
+					continue;
+				}
+				const child = path + '/' + entry;
+				if (FS.isDir(FS.stat(child).mode)) {
+					testWeb.removeTree(child);
+				} else {
+					FS.unlink(child);
+				}
+			}
+			FS.rmdir(path);
+		},
+
+		async spawn(env) {
+			const store = JSON.parse(env)['CW_TEST_REPORT_DIR'];
+			await testWeb.pushStore(store);
 			return new Promise((resolve) => {
 				const frame = document.createElement('iframe');
 				frame.style.display = 'none';
@@ -69,24 +187,45 @@ addToLibrary({
 					frame.remove();
 					resolve(-1);
 				}, testWeb.SPAWN_MS);
+				const events = PATH_FS.resolve(JSON.parse(env)['CW_TEST_OUT'] + testWeb.EVENTS);
 				const onMessage = (e) => {
-					if (e.source !== frame.contentWindow || !e.data['exit']) {
+					if (e.source !== frame.contentWindow) {
+						return;
+					}
+					if (e.data['event']) {
+						FS.writeFile(events, e.data['event'], { flags: 'a' });
+						return;
+					}
+					if (!e.data['exit']) {
 						return;
 					}
 					clearTimeout(timer);
 					removeEventListener('message', onMessage);
+					// The watcher's store replaces the copy here: what it deleted is gone.
+					if (e.data['dirs'].length > 0) {
+						testWeb.removeTree(PATH_FS.resolve(store));
+					}
 					// Directories too: one the watcher emptied must still exist here.
 					for (const dir of e.data['dirs']) {
 						FS.mkdirTree(dir);
 					}
 					for (const [path, bytes] of Object.entries(e.data['files'])) {
-						FS.writeFile(path, bytes);
-						Module['testOnFile']?.(path, bytes);
+						// The watcher's event log is its half; the whole one is already here.
+						if (PATH_FS.resolve(path) !== events) {
+							FS.writeFile(path, bytes);
+							Module['testOnFile']?.(path, bytes);
+						}
 					}
-					// Removing the frame ends the game and its watcher.
-					frame.remove();
+					Module['testOnFile']?.(events, FS.readFile(events));
 					const exit = e.data['exit'];
-					resolve((exit['signaled'] ? testWeb.SIGNALED : 0) | (exit['code'] & 0xffff));
+					const status = (exit['signaled'] ? testWeb.SIGNALED : 0) | (exit['code'] & 0xffff);
+					// A watcher that answered must have stored what it holds.
+					const stored = e.data['dirs'].length > 0 ? testWeb.storeMatches(store, e.data['files']) : Promise.resolve(true);
+					stored.then((same) => {
+						// Removing the frame ends the game and its watcher.
+						frame.remove();
+						resolve(same ? status : -1);
+					});
 				};
 				addEventListener('message', onMessage);
 				frame.src = 'child.html#' + encodeURIComponent(env);
@@ -99,7 +238,16 @@ addToLibrary({
 		bootChild() {
 			const env = Module['testEnv'];
 			// First, so the page's own hooks and the shim see the variables.
-			Module['preRun'] = [() => Object.assign(ENV, env)].concat(Module['preRun'] || []);
+			Module['preRun'] = [() => {
+				Object.assign(ENV, env);
+				testWeb.streamEvents((bytes) => parent.postMessage({ 'event': bytes }, '*'));
+				// The watcher writes nothing before it has the environment, sent after this.
+				cwWeb.watcher?.addEventListener('message', (e) => {
+					if (e.data['testEvent']) {
+						parent.postMessage({ 'event': e.data['testEvent'] }, '*');
+					}
+				});
+			}].concat(Module['preRun'] || []);
 
 			let exit = null;
 			let finished = false;
@@ -160,6 +308,9 @@ addToLibrary({
 		// Watcher of a child.
 
 		bootWatcher() {
+			Module['preRun'] = [() => {
+				testWeb.streamEvents((bytes) => postMessage({ 'testEvent': bytes }));
+			}].concat(Module['preRun'] || []);
 			addEventListener('message', (e) => {
 				const root = e.data['testPublish'];
 				if (!root) {

@@ -10,17 +10,6 @@
 crash/null_write
 crash/null_write_leaf
 
-# The report directory of one child is kept for the next. A child's store
-# lives in its watcher's memory and ends with it.
-consent/summary_counts_waiting_reports
-consent/once_releases_waiting_reports
-consent/once_sticks_to_released_reports
-consent/never_purges_and_stops_reporting
-consent/always_persists
-drain/backlog_drains_after_auth
-drain/backlog_drains_at_exit_without_auth
-drain/stale_report_is_deleted
-
 # Needs a second thread.
 crash/thread_stack_overflow
 crash/thread_null_write
@@ -31,6 +20,7 @@ crash/stack_overflow
 # Expects the report of a game that ended without cw_shutdown(). Game and
 # watcher end together on the web.
 crash/exit_without_shutdown
+consent/summary_counts_waiting_reports
 
 # A page cannot be put under a debugger from inside, nor tell that it is
 # under one.

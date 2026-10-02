@@ -40,7 +40,7 @@ cw_store_write(const char* name, const void* data, size_t len) {
 	ok = fclose(f) == 0 && ok;
 	if (!ok || !cw_platform_replace(tmp, path)) {
 		cw_log(CW_LOG_ERROR, "cannot finish %s", path);
-		remove(tmp);
+		cw_platform_remove(tmp);
 		return false;
 	}
 	return true;
@@ -68,7 +68,7 @@ void
 cw_store_remove(const char* name) {
 	char path[CW_STR_CAP + 64];
 	if (cw_store_path(path, sizeof(path), name)) {
-		remove(path);
+		cw_platform_remove(path);
 	}
 }
 
@@ -271,7 +271,7 @@ cw_pending_remove(const cw_pending_t* p) {
 	for (size_t i = 0; i < sizeof(sidecars) / sizeof(sidecars[0]); ++i) {
 		char path[CW_STR_CAP + 128];
 		snprintf(path, sizeof(path), "%s/pending/%.*s%s", cw_ctx.report_dir, (int)stem, p->name, sidecars[i]);
-		remove(path);
+		cw_platform_remove(path);
 	}
 }
 
@@ -283,14 +283,9 @@ cw_pending_approve_all(void) {
 		if (list[i].approved) {
 			continue;
 		}
-		char path[CW_STR_CAP + 128];
-		snprintf(path, sizeof(path), "%s/pending/%.*s.ok", cw_ctx.report_dir, (int)(strlen(list[i].name) - 5), list[i].name);
-		FILE* f = fopen(path, "wb");
-		if (f == NULL) {
-			cw_log(CW_LOG_ERROR, "cannot create %s", path);
-			continue;
-		}
-		fclose(f);
+		char name[sizeof(list[i].name) + 16];
+		snprintf(name, sizeof(name), "pending/%.*s.ok", (int)(strlen(list[i].name) - 5), list[i].name);
+		cw_store_write(name, "", 0);
 	}
 }
 
@@ -299,7 +294,7 @@ remove_entry(void* user, const char* name) {
 	const char* dir = user;
 	char path[CW_STR_CAP + 128];
 	snprintf(path, sizeof(path), "%s/%s", dir, name);
-	remove(path);
+	cw_platform_remove(path);
 }
 
 void
