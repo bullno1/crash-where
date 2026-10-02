@@ -8,6 +8,8 @@
  */
 #include <emscripten.h>
 #include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
 
 #include "web/platform.h"
 
@@ -91,6 +93,11 @@ on_shutdown(int result) {
 _Noreturn void
 cw_platform_run_watcher(const char* spec) {
 	(void)spec;
+	const char* disable = getenv("CW_DISABLE");
+	if (disable != NULL && strcmp(disable, "1") == 0) {
+		cw_web_watcher_quit();
+		emscripten_exit_with_live_runtime();
+	}
 	char dir[CW_STR_CAP + 16];
 	if (!cw_store_path(dir, sizeof(dir), "pending") || !cw_platform_mkdir_p(dir)) {
 		cw_log(CW_LOG_ERROR, "cannot create the pending directory under %s", cw_ctx.report_dir);

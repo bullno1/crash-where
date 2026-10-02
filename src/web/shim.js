@@ -430,15 +430,12 @@ addToLibrary({
 			if (cwWeb.role !== 'game') {
 				return;
 			}
-			// A disabled game has no watcher. This one was started before the
-			// page could say so, and would obey the variable too if it got it.
+			cwWeb.post({ 'env': Object.assign({}, ENV) });
+			// If disabled, do not wait for the waitcher
 			if (ENV['CW_DISABLE'] === '1') {
-				const watcher = cwWeb.watcher;
 				cwWeb.watcher = null;
-				watcher?.terminate();
 				return;
 			}
-			cwWeb.post({ 'env': Object.assign({}, ENV) });
 			if (!cwWeb.released) {
 				// Nothing blocks: main() is simply not called until the count drops.
 				cwWeb.held = true;
@@ -503,6 +500,9 @@ addToLibrary({
 	},
 
 	cw_web_watcher_pending__deps: ['$cwWeb'],
+	cw_web_watcher_quit__deps: ['$cwWeb'],
+	cw_web_watcher_quit: () => close(),
+
 	cw_web_watcher_pending: (name, approved) => {
 		cwWeb.announced.push({ 'name': UTF8ToString(name), 'approved': !!approved });
 	},

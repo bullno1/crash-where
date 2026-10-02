@@ -88,6 +88,10 @@ cw_web_game_notify_shutdown(int result);
 
 /* Shim, watcher side. */
 
+/** End this watcher: the game runs disabled. */
+void
+cw_web_watcher_quit(void);
+
 /** Announce one waiting report; call before cw_web_watcher_ready(). */
 void
 cw_web_watcher_pending(const char* name, bool approved);

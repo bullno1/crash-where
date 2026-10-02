@@ -118,16 +118,16 @@ cw_init(const cw_config_t* cfg) {
 	}
 	cw_ctx.cfg.report_dir = cw_ctx.report_dir;
 
-	const char* disable = getenv("CW_DISABLE");
-	if (disable != NULL && strcmp(disable, "1") == 0) {
-		cw_log(CW_LOG_INFO, "disabled by CW_DISABLE");
-		return;
-	}
-
 	/* Role detection is cross-platform; only the payload is per platform. */
 	const char* spec = getenv(CW_ENV_WATCHER);
 	if (spec != NULL) {
 		cw_platform_run_watcher(spec);
+	}
+
+	const char* disable = getenv("CW_DISABLE");
+	if (disable != NULL && strcmp(disable, "1") == 0) {
+		cw_log(CW_LOG_INFO, "disabled by CW_DISABLE");
+		return;
 	}
 
 	/* Only the game asks: a debugger that follows the spawn must not send the watcher back into game code. */
