@@ -108,11 +108,24 @@ bool
 test_stop_self(unsigned ms);
 
 /**
- * Entry point of the helper process that test_stop_self() spawns on
- * platforms where only another process can stop this one.
+ * Put this process under a debugger for the rest of its life, as when
+ * it is launched from one.
+ *
+ * The debugger never resumes a process that a signal stopped, so the
+ * caller must end by exiting.
+ *
+ * @return `false` when no debugger could be attached.
+ */
+bool
+test_debug_self(void);
+
+/**
+ * Entry point of the helper process that test_stop_self() and
+ * test_debug_self() spawn on platforms where only another process can
+ * stop or debug this one.
  *
  * @param spec  Value of `CW_TEST_STOP` in the helper's environment.
- * @return The helper's exit status; 0 when the stop and resume happened.
+ * @return The helper's exit status; 0 when it did what was asked.
  */
 int
 test_stop_helper_main(const char* spec);

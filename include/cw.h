@@ -12,8 +12,12 @@
  * Two environment variables affect behaviour:
  * - `CW_WATCHER` is set by the game on the watcher to carry inherited
  *   handles. Never set it yourself.
- * - `CW_DISABLE=1` disables the library.
- *   Use it when running under a debugger.
+ * - `CW_DISABLE=1` disables the library. `CW_DISABLE=0` keeps it enabled
+ *   under a debugger.
+ *
+ * The library disables itself when a debugger is attached to the game at
+ * @ref cw_init, so that the debugger gets every crash. One attached later
+ * changes nothing.
  */
 #ifndef CW_H
 #define CW_H

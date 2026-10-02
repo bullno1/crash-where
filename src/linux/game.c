@@ -19,6 +19,23 @@
 
 extern char** environ;
 
+bool
+cw_platform_debugger_present(void) {
+	FILE* f = fopen("/proc/self/status", "r");
+	if (f == NULL) {
+		return false;
+	}
+	unsigned long tracer = 0;
+	char line[256];
+	while (fgets(line, sizeof(line), f) != NULL) {
+		if (sscanf(line, "TracerPid: %lu", &tracer) == 1) {
+			break;
+		}
+	}
+	fclose(f);
+	return tracer != 0;
+}
+
 /**
  * Build the watcher's argv from `/proc/self/cmdline`.
  *

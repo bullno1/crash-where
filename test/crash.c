@@ -370,6 +370,25 @@ BTEST(crash, disabled) {
 	BTEST_EXPECT_EQUAL("%d", run->num_events, 0);
 }
 
+BTEST(crash, debugger) {
+	const test_run_t* run = RUN_SCENARIO_WITH(SCENARIO_REF(exit_without_shutdown), .debugger = true);
+	BTEST_ASSERT(run != NULL);
+	BTEST_EXPECT(!run->exit.signaled);
+	BTEST_EXPECT_EQUAL("%d", run->exit.code, 3);
+	BTEST_EXPECT_EQUAL("%d", run->num_events, 0);
+}
+
+BTEST(crash, debugger_forced) {
+	const test_run_t* run = RUN_SCENARIO_WITH(
+		SCENARIO_REF(exit_without_shutdown), .debugger = true, .force = true
+	);
+	BTEST_ASSERT(run != NULL);
+	BTEST_EXPECT(!run->exit.signaled);
+	BTEST_EXPECT_EQUAL("%d", run->exit.code, 3);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	BTEST_EXPECT(strcmp(test_json_str(run->events[0], "/envelope/exception/type"), "KILLED") == 0);
+}
+
 BTEST(crash, upload_retry_keeps_report) {
 	const test_run_t* run = RUN_SCENARIO_WITH(SCENARIO_REF(null_write), .status = "retry");
 	BTEST_ASSERT(run != NULL);

@@ -129,6 +129,14 @@ cw_init(const cw_config_t* cfg) {
 	if (spec != NULL) {
 		cw_platform_run_watcher(spec);
 	}
+
+	/* Only the game asks: a debugger that follows the spawn must not send the watcher back into game code. */
+	bool forced = disable != NULL && strcmp(disable, "0") == 0;
+	if (!forced && cw_platform_debugger_present()) {
+		cw_log(CW_LOG_INFO, "disabled by an attached debugger, CW_DISABLE=0 overrides");
+		return;
+	}
+
 	cw_ctx.active = cw_platform_run_game();
 	if (cw_ctx.active && cw_ctx.collect_at_init.collect != NULL) {
 		cw_ctx.collect_at_init.collect(cw_ctx.collect_at_init.user);

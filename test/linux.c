@@ -10,6 +10,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <sys/ptrace.h>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <time.h>
@@ -210,6 +211,12 @@ test_stop_self(unsigned ms) {
 	while (waitpid(helper, NULL, 0) < 0 && errno == EINTR) {
 	}
 	return true;
+}
+
+bool
+test_debug_self(void) {
+	/* The runner becomes the tracer, and it only waits. */
+	return ptrace(PTRACE_TRACEME, 0, NULL, NULL) == 0;
 }
 
 uintptr_t

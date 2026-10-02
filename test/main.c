@@ -14,7 +14,7 @@
 
 int
 main(int argc, const char* argv[]) {
-	/* Set by a scenario on the helper that stops it from outside; it inherits the scenario variable too. */
+	/* Set by a scenario on the helper that stops or debugs it from outside; it inherits the scenario variable too. */
 	const char* stop = getenv("CW_TEST_STOP");
 	if (stop != NULL) {
 		return test_stop_helper_main(stop);

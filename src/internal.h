@@ -214,6 +214,10 @@ cw_platform_run_game(void);
 _Noreturn void
 cw_platform_run_watcher(const char* spec);
 
+/** Whether a debugger is attached to the calling process. */
+bool
+cw_platform_debugger_present(void);
+
 bool
 cw_platform_random(void* buf, size_t len);
 

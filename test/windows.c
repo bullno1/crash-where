@@ -211,31 +211,72 @@ test_file_size(const char* path) {
 	return _stat64(path, &st) == 0 ? (long)st.st_size : -1;
 }
 
+/**
+ * Act as a debugger that lets its target run to the end.
+ */
+static int
+debug_until_exit(void) {
+	for (;;) {
+		DEBUG_EVENT ev;
+		if (!WaitForDebugEvent(&ev, INFINITE)) {
+			return 3;
+		}
+		DWORD status = DBG_CONTINUE;
+		switch (ev.dwDebugEventCode) {
+		case CREATE_PROCESS_DEBUG_EVENT:
+			CloseHandle(ev.u.CreateProcessInfo.hFile);
+			break;
+		case LOAD_DLL_DEBUG_EVENT:
+			CloseHandle(ev.u.LoadDll.hFile);
+			break;
+		case EXCEPTION_DEBUG_EVENT:
+			/* Attaching breaks in once; anything else belongs to the target. */
+			if (ev.u.Exception.ExceptionRecord.ExceptionCode != EXCEPTION_BREAKPOINT) {
+				status = DBG_EXCEPTION_NOT_HANDLED;
+			}
+			break;
+		default:
+			break;
+		}
+		ContinueDebugEvent(ev.dwProcessId, ev.dwThreadId, status);
+		if (ev.dwDebugEventCode == EXIT_PROCESS_DEBUG_EVENT) {
+			return 0;
+		}
+	}
+}
+
 int
 test_stop_helper_main(const char* spec) {
 	unsigned long pid;
 	unsigned ms;
-	if (sscanf(spec, "%lu,%u", &pid, &ms) != 2) {
+	int fields = sscanf(spec, "%lu,%u", &pid, &ms);
+	if (fields < 1) {
 		return 2;
 	}
-	/* Attaching queues a debug event that is never continued, so the target stays frozen. */
 	if (!DebugActiveProcess(pid)) {
 		return 3;
 	}
 	DebugSetProcessKillOnExit(FALSE);
+	/* Without a duration the target is debugged rather than stopped. */
+	if (fields < 2) {
+		return debug_until_exit();
+	}
+	/* Attaching queues a debug event that is never continued, so the target stays frozen. */
 	Sleep(ms);
 	return DebugActiveProcessStop(pid) ? 0 : 3;
 }
 
-bool
-test_stop_self(unsigned ms) {
-	/* A helper attaches as our debugger; a process cannot break itself from outside. */
-	char spec[64];
-	snprintf(spec, sizeof(spec), "CW_TEST_STOP=%lu,%u", GetCurrentProcessId(), ms);
+/**
+ * Start this executable again as the helper, with `spec` in `CW_TEST_STOP`.
+ *
+ * @return The helper's process handle, or `NULL` on failure.
+ */
+static HANDLE
+spawn_helper(const char* spec) {
 	const char* extra[] = { spec, NULL };
 	char* block = build_env(extra);
 	if (block == NULL) {
-		return false;
+		return NULL;
 	}
 	char exe[MAX_PATH];
 	DWORD exe_len = GetModuleFileNameA(NULL, exe, sizeof(exe));
@@ -246,14 +287,41 @@ test_stop_self(unsigned ms) {
 		&& CreateProcessA(exe, cmdline, NULL, NULL, FALSE, 0, block, NULL, &si, &pi);
 	free(block);
 	if (!ok) {
-		return false;
+		return NULL;
 	}
 	CloseHandle(pi.hThread);
-	WaitForSingleObject(pi.hProcess, INFINITE);
+	return pi.hProcess;
+}
+
+bool
+test_stop_self(unsigned ms) {
+	/* A helper attaches as our debugger; a process cannot break itself from outside. */
+	char spec[64];
+	snprintf(spec, sizeof(spec), "CW_TEST_STOP=%lu,%u", GetCurrentProcessId(), ms);
+	HANDLE helper = spawn_helper(spec);
+	if (helper == NULL) {
+		return false;
+	}
+	WaitForSingleObject(helper, INFINITE);
 	DWORD code = 1;
-	GetExitCodeProcess(pi.hProcess, &code);
-	CloseHandle(pi.hProcess);
+	GetExitCodeProcess(helper, &code);
+	CloseHandle(helper);
 	return code == 0;
+}
+
+bool
+test_debug_self(void) {
+	char spec[64];
+	snprintf(spec, sizeof(spec), "CW_TEST_STOP=%lu", GetCurrentProcessId());
+	HANDLE helper = spawn_helper(spec);
+	if (helper == NULL) {
+		return false;
+	}
+	/* The helper outlives this call; it ending early means the attach failed. */
+	while (!IsDebuggerPresent() && WaitForSingleObject(helper, 10) == WAIT_TIMEOUT) {
+	}
+	CloseHandle(helper);
+	return IsDebuggerPresent();
 }
 
 uintptr_t

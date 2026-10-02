@@ -47,14 +47,17 @@ AUTOLIST_DECLARE(test_scenarios)
 
 /**
  * Options for one run. A zero-initialized value means the upload
- * succeeds, attachments are declined, the library is enabled, the
- * report directory starts empty, the child consents to every upload,
- * no authentication happens, and no native prompt is configured.
+ * succeeds, attachments are declined, the library is enabled, no
+ * debugger is attached, the report directory starts empty, the child
+ * consents to every upload, no authentication happens, and no native
+ * prompt is configured.
  */
 typedef struct {
 	const char* status;    /**< HTTP status the test transport answers: "ok" (200), "retry" (503), "drop" (400), or "unauthorized" (401 to a request carrying a token). `NULL` means "ok". */
 	bool want_attachments; /**< Value of `want_attachments` in the test transport's reply. */
 	bool disable;          /**< Run the child with `CW_DISABLE=1`. */
+	bool debugger;         /**< Put the child under a debugger before it initializes the library. */
+	bool force;            /**< Run the child with `CW_DISABLE=0`. */
 	uint32_t hang_timeout_ms; /**< Passed to cw_config_t::hang_timeout_ms; 0 keeps the library default. */
 	bool keep;             /**< Keep the report directory of this test's previous run instead of starting empty. */
 	const char* auth;      /**< "proof" hands a proof to the watcher, "token" caches a token, "expired" caches one with a past expiry; `NULL` does neither. The child records the call's result in the `auth` state slot. */

@@ -190,6 +190,16 @@ test_fixture_main(const char* name) {
 		return 2;
 	}
 
+	/* The watcher inherits the variable; only the game is debugged. */
+	const char* debugger = getenv("CW_TEST_DEBUGGER");
+	if (
+		debugger != NULL && strcmp(debugger, "1") == 0
+		&& getenv("CW_WATCHER") == NULL && !test_debug_self()
+	) {
+		BLOG_ERROR("cannot attach a debugger");
+		return 2;
+	}
+
 	/* Copied by cw_init, so these may live on this stack. */
 	cw_transport_t transport = { .send = test_send };
 	const char* dialog_answer = getenv("CW_TEST_DIALOG");
@@ -340,6 +350,7 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
 	char e_consent[64];
 	char e_dialog[64];
 	char e_host[32];
+	char e_debugger[32];
 	snprintf(e_scenario, sizeof(e_scenario), "CW_TEST_SCENARIO=%s", scenario->name);
 	snprintf(e_out, sizeof(e_out), "CW_TEST_OUT=%s", run->dir);
 	snprintf(e_report, sizeof(e_report), "CW_TEST_REPORT_DIR=%s", report);
@@ -350,11 +361,13 @@ test_run_scenario(const char* test, const test_scenario_t* scenario, const test_
 	snprintf(e_consent, sizeof(e_consent), "CW_TEST_CONSENT=%s", o.consent != NULL ? o.consent : "");
 	snprintf(e_dialog, sizeof(e_dialog), "CW_TEST_DIALOG=%s", o.dialog != NULL ? o.dialog : "");
 	snprintf(e_host, sizeof(e_host), "CW_TEST_HOST=%d", o.host ? 1 : 0);
+	snprintf(e_debugger, sizeof(e_debugger), "CW_TEST_DEBUGGER=%d", o.debugger ? 1 : 0);
 	const char* env[] = {
 		e_scenario, e_out, e_report, e_status, e_want, e_hang, e_auth, e_consent, e_dialog, e_host,
+		e_debugger,
 		/* A sanitizer build must let the crash reach the library's handlers. */
 		"ASAN_OPTIONS=handle_segv=0:handle_abort=0:handle_sigbus=0:handle_sigfpe=0:handle_sigill=0",
-		o.disable ? "CW_DISABLE=1" : NULL,
+		o.disable ? "CW_DISABLE=1" : o.force ? "CW_DISABLE=0" : NULL,
 		NULL,
 	};
 

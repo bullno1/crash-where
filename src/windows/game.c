@@ -12,6 +12,11 @@
 #define CW_READY_TIMEOUT 2000
 #define CW_MAX_INHERIT   11 /* Eight shared handles and three standard ones. */
 
+bool
+cw_platform_debugger_present(void) {
+	return IsDebuggerPresent();
+}
+
 /**
  * Copy the environment block without any watcher entry and append one.
  *
