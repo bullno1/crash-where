@@ -5,11 +5,20 @@
 #
 # Leaves out the tests listed in test/web/skip, unless CW_TEST_SKIP is
 # set, even to nothing. A test named on the command line always runs.
+#
+# CW_TEST_WEB_TRANSPORT=xhr makes the transport send the way it does in a
+# browser that cannot suspend. A run of everything adds the http suite
+# that way by itself.
 set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../env.sh"
 
 : "${CW_TEST_SKIP=$(sed 's/#.*//' "$ROOT/test/web/skip" | tr '\n' ' ')}"
+# A synchronous request follows redirects, so this one cannot pass with it.
+XHR_SKIP="$CW_TEST_SKIP http/redirect_is_not_followed"
+if [ "${CW_TEST_WEB_TRANSPORT:-}" = xhr ]; then
+	CW_TEST_SKIP=$XHR_SKIP
+fi
 export CW_TEST_SKIP
 
 "$HERE/build"
@@ -40,5 +49,11 @@ for browser in $CW_TEST_BROWSERS; do
 	node "$ROOT/test/web/launch.js" \
 		--bin "$BIN_DIR" --work "$BUILD_DIR/test/work/$name" --browser "$browser" \
 		"$@" || status=$?
+	if [ $# -eq 0 ] && [ -z "${CW_TEST_WEB_TRANSPORT:-}" ]; then
+		echo "==== $name, synchronous transport ===="
+		CW_TEST_WEB_TRANSPORT=xhr CW_TEST_SKIP=$XHR_SKIP node "$ROOT/test/web/launch.js" \
+			--bin "$BIN_DIR" --work "$BUILD_DIR/test/work/$name" --browser "$browser" \
+			http || status=$?
+	fi
 done
 exit $status

@@ -87,7 +87,9 @@ BTEST(http, post_carries_body_and_headers) {
 	BTEST_EXPECT(strcmp(req->content_type, "application/json") == 0);
 	BTEST_EXPECT(strcmp(req->content_length, "7") == 0);
 	BTEST_EXPECT(strcmp(req->authorization, "Bearer tok-123") == 0);
-	BTEST_EXPECT(strcmp(req->user_agent, CW_HTTP_USER_AGENT) == 0);
+	if (TEST_HTTP_OWN_USER_AGENT) {
+		BTEST_EXPECT(strcmp(req->user_agent, CW_HTTP_USER_AGENT) == 0);
+	}
 	BTEST_EXPECT(strcmp(req->expect, "") == 0);
 	BTEST_EXPECT_EQUAL("%zu", req->body_len, 7);
 	BTEST_EXPECT(memcmp(req->body, "{\"a\":1}", 7) == 0);

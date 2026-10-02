@@ -43,7 +43,7 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 		target_link_options(cw_test PRIVATE /INCREMENTAL:NO)
 	endif()
 elseif(EMSCRIPTEN)
-	target_sources(cw_test PRIVATE web.c)
+	target_sources(cw_test PRIVATE web.c web/http_server.c)
 	# setjmp through JS would put a JS frame under every test, and the runner
 	# could then not suspend in test_spawn_self().
 	target_compile_options(cw_test PRIVATE -sSUPPORT_LONGJMP=wasm)

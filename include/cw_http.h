@@ -24,6 +24,9 @@ extern "C" {
  * stack is unavailable every request returns ::CW_RETRY, so reports
  * stay on disk until it is.
  *
+ * On the web this is `fetch`, with the browser's own `User-Agent`..
+ * A browser without JavaScript Promise Integration will use synchronous XHR.
+ *
  * `user` is `NULL`; the transport never reads it.
  */
 extern const cw_transport_t cw_transport_http;

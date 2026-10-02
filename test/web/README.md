@@ -11,10 +11,11 @@ cmd/emscripten/test [suite [test]]
 
 | File | Role |
 |------|------|
-| `launch.js` | Node script. Serves the build, starts the browser, relays output, exits with the page's status. |
+| `launch.js` | Node script. Serves the build, starts the browser, relays output, runs the servers the transport tests send to, exits with the page's status. |
 | `runner.html` | The page that runs the suites. |
 | `child.html` | The page that runs one scenario, in a frame of the runner. |
 | `testlib.js` | Emscripten JS library linked into `cw_test`: spawn, exit detection, files. |
+| `http_server.c` | `test/http_server.h` for the web, on top of the launcher's servers. |
 | `skip` | Tests the run script leaves out, with reasons. |
 | `../web.c` | The C side: `test/platform.h` for the web. |
 
@@ -103,6 +104,11 @@ Nothing travels the other way either: a child's store always starts empty, so te
 The runner also posts each file to the launcher, which writes it under `.build/emscripten/<config>/test/work/<browser>/`.
 For inspection, the event log of a test is then at `.build/emscripten/<config>/test/work/<browser>/work/<test>/events.jsonl`.
 
+## HTTP servers
+
+The launcher contains a http server for all transport-related tests.
+The requests are recorded so tests can retrieve and assert on them.
+
 ## Output
 
 | From | Path |
@@ -124,13 +130,17 @@ node launch.js --bin <dir> --work <dir> --browser <name>[=<command>] [suite [tes
 
 It needs nothing beyond Node.
 It serves `runner.html` and `child.html` from this directory and everything else by base name from `<dir>` of `--bin`, with caching off.
-The page talks back through three requests:
+The page talks back through these requests:
 
 | Request | Effect |
 |---|---|
 | `POST /log` | Print the body as one line |
 | `POST /file/<path>` | Write the body to `<work>/<path>` |
 | `POST /exit?code=<n>` | Stop the browser and exit with `<n>` |
+| `POST /http/start` | Start a server that answers as the JSON body says; reply with its id and URL |
+| `GET /http/<id>/count` | Number of requests that server has answered |
+| `GET /http/<id>/request/<n>` | The `<n>`th request it recorded, as JSON |
+| `POST /http/<id>/stop` | Close that server |
 
 The browser gets a fresh profile under `<work>`, removed afterwards.
 Chromium runs without its sandbox, since containers and CI runners cannot create one.
@@ -149,18 +159,22 @@ Chromium runs without its sandbox, since containers and CI runners cannot create
 |---|---|
 | `CW_TEST_BROWSERS` | Browsers to run in, separated by spaces: `chromium`, `firefox`, each optionally `<name>=<command>`. Unset: each of them found on `PATH`. |
 | `CW_TEST_SKIP` | Tests to leave out, as `suite/test` separated by spaces. Unset: the contents of `skip`. Set to nothing: run everything. |
+| `CW_TEST_WEB_TRANSPORT` | `xhr` makes the transport send synchronously, the way it does in a browser that cannot suspend. Unset: `fetch`. |
 
 `CW_TEST_SKIP` is read by `test/main.c` and works on every platform.
 A test named on the command line runs even when listed.
 
 With several browsers the script runs them in turn and exits with the last nonzero status.
 
+A run of everything, with no suite named, also runs the `http` suite a second time per browser with `CW_TEST_WEB_TRANSPORT=xhr`.
+
 ## What the platform cannot do
 
 `test/web.c` answers `false` where the web has no equivalent, and the tests that depend on it are in `skip`:
 
 - `test_run_thread`: the build has no threads.
-- `test_sockets_init`: no loopback server can run in a page.
+- `test_sockets_init`: a page has no sockets.
+  The HTTP server the tests need comes from the launcher instead.
 - `test_stop_self` and `test_debug_self`: a page can neither stop itself nor attach a debugger to itself.
 - `test_image_base` and `TEST_RETURN_ADDRESS` are 0.
   A Wasm function cannot read its return address, so frames are not checked against recorded addresses.

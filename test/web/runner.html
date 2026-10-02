@@ -21,6 +21,7 @@ const args = JSON.parse(query.get('args') || '[]');
 const env = JSON.parse(query.get('env') || '{}');
 window.Module = {
 	testRole: 'runner',
+	testTransport: env.CW_TEST_WEB_TRANSPORT,
 	// The runner is no game.
 	cwRole: 'none',
 	noInitialRun: true,

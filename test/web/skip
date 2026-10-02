@@ -45,24 +45,6 @@ hang/stopped
 # The host backend records nothing.
 host/collects_standard_keys
 
-# The transport sends nothing, and the loopback server needs sockets.
-http/post_carries_body_and_headers
-http/large_body_arrives_intact
-http/get_sends_no_body
-http/error_status_is_passed_through
-http/long_reply_is_truncated_to_cap
-http/redirect_is_not_followed
-http/refused_connection_is_retry
-http/unusable_url_is_drop
-upload/puts_table_to_release_route
-upload/encodes_version_and_channel
-upload/reports_server_refusal
-upload/refuses_incomplete_input
-cli/upload
-cli/upload_requires_token
-cli/upload_reports_refusal
-cli/upload_refuses_prefix
-
 # Reads fixtures, or this executable, from the host's files.
 table/golden
 cli/usage
@@ -71,3 +53,6 @@ cli/convert
 cli/convert_debug_file
 cli/lookup
 cli/symbolize
+cli/upload
+cli/upload_reports_refusal
+cli/upload_refuses_prefix

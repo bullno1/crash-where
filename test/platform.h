@@ -31,6 +31,13 @@
 #	define TEST_BAD_ADDRESS ((uintptr_t)0)
 #endif
 
+/* Whether the transport names itself in `User-Agent`. A browser sends its own. */
+#if defined(__EMSCRIPTEN__)
+#	define TEST_HTTP_OWN_USER_AGENT 0
+#else
+#	define TEST_HTTP_OWN_USER_AGENT 1
+#endif
+
 /* Exception types the library reports for the scenarios. */
 #if defined(_WIN32)
 #	define TEST_EXC_SEGV           "EXCEPTION_ACCESS_VIOLATION"

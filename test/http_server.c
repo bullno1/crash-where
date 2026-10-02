@@ -2,6 +2,10 @@
  * @file http_server.c
  * Loopback server on top of the vendored wby, polled from one thread.
  */
+
+/* A page cannot listen: web/http_server.c implements http_server.h over the launcher. */
+#ifndef __EMSCRIPTEN__
+
 #include <stdatomic.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -176,3 +180,5 @@ test_http_stop(test_http_server_t* server) {
 #if defined(_MSC_VER)
 #	pragma warning(pop)
 #endif
+
+#endif /* __EMSCRIPTEN__ */

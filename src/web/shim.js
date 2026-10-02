@@ -31,6 +31,9 @@ addToLibrary({
 
 		role: 'game',
 		module: null,
+		// Imports that return a promise, as { stub, run }: `run` replaces
+		// `stub` where an instance can suspend. Other libraries add theirs.
+		suspending: [],
 
 		// Game.
 		watcher: null,
@@ -46,6 +49,8 @@ addToLibrary({
 		entries: null,
 		waiting: null,
 		announced: null,
+		canSuspend: false,
+		queue: null,
 
 		boot() {
 			if (Module['cwRole'] === 'none') {
@@ -61,6 +66,24 @@ addToLibrary({
 		instantiate: (imports) => WebAssembly.instantiateStreaming(
 			fetch(findWasmBinary(), { credentials: 'same-origin' }), imports
 		),
+
+		// Let the registered imports suspend the instance about to be made
+		// from `imports`. Its entry points must then be called as promising.
+		suspend(imports) {
+			if (typeof WebAssembly.Suspending !== 'function') {
+				return false;
+			}
+			// By identity: optimized builds rename the imports.
+			for (const ns of Object.values(imports)) {
+				for (const k of Object.keys(ns)) {
+					const s = cwWeb.suspending.find((s) => s.stub === ns[k]);
+					if (s) {
+						ns[k] = new WebAssembly.Suspending(s.run);
+					}
+				}
+			}
+			return true;
+		},
 
 		// Game.
 
@@ -80,8 +103,8 @@ addToLibrary({
 		},
 
 		bootGame() {
-			cwWeb.watcher = cwWeb.spawn();
-			cwWeb.watcher.addEventListener('message', (e) => {
+			const watcher = cwWeb.watcher = cwWeb.spawn();
+			watcher.addEventListener('message', (e) => {
 				const m = e.data;
 				if (m['log'] !== undefined) {
 					(m['stream'] === 'out' ? out : err)(m['log']);
@@ -93,9 +116,13 @@ addToLibrary({
 					Module['cwOnDone']?.(m['done']);
 				}
 			});
-			cwWeb.watcher.addEventListener('error', (e) => {
-				err(`crash reporter: watcher failed: ${e.message}`);
+			watcher.addEventListener('error', (e) => {
 				e.preventDefault();
+				// One the shim stopped itself may still report its interrupted start.
+				if (cwWeb.watcher !== watcher) {
+					return;
+				}
+				err(`crash reporter: watcher failed: ${e.message}`);
 				cwWeb.snapshot = null;
 				cwWeb.watcher = null;
 				cwWeb.release();
@@ -160,6 +187,8 @@ addToLibrary({
 			const gotModule = new Promise((resolve) => { onModule = resolve; });
 			cwWeb.waiting = [];
 			cwWeb.announced = [];
+			// Not a member initializer: library members are serialized at link time.
+			cwWeb.queue = Promise.resolve();
 			// main() needs the game's environment, which the game knows only in its preRun().
 			addRunDependency('cw-env');
 			addEventListener('message', (e) => {
@@ -171,12 +200,13 @@ addToLibrary({
 					ENV['CW_WATCHER'] = '1';
 					removeRunDependency('cw-env');
 				} else if (cwWeb.entries) {
-					cwWeb.handle(m);
+					cwWeb.enqueue(m);
 				} else {
 					cwWeb.waiting.push(m);
 				}
 			});
 			Module['instantiateWasm'] = (imports, receive) => {
+				cwWeb.canSuspend = cwWeb.suspend(imports);
 				gotModule.then(async (mod) => {
 					if (mod) {
 						// A compiled module resolves to the instance alone.
@@ -193,21 +223,34 @@ addToLibrary({
 			};
 		},
 
-		handle(m) {
-			const call = (index, ...args) => wasmTable.get(index)(...args);
+		// One call into the instance at a time: a suspended call leaves its
+		// frames on the C stack, and a second call would run over them.
+		enqueue(m) {
+			cwWeb.queue = cwWeb.queue.then(() => cwWeb.handle(m)).catch((e) => {
+				// Out of the promise, so that the game hears of a watcher that died.
+				setTimeout(() => { throw e; });
+			});
+		},
+
+		async handle(m) {
+			// The table holds the function itself; an export may be wrapped.
+			const call = (index, ...args) => {
+				const fn = wasmTable.get(index);
+				return cwWeb.canSuspend ? WebAssembly.promising(fn)(...args) : fn(...args);
+			};
 			if (m['report']) {
 				const r = m['report'];
 				const message = stringToNewUTF8(r['message']);
 				const stack = stringToNewUTF8(r['stack']);
 				const region = _malloc(r['region'].length);
 				HEAPU8.set(r['region'], region);
-				call(cwWeb.entries.report, message, stack, region);
+				await call(cwWeb.entries.report, message, stack, region);
 				_free(region);
 				_free(stack);
 				_free(message);
 				postMessage({ 'done': { 'kind': 'trap', 'message': r['message'] } });
 			} else if (m['consent'] !== undefined) {
-				call(cwWeb.entries.consent, m['consent']);
+				await call(cwWeb.entries.consent, m['consent']);
 			} else if (m['auth']) {
 				const a = m['auth'];
 				const copy = (bytes) => {
@@ -217,11 +260,11 @@ addToLibrary({
 				};
 				const token = copy(a['token']);
 				const proof = copy(a['proof']);
-				call(cwWeb.entries.auth, a['what'], token, a['token'].length, proof, a['proof'].length);
+				await call(cwWeb.entries.auth, a['what'], token, a['token'].length, proof, a['proof'].length);
 				_free(proof);
 				_free(token);
 			} else if (m['shutdown'] !== undefined) {
-				call(cwWeb.entries.shutdown, m['shutdown']);
+				await call(cwWeb.entries.shutdown, m['shutdown']);
 				postMessage({ 'done': { 'kind': 'shutdown', 'result': m['shutdown'] } });
 			}
 		},
@@ -234,8 +277,9 @@ addToLibrary({
 			// A disabled game has no watcher. This one was started before the
 			// page could say so, and would obey the variable too if it got it.
 			if (ENV['CW_DISABLE'] === '1') {
-				cwWeb.watcher?.terminate();
+				const watcher = cwWeb.watcher;
 				cwWeb.watcher = null;
+				watcher?.terminate();
 				return;
 			}
 			cwWeb.post({ 'env': Object.assign({}, ENV) });
@@ -314,7 +358,7 @@ addToLibrary({
 		// The handlers run from the event loop, never from inside main().
 		const waiting = cwWeb.waiting;
 		cwWeb.waiting = [];
-		setTimeout(() => waiting.forEach(cwWeb.handle));
+		setTimeout(() => waiting.forEach(cwWeb.enqueue));
 	},
 
 	cw_web_build_id__deps: ['$cwWeb'],

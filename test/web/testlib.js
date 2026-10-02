@@ -6,7 +6,10 @@
 // The watcher of a child needs no role of its own here: it answers one
 // message, with the directories and files of the run directory.
 addToLibrary({
-	$testWeb__deps: ['$cwWeb', '$ENV', '$FS', '$wasmTable', '$stringToNewUTF8', '$UTF8ToString', 'malloc'],
+	$testWeb__deps: [
+		'$cwWeb', '$ENV', '$FS', '$wasmTable', '$stringToNewUTF8', '$UTF8ToString', 'malloc',
+		'cw_http_web_fetch',
+	],
 	$testWeb__postset: () => 'testWeb.boot();',
 	$testWeb: {
 		// A trap has no signal number; the runner's expectations are written in them.
@@ -31,15 +34,14 @@ addToLibrary({
 		// Runner.
 
 		bootRunner() {
+			cwWeb.suspending.push({ stub: _test_web_spawn, run: _test_web_spawn });
 			Module['instantiateWasm'] = (imports, receive) => {
-				// By identity: optimized builds rename the imports.
-				for (const ns of Object.values(imports)) {
-					for (const k of Object.keys(ns)) {
-						if (ns[k] === _test_web_spawn) {
-							ns[k] = new WebAssembly.Suspending(_test_web_spawn);
-						}
-					}
+				if (Module['testTransport'] === 'xhr') {
+					// Send as a browser that cannot suspend would.
+					cwWeb.suspending = cwWeb.suspending.filter((s) => s.stub !== _cw_http_web_fetch);
 				}
+				// The spawn, and whatever else registered itself, such as the transport.
+				cwWeb.suspend(imports);
 				WebAssembly.instantiateStreaming(fetch(findWasmBinary(), { credentials: 'same-origin' }), imports)
 					.then((r) => receive(r.instance, r.module));
 				return {};
@@ -189,4 +191,71 @@ addToLibrary({
 
 	test_web_spawn__deps: ['$testWeb'],
 	test_web_spawn: (env) => testWeb.spawn(UTF8ToString(env)),
+
+	// The servers the transport tests send to live in the launcher. The
+	// runner reaches them with synchronous requests, so that this channel
+	// shares nothing with the transport under test.
+	$testHttp__deps: ['$stringToUTF8', '$UTF8ToString'],
+	$testHttp: {
+		// Requests read back so far, by server id and index.
+		seen: {},
+
+		control(method, path, body) {
+			const x = new XMLHttpRequest();
+			x.open(method, '/http/' + path, false);
+			x.send(body);
+			return x.status === 200 ? x.responseText : null;
+		},
+	},
+
+	test_web_http_start__deps: ['$testHttp'],
+	test_web_http_start: (status, body, bodyLen, location, url, urlCap) => {
+		const bytes = HEAPU8.subarray(body, body + bodyLen);
+		const started = testHttp.control('POST', 'start', JSON.stringify({
+			status,
+			body: body ? btoa(String.fromCharCode(...bytes)) : null,
+			location: location ? UTF8ToString(location) : null,
+		}));
+		if (started === null) {
+			return -1;
+		}
+		const { id, url: base } = JSON.parse(started);
+		stringToUTF8(base, url, urlCap);
+		testHttp.seen[id] = {};
+		return id;
+	},
+
+	test_web_http_count__deps: ['$testHttp'],
+	test_web_http_count: (id) => Number(testHttp.control('GET', `${id}/count`)),
+
+	test_web_http_load__deps: ['$testHttp'],
+	test_web_http_load: (id, index) => {
+		const text = testHttp.control('GET', `${id}/request/${index}`);
+		if (text === null) {
+			return false;
+		}
+		testHttp.seen[id][index] = JSON.parse(text);
+		return true;
+	},
+
+	test_web_http_field__deps: ['$testHttp'],
+	test_web_http_field: (id, index, name, out, cap) => {
+		stringToUTF8(testHttp.seen[id][index][UTF8ToString(name)], out, cap);
+	},
+
+	test_web_http_body__deps: ['$testHttp'],
+	test_web_http_body: (id, index, out, cap) => {
+		const body = atob(testHttp.seen[id][index]['body']);
+		const len = Math.min(body.length, cap);
+		for (let i = 0; i < len; ++i) {
+			HEAPU8[out + i] = body.charCodeAt(i);
+		}
+		return len;
+	},
+
+	test_web_http_stop__deps: ['$testHttp'],
+	test_web_http_stop: (id) => {
+		testHttp.control('POST', `${id}/stop`);
+		delete testHttp.seen[id];
+	},
 });

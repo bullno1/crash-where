@@ -76,6 +76,12 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 	endif()
 elseif(EMSCRIPTEN)
 	target_sources(cw_http PRIVATE http/web.c)
+	target_link_options(cw_http INTERFACE
+		"SHELL:--js-library ${CMAKE_CURRENT_SOURCE_DIR}/http/web.js"
+	)
+	set_property(TARGET cw_http APPEND PROPERTY
+		INTERFACE_LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/http/web.js
+	)
 endif()
 target_link_libraries(cw_http PUBLIC cw)
 target_include_directories(cw_http PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
