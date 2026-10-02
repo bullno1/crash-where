@@ -67,6 +67,22 @@ on_consent(int choice) {
 }
 
 static void
+on_auth(
+	unsigned what,
+	const void* token, size_t token_len,
+	const void* proof, size_t proof_len
+) {
+	/* The drain reads both from the store, as it does where the store is shared. */
+	if ((what & CW_AUTH_TOKEN) && !cw_store_write("token", token, token_len)) {
+		what &= ~(unsigned)CW_AUTH_TOKEN;
+	}
+	if ((what & CW_AUTH_PROOF) && !cw_store_write("proof", proof, proof_len)) {
+		what &= ~(unsigned)CW_AUTH_PROOF;
+	}
+	cw_drain_auth(&drain, what);
+}
+
+static void
 on_shutdown(int result) {
 	cw_log(CW_LOG_INFO, "game exited cleanly with result %d", result);
 	cw_drain_finish(&drain);
@@ -87,7 +103,7 @@ cw_platform_run_watcher(const char* spec) {
 	for (int i = 0; i < count; ++i) {
 		cw_web_watcher_pending(list[i].name, list[i].approved);
 	}
-	cw_web_watcher_ready((int)drain.consent, on_report, on_consent, on_shutdown);
+	cw_web_watcher_ready((int)drain.consent, on_report, on_consent, on_auth, on_shutdown);
 	cw_log(CW_LOG_INFO, "watching the game");
 	emscripten_exit_with_live_runtime();
 }

@@ -4,6 +4,8 @@
 // runs on the page. The watcher runs in a worker that loads only the
 // game's script, never the page.
 //
+// CW_DISABLE=1 in the page's ENV stops the watcher before main().
+//
 // What a page may set on Module:
 //   cwRole    'none' keeps the shim out of this instance.
 //   cwOnDone  called with { kind, ... } once the watcher has dealt with a
@@ -206,6 +208,18 @@ addToLibrary({
 				postMessage({ 'done': { 'kind': 'trap', 'message': r['message'] } });
 			} else if (m['consent'] !== undefined) {
 				call(cwWeb.entries.consent, m['consent']);
+			} else if (m['auth']) {
+				const a = m['auth'];
+				const copy = (bytes) => {
+					const ptr = _malloc(bytes.length);
+					HEAPU8.set(bytes, ptr);
+					return ptr;
+				};
+				const token = copy(a['token']);
+				const proof = copy(a['proof']);
+				call(cwWeb.entries.auth, a['what'], token, a['token'].length, proof, a['proof'].length);
+				_free(proof);
+				_free(token);
 			} else if (m['shutdown'] !== undefined) {
 				call(cwWeb.entries.shutdown, m['shutdown']);
 				postMessage({ 'done': { 'kind': 'shutdown', 'result': m['shutdown'] } });
@@ -215,6 +229,13 @@ addToLibrary({
 
 		preRun() {
 			if (cwWeb.role !== 'game') {
+				return;
+			}
+			// A disabled game has no watcher. This one was started before the
+			// page could say so, and would obey the variable too if it got it.
+			if (ENV['CW_DISABLE'] === '1') {
+				cwWeb.watcher?.terminate();
+				cwWeb.watcher = null;
 				return;
 			}
 			cwWeb.post({ 'env': Object.assign({}, ENV) });
@@ -264,6 +285,15 @@ addToLibrary({
 		cwWeb.post({ 'consent': choice });
 	},
 
+	cw_web_game_notify_auth__deps: ['$cwWeb'],
+	cw_web_game_notify_auth: (what, token, tokenLen, proof, proofLen) => {
+		cwWeb.post({ 'auth': {
+			'what': what,
+			'token': HEAPU8.slice(token, token + tokenLen),
+			'proof': HEAPU8.slice(proof, proof + proofLen),
+		} });
+	},
+
 	cw_web_game_notify_shutdown__deps: ['$cwWeb'],
 	cw_web_game_notify_shutdown: (result) => {
 		if (cwWeb.watcher) {
@@ -278,8 +308,8 @@ addToLibrary({
 	},
 
 	cw_web_watcher_ready__deps: ['$cwWeb'],
-	cw_web_watcher_ready: (consent, report, consentFn, shutdown) => {
-		cwWeb.entries = { report, consent: consentFn, shutdown };
+	cw_web_watcher_ready: (consent, report, consentFn, auth, shutdown) => {
+		cwWeb.entries = { report, consent: consentFn, auth, shutdown };
 		postMessage({ 'snapshot': { 'consent': consent, 'pending': cwWeb.announced } });
 		// The handlers run from the event loop, never from inside main().
 		const waiting = cwWeb.waiting;

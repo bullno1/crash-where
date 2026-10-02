@@ -29,6 +29,19 @@ typedef void (*cw_web_report_fn_t)(const char* message, const char* stack, cw_sh
 /** Watcher: the player decided; `choice` is a cw_consent_t. */
 typedef void (*cw_web_consent_fn_t)(int choice);
 
+/**
+ * Watcher: the game rewrote its authentication files.
+ *
+ * @param what   cw_auth_event_t bits naming the files that follow.
+ * @param token  Content of the token file, when ::CW_AUTH_TOKEN is set.
+ * @param proof  Content of the proof file, when ::CW_AUTH_PROOF is set.
+ */
+typedef void (*cw_web_auth_fn_t)(
+	unsigned what,
+	const void* token, size_t token_len,
+	const void* proof, size_t proof_len
+);
+
 /** Watcher: the game is exiting on purpose. */
 typedef void (*cw_web_shutdown_fn_t)(int result);
 
@@ -62,6 +75,14 @@ cw_web_game_pending(int i, char* name, size_t cap, bool* approved);
 void
 cw_web_game_notify_consent(int choice);
 
+/** Send the content of the files named by `what`, cw_auth_event_t bits. */
+void
+cw_web_game_notify_auth(
+	unsigned what,
+	const void* token, size_t token_len,
+	const void* proof, size_t proof_len
+);
+
 void
 cw_web_game_notify_shutdown(int result);
 
@@ -80,7 +101,7 @@ void
 cw_web_watcher_ready(
 	int consent,
 	cw_web_report_fn_t on_report, cw_web_consent_fn_t on_consent,
-	cw_web_shutdown_fn_t on_shutdown
+	cw_web_auth_fn_t on_auth, cw_web_shutdown_fn_t on_shutdown
 );
 
 /**

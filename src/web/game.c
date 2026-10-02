@@ -80,8 +80,22 @@ cw_platform_notify_consent(cw_consent_t choice) {
 
 void
 cw_platform_notify_auth(unsigned what) {
-	(void)what;
-	cw_log(CW_LOG_WARN, "token and proof do not reach the watcher on this platform, not implemented");
+	/* The watcher has no view of these files, so their content travels with the message. */
+	static char token[CW_TOKEN_CAP + 64];
+	static char proof[CW_PROOF_CAP * 4 / 3 + 128];
+	size_t token_len = 0;
+	size_t proof_len = 0;
+	if ((what & CW_AUTH_TOKEN) && !cw_store_read("token", token, sizeof(token), &token_len)) {
+		cw_log(CW_LOG_ERROR, "cannot read the token back, not sent to the watcher");
+		what &= ~(unsigned)CW_AUTH_TOKEN;
+	}
+	if ((what & CW_AUTH_PROOF) && !cw_store_read("proof", proof, sizeof(proof), &proof_len)) {
+		cw_log(CW_LOG_ERROR, "cannot read the proof back, not sent to the watcher");
+		what &= ~(unsigned)CW_AUTH_PROOF;
+	}
+	if (what != 0) {
+		cw_web_game_notify_auth(what, token, token_len, proof, proof_len);
+	}
 }
 
 void

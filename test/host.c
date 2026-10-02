@@ -18,11 +18,11 @@
 
 /* Scenarios (child side) {{{ */
 
-static int* volatile null_ptr;
+static int* volatile bad_ptr = (int*)TEST_BAD_ADDRESS;
 
 CW_SCENARIO(host_crash) {
 	cw_set_state("mode", "host_crash");
-	*null_ptr = 1;
+	*bad_ptr = 1;
 }
 
 /* }}} */

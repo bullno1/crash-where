@@ -21,6 +21,16 @@
 #	define TEST_RETURN_ADDRESS() ((uintptr_t)__builtin_return_address(0))
 #endif
 
+/*
+ * Where a scenario stores to die of an access fault. Address 0 is
+ * ordinary memory in Wasm; only a store past the end of memory traps.
+ */
+#if defined(__EMSCRIPTEN__)
+#	define TEST_BAD_ADDRESS ((uintptr_t)0xfffffff0u)
+#else
+#	define TEST_BAD_ADDRESS ((uintptr_t)0)
+#endif
+
 /* Exception types the library reports for the scenarios. */
 #if defined(_WIN32)
 #	define TEST_EXC_SEGV           "EXCEPTION_ACCESS_VIOLATION"

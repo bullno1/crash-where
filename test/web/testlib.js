@@ -4,7 +4,7 @@
 //   'runner'  runs the suites; test_spawn_self() suspends it while a child runs.
 //   'child'   runs one scenario and reports how it ended to the page above.
 // The watcher of a child needs no role of its own here: it answers one
-// message, with the files of the run directory.
+// message, with the directories and files of the run directory.
 addToLibrary({
 	$testWeb__deps: ['$cwWeb', '$ENV', '$FS', '$wasmTable', '$stringToNewUTF8', '$UTF8ToString', 'malloc'],
 	$testWeb__postset: () => 'testWeb.boot();',
@@ -73,8 +73,11 @@ addToLibrary({
 					}
 					clearTimeout(timer);
 					removeEventListener('message', onMessage);
+					// Directories too: one the watcher emptied must still exist here.
+					for (const dir of e.data['dirs']) {
+						FS.mkdirTree(dir);
+					}
 					for (const [path, bytes] of Object.entries(e.data['files'])) {
-						FS.mkdirTree(path.slice(0, path.lastIndexOf('/')));
 						FS.writeFile(path, bytes);
 						Module['testOnFile']?.(path, bytes);
 					}
@@ -98,23 +101,24 @@ addToLibrary({
 
 			let exit = null;
 			let finished = false;
-			const send = (files) => {
+			const send = (tree) => {
 				if (!finished) {
 					finished = true;
-					parent.postMessage({ 'exit': exit, 'files': files }, '*');
+					parent.postMessage({ 'exit': exit, 'dirs': tree['dirs'], 'files': tree['files'] }, '*');
 				}
 			};
+			const nothing = { 'dirs': [], 'files': {} };
 			const finish = () => {
 				if (!cwWeb.watcher) {
-					return send({});
+					return send(nothing);
 				}
 				cwWeb.watcher.addEventListener('message', (e) => {
-					if (e.data['testFiles']) {
-						send(e.data['testFiles']);
+					if (e.data['testTree']) {
+						send(e.data['testTree']);
 					}
 				});
 				cwWeb.watcher.postMessage({ 'testPublish': env['CW_TEST_OUT'] });
-				setTimeout(() => send({}), testWeb.FILES_MS);
+				setTimeout(() => send(nothing), testWeb.FILES_MS);
 			};
 			// An error nobody catches ends a process. A page lives on, so the
 			// child says it died, unless the shim took the trap and will say so.
@@ -159,8 +163,10 @@ addToLibrary({
 				if (!root) {
 					return;
 				}
+				const dirs = [];
 				const files = {};
 				const walk = (dir) => {
+					dirs.push(dir);
 					for (const name of FS.readdir(dir)) {
 						if (name === '.' || name === '..') {
 							continue;
@@ -176,7 +182,7 @@ addToLibrary({
 				if (FS.analyzePath(root).exists) {
 					walk(root);
 				}
-				postMessage({ 'testFiles': files });
+				postMessage({ 'testTree': { 'dirs': dirs, 'files': files } });
 			});
 		},
 	},

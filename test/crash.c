@@ -25,7 +25,7 @@
 static volatile int sink;
 
 /* Resolved at run time so the compiler cannot prove the store undefined and delete it. */
-static int* volatile null_ptr;
+static int* volatile bad_ptr = (int*)TEST_BAD_ADDRESS;
 
 /**
  * Record an address in a state slot, so it reaches the runner inside
@@ -43,14 +43,14 @@ record_addr(const char* key, uintptr_t addr) {
 TEST_NOINLINE static void
 write_null(void) {
 	record_addr("ret1", TEST_RETURN_ADDRESS());
-	*null_ptr = 1;
+	*bad_ptr = 1;
 	sink++;
 }
 
 /* Makes no calls, so GCC may omit its frame pointer. */
 TEST_NOINLINE static void
 write_null_leaf(void) {
-	*null_ptr = 1;
+	*bad_ptr = 1;
 	sink++;
 }
 

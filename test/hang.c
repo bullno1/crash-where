@@ -114,7 +114,7 @@ BTEST(hang, reset_does_not_arm) {
 static volatile int sink;
 
 /* Resolved at run time so the compiler cannot prove the store undefined and delete it. */
-static int* volatile null_ptr;
+static int* volatile bad_ptr = (int*)TEST_BAD_ADDRESS;
 
 static void
 record_addr(const char* key, uintptr_t addr) {
@@ -168,7 +168,7 @@ CW_SCENARIO(stall_then_crash) {
 		cw_heartbeat();
 	}
 	stall_until_reported();
-	*null_ptr = 1;
+	*bad_ptr = 1;
 }
 
 CW_SCENARIO(no_heartbeat) {

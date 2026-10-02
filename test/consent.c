@@ -46,11 +46,11 @@ CW_SCENARIO(once_then_exit) {
 	cw_shutdown(0);
 }
 
-static int* volatile null_ptr;
+static int* volatile bad_ptr = (int*)TEST_BAD_ADDRESS;
 
 CW_SCENARIO(consent_crash) {
 	cw_set_state("mode", "consent_crash");
-	*null_ptr = 1;
+	*bad_ptr = 1;
 }
 
 CW_SCENARIO(consent_exit) {
