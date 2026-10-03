@@ -24,14 +24,16 @@ Any other conflict aborts the merge and names the files.
 
 ## Dashboard access
 
-Every route outside `/v1/` needs a login, in one of two modes chosen by which secrets are set.
+The dashboard lives under `/dashboard`, and the root redirects there.
+Everything under that prefix needs a login, in one of two modes chosen by which secrets are set; `/` and `/v1/` stay outside it.
 
 With `DASHBOARD_PASSWORD` set and nothing else, the browser asks for a name and that password.
 This is the first-run mode: one shared password, no second factor, no record of who did what, and a logout only when the browser closes.
 Generate the password rather than invent it, with `openssl rand -base64 24`; the Worker refuses to serve with one shorter than 16 characters.
 A rate limiting rule on the dashboard hostname, which the free plan includes, blunts password guessing.
 
-With `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` set, every route outside `/v1/` sits behind Cloudflare Access, and the password is ignored.
+With `ACCESS_TEAM_DOMAIN` and `ACCESS_AUD` set, the prefix sits behind Cloudflare Access, and the password is ignored.
+Scope the Access application to `<host>/dashboard` so that it guards the same paths the Worker does.
 The Worker verifies the JWT that Access attaches to each request, so a request that reaches the Worker by any other path is refused.
 Moving from the password to Access is setting those two secrets and deleting the password.
 

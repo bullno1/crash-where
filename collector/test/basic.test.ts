@@ -6,12 +6,12 @@ const env = { DASHBOARD_PASSWORD: password };
 
 function withBasic(user: string, pass: string): Request {
 	const token = btoa(String.fromCharCode(...new TextEncoder().encode(`${user}:${pass}`)));
-	return new Request("https://dash.example/", { headers: { Authorization: `Basic ${token}` } });
+	return new Request("https://dash.example/dashboard", { headers: { Authorization: `Basic ${token}` } });
 }
 
 describe("password login", () => {
 	it("challenges a request without credentials", async () => {
-		const r = await worker.fetch(new Request("https://dash.example/"), env);
+		const r = await worker.fetch(new Request("https://dash.example/dashboard"), env);
 		expect(r.status).toBe(401);
 		expect(r.headers.get("WWW-Authenticate")).toMatch(/^Basic /);
 	});
@@ -38,7 +38,7 @@ describe("password login", () => {
 	});
 	it("rejects malformed credentials", async () => {
 		const r = await worker.fetch(
-			new Request("https://dash.example/", { headers: { Authorization: "Basic not*base64" } }), env
+			new Request("https://dash.example/dashboard", { headers: { Authorization: "Basic not*base64" } }), env
 		);
 		expect(r.status).toBe(401);
 	});
@@ -48,7 +48,21 @@ describe("password login", () => {
 		expect(r.headers.get("WWW-Authenticate")).toBeNull();
 	});
 	it("has no dev login route", async () => {
-		expect((await worker.fetch(new Request("http://localhost:8787/dev/login?token=x"), env)).status).toBe(401);
+		expect((await worker.fetch(new Request("http://localhost:8787/dev/login?token=x"), env)).status).toBe(404);
+	});
+	it("guards every path under the prefix", async () => {
+		const r = await worker.fetch(new Request("https://dash.example/dashboard/groups/1"), env);
+		expect(r.status).toBe(401);
+	});
+	it("leaves the root public and sends it to the dashboard", async () => {
+		const r = await worker.fetch(new Request("https://dash.example/"), env);
+		expect(r.status).toBe(302);
+		expect(r.headers.get("Location")).toBe("/dashboard");
+	});
+	it("leaves the API prefix outside the login", async () => {
+		const r = await worker.fetch(new Request("https://dash.example/v1/report"), env);
+		expect(r.status).toBe(404);
+		expect(r.headers.get("WWW-Authenticate")).toBeNull();
 	});
 });
 

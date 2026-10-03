@@ -7,7 +7,7 @@ describe("/dev/login", () => {
 	it("stores the token as the Access cookie and redirects", async () => {
 		const r = await worker.fetch(new Request("http://localhost:8787/dev/login?token=abc"), env);
 		expect(r.status).toBe(303);
-		expect(r.headers.get("Location")).toBe("/");
+		expect(r.headers.get("Location")).toBe("/dashboard");
 		expect(r.headers.get("Set-Cookie")).toBe("CF_Authorization=abc; Path=/; HttpOnly; SameSite=Lax");
 	});
 	it("accepts 127.0.0.1", async () => {
