@@ -6,6 +6,8 @@ export interface Env {
 	DB: D1Database;
 	/** One Durable Object per app, addressed by the app's `name`. */
 	SHARD: DurableObjectNamespace<AppShard>;
+	/** Symbol tables, one object per build. */
+	SYMBOLS: R2Bucket;
 	ACCESS_TEAM_DOMAIN?: string;
 	ACCESS_AUD?: string;
 	DASHBOARD_PASSWORD?: string;

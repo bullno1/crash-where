@@ -18,6 +18,18 @@ export interface Apps {
   name: string;
 }
 
+export interface UploadTokens {
+  app_id: number;
+  created_at: number;
+  created_by: string;
+  hash: string;
+  id: Generated<number>;
+  label: string;
+  last_used_at: number | null;
+  revoked_at: number | null;
+}
+
 export interface DB {
   apps: Apps;
+  upload_tokens: UploadTokens;
 }

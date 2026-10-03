@@ -4,8 +4,7 @@
 
 CREATE TABLE versions (
   version    TEXT    PRIMARY KEY NOT NULL,  -- as cw_init receives it, "1.4.2"
-  ordinal    INTEGER NOT NULL,              -- numeric sort key derived from it, 1004002
-  created_at INTEGER NOT NULL               -- unix seconds
+  created_at INTEGER NOT NULL               -- unix seconds of the first upload; the list order
 );
 
 CREATE TABLE builds (                       -- one per uploaded symbol table

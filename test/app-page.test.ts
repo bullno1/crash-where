@@ -36,7 +36,7 @@ describe("app page", () => {
 		expect(html).toContain("<h1>Page &lt;Empty&gt;</h1>");
 		expect(html).toContain("<code>page-empty</code>");
 		expect(html).toContain("disabled since 2025-06-15");
-		expect(html).toContain("created 2023-11-14 by bob");
+		expect(html).toContain("created at 2023-11-14 by bob");
 		expect(html).toContain("No versions yet");
 	});
 	it("lists versions newest first with their channels and builds", async () => {
@@ -45,8 +45,8 @@ describe("app page", () => {
 			await obj.db
 				.insertInto("versions")
 				.values([
-					{ version: "1.0.0", ordinal: 1_000_000, created_at: 1_700_000_000 },
-					{ version: "1.1.0", ordinal: 1_001_000, created_at: 1_700_100_000 },
+					{ version: "1.0.0", created_at: 1_700_000_000 },
+					{ version: "1.1.0", created_at: 1_700_100_000 },
 				])
 				.execute();
 			await obj.db

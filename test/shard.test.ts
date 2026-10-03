@@ -36,7 +36,7 @@ describe("shard migrations", () => {
 	});
 	it("keep apps apart", async () => {
 		await inShard("a", async (obj) => {
-			await obj.db.insertInto("versions").values({ version: "1.0.0", ordinal: 1_000_000, created_at: 1 }).execute();
+			await obj.db.insertInto("versions").values({ version: "1.0.0", created_at: 1 }).execute();
 		});
 		const inA = await inShard("a", (obj) => obj.db.selectFrom("versions").select("version").execute());
 		const inB = await inShard("b", (obj) => obj.db.selectFrom("versions").select("version").execute());
@@ -49,7 +49,7 @@ describe("shard migrations", () => {
 describe("release schema", () => {
 	it("holds one version on several channels and with several builds", async () => {
 		const rows = await inShard("channels", async (obj) => {
-			await obj.db.insertInto("versions").values({ version: "1.4.2", ordinal: 1_004_002, created_at: 1 }).execute();
+			await obj.db.insertInto("versions").values({ version: "1.4.2", created_at: 1 }).execute();
 			await obj.db
 				.insertInto("builds")
 				.values([{ build_id: "w", version: "1.4.2", uploaded_at: 1 }, { build_id: "l", version: "1.4.2", uploaded_at: 1 }])
@@ -77,7 +77,7 @@ describe("release schema", () => {
 	it("refuses the same version twice on one channel", async () => {
 		await expect(
 			inShard("dup", async (obj) => {
-				await obj.db.insertInto("versions").values({ version: "1.0.0", ordinal: 1_000_000, created_at: 1 }).execute();
+				await obj.db.insertInto("versions").values({ version: "1.0.0", created_at: 1 }).execute();
 				await obj.db.insertInto("releases").values({ channel: "stable", version: "1.0.0", released_at: 1 }).execute();
 				await obj.db.insertInto("releases").values({ channel: "stable", version: "1.0.0", released_at: 2 }).execute();
 			})
@@ -88,7 +88,7 @@ describe("release schema", () => {
 describe("shard dialect", () => {
 	it("runs typed queries with parameters and returning", async () => {
 		const row = await inShard("returning", async (obj) => {
-			await obj.db.insertInto("versions").values({ version: "1.0.0", ordinal: 1_000_000, created_at: 1 }).execute();
+			await obj.db.insertInto("versions").values({ version: "1.0.0", created_at: 1 }).execute();
 			return obj.db
 				.insertInto("releases")
 				.values({ channel: "stable", version: "1.0.0", released_at: 10 })
@@ -99,7 +99,7 @@ describe("shard dialect", () => {
 	});
 	it("reports affected rows", async () => {
 		const result = await inShard("affected", async (obj) => {
-			await obj.db.insertInto("versions").values({ version: "1.0.0", ordinal: 1_000_000, created_at: 1 }).execute();
+			await obj.db.insertInto("versions").values({ version: "1.0.0", created_at: 1 }).execute();
 			await obj.db
 				.insertInto("builds")
 				.values([

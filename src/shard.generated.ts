@@ -18,7 +18,6 @@ export interface Releases {
 
 export interface Versions {
   created_at: number;
-  ordinal: number;
   version: string;
 }
 
