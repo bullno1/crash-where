@@ -1,5 +1,6 @@
 import pico from "@picocss/pico/css/pico.classless.min.css";
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
+import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { csrf } from "hono/csrf";
 import { html } from "hono/html";
 import { type AppError, type AppInput, type AppRow, createApp, getApp, listApps, validateApp } from "./apps";
@@ -8,6 +9,7 @@ import type { App } from "./env";
 import { layout } from "./layout";
 import { type Page, render } from "./page";
 import type { VersionSummary } from "./shard";
+import { createToken, listTokens, MAX_LABEL, revokeToken, type TokenRow, validLabel } from "./tokens";
 
 /**
  * The dashboard: a login is required before any of its routes runs, and a
@@ -103,7 +105,41 @@ dashboard.post("/apps", async (c) => {
 	return c.redirect("/dashboard", 303);
 });
 
-function appPage(who: string, app: AppRow, versions: VersionSummary[]): Page {
+/** The upload tokens of an app, with the one just minted shown in clear. */
+function tokensSection(app: AppRow, tokens: TokenRow[], fresh: string | null): Page {
+	const rows = tokens.map(
+		(t) => html`<tr>
+<td>${t.label}</td>
+<td>${day(t.created_at)}</td>
+<td>${t.created_by}</td>
+<td>${t.last_used_at === null ? html`<small>never</small>` : day(t.last_used_at)}</td>
+<td>${t.revoked_at === null
+	? html`<form method="post" action="/dashboard/apps/${app.name}/tokens/${t.id}/revoke"><button class="secondary">Revoke</button></form>`
+	: html`<small>revoked ${day(t.revoked_at)}</small>`}</td>
+</tr>`
+	);
+	const table =
+		tokens.length === 0
+			? html`<p>No upload tokens yet.</p>`
+			: html`<table>
+<thead><tr><th>Label</th><th>Created</th><th>By</th><th>Last used</th><th></th></tr></thead>
+<tbody>${rows}</tbody>
+</table>`;
+	return html`<h2>Upload tokens</h2>
+<p>CI uploads symbol tables with <code>cwsym upload</code>, which reads its token from <code>CWSYM_TOKEN</code>.</p>
+${fresh === null
+	? ""
+	: html`<article><p>New token, shown only this once:</p><pre><code>${fresh}</code></pre></article>`}
+${table}
+<form method="post" action="/dashboard/apps/${app.name}/tokens">
+<label>Label
+<input name="label" required maxlength="${MAX_LABEL}" placeholder="GitHub Actions">
+</label>
+<button>Create upload token</button>
+</form>`;
+}
+
+function appPage(who: string, app: AppRow, versions: VersionSummary[], tokens: TokenRow[], fresh: string | null): Page {
 	const rows = versions.map(
 		(v) => html`<tr>
 <td><code>${v.version}</code></td>
@@ -130,15 +166,52 @@ function appPage(who: string, app: AppRow, versions: VersionSummary[]): Page {
 		html`<h1>${app.display_name}</h1>
 <p><code>${app.name}</code> · ${app.disabled_at === null ? "active" : `disabled since ${day(app.disabled_at)}`} · created at ${day(app.created_at)} by ${app.created_by}</p>
 <h2>Versions</h2>
-${table}`
+${table}
+${tokensSection(app, tokens, fresh)}`
 	);
+}
+
+/**
+ * A token just minted reaches the page that shows it through this cookie,
+ * scoped to the app's page and cleared on the first read, so that it enters
+ * neither a URL nor the browsing history and the form post can redirect
+ * like every other.
+ */
+const FRESH_TOKEN_COOKIE = "cw_new_token";
+const FRESH_TOKEN_SECONDS = 60;
+
+function appPath(name: string): string {
+	return `/dashboard/apps/${name}`;
 }
 
 dashboard.get("/apps/:name", async (c) => {
 	const who = c.get("identity");
 	const app = await getApp(c.get("db"), c.req.param("name"));
 	if (!app) return c.text("No such app", 404);
+	const fresh = getCookie(c, FRESH_TOKEN_COOKIE) ?? null;
+	if (fresh !== null) deleteCookie(c, FRESH_TOKEN_COOKIE, { path: appPath(app.name), secure: true });
 	const shard = c.env.SHARD.get(c.env.SHARD.idFromName(app.name));
 	const versions = await shard.listVersions();
-	return render(c, appPage(who.email ?? who.sub, app, versions));
+	const tokens = await listTokens(c.get("db"), app.id);
+	return render(c, appPage(who.email ?? who.sub, app, versions, tokens, fresh));
+});
+
+dashboard.post("/apps/:name/tokens", async (c) => {
+	const app = await getApp(c.get("db"), c.req.param("name"));
+	if (!app) return c.text("No such app", 404);
+	const body = await c.req.parseBody();
+	const label = validLabel(typeof body.label === "string" ? body.label : "");
+	if (label === null) return c.text(`A label of 1 to ${MAX_LABEL} characters is required`, 400);
+	const { token } = await createToken(c.get("db"), app.id, label, c.get("identity"), Math.floor(Date.now() / 1000));
+	setCookie(c, FRESH_TOKEN_COOKIE, token, {
+		path: appPath(app.name), httpOnly: true, secure: true, sameSite: "Strict", maxAge: FRESH_TOKEN_SECONDS,
+	});
+	return c.redirect(appPath(app.name), 303);
+});
+
+dashboard.post("/apps/:name/tokens/:id/revoke", async (c) => {
+	const app = await getApp(c.get("db"), c.req.param("name"));
+	if (!app) return c.text("No such app", 404);
+	await revokeToken(c.get("db"), app.id, Number(c.req.param("id")), Math.floor(Date.now() / 1000));
+	return c.redirect(appPath(app.name), 303);
 });

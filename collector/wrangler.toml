@@ -31,3 +31,9 @@ new_sqlite_classes = ["AppShard"]
 type = "Text"
 globs = ["**/*.sql", "**/*.css"]
 fallthrough = true
+
+# Symbol tables uploaded by CI, one immutable object per build under
+# symbols/<app>/<build_id>.cwsym.
+[[r2_buckets]]
+binding = "SYMBOLS"
+bucket_name = "crash-where-symbols"
