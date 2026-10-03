@@ -14,9 +14,6 @@ crash/null_write_leaf
 crash/thread_stack_overflow
 crash/thread_null_write
 
-# Stack exhaustion is an error type the shim does not take.
-crash/stack_overflow
-
 # Expects the report of a game that ended without cw_shutdown(). Game and
 # watcher end together on the web.
 crash/exit_without_shutdown

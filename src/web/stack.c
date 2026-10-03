@@ -181,6 +181,11 @@ cw_web_parse_stack(const char* stack, cw_crash_info_t* info) {
 
 void
 cw_web_trap_type(const char* name, const char* message, char* out, size_t cap) {
+	/* Call-stack exhaustion is an error of the engine's own class, which differs per engine. */
+	if (strstr(message, "Maximum call stack size exceeded") != NULL || strstr(message, "too much recursion") != NULL) {
+		snprintf(out, cap, "STACK_OVERFLOW");
+		return;
+	}
 	if (name[0] != '\0') {
 		snprintf(out, cap, "%s", name);
 		return;

@@ -180,8 +180,9 @@ cw_web_parse_stack(const char* stack, cw_crash_info_t* info);
 /**
  * Exception type, the same for every engine.
  *
- * The error's `name` when there is one. For a trap or an abort, the
- * message decides; one that matches nothing known becomes `TRAP`.
+ * The error's `name` when there is one or `STACK_OVERFLOW`.
+ * For a trap or an abort, the message decides; one that matches
+ * nothing known becomes `TRAP`.
  */
 void
 cw_web_trap_type(const char* name, const char* message, char* out, size_t cap);
