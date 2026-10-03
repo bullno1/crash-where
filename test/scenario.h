@@ -139,6 +139,20 @@ void
 test_write_event(yyjson_mut_doc* doc);
 
 /**
+ * Decode a gzip stream as the library writes it.
+ *
+ * @param out_len  Receives the decoded size.
+ * @return A buffer to free, or `NULL` when `in` is not such a stream or
+ *         its checksum or size does not match.
+ */
+uint8_t*
+test_gunzip(const void* in, size_t len, size_t* out_len);
+
+/** The CRC-32 a gzip trailer carries. */
+uint32_t
+test_crc32(const void* data, size_t len);
+
+/**
  * Child side: initialize the library and run the named scenario.
  *
  * @return The process exit status for a scenario that returns.

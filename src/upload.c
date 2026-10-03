@@ -121,18 +121,23 @@ send_request(
 	const cw_transport_t* tr = cw_ctx.cfg.transport;
 	char url[CW_STR_CAP + 256];
 	snprintf(url, sizeof(url), "%s/v1/%s/%s", cw_ctx.cfg.endpoint, cw_ctx.cfg.app, route);
+	/* Bodies go out as gzip; one that cannot be compressed goes out as it is. */
+	size_t zipped_len = 0;
+	void* zipped = body_len > 0 ? cw_gzip(body, body_len, &zipped_len) : NULL;
 	cw_request_t req = {
 		.method = "POST",
 		.url = url,
 		.content_type = content_type,
+		.content_encoding = zipped != NULL ? "gzip" : NULL,
 		.token = token,
-		.body = body,
-		.body_len = body_len,
+		.body = zipped != NULL ? zipped : body,
+		.body_len = zipped != NULL ? zipped_len : body_len,
 		.reply = reply,
 		.reply_cap = reply_cap - 1,
 	};
 	cw_response_t resp = { 0 };
 	cw_status_t st = tr->send(tr->user, &req, &resp);
+	free(zipped);
 	if (st == CW_OK) {
 		if (resp.reply_len > req.reply_cap) {
 			resp.reply_len = req.reply_cap;

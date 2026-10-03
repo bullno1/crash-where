@@ -23,14 +23,15 @@ typedef enum {
  * it blocks on a synchronous request, which follows redirects and
  * reports one only afterwards.
  *
- * @param content_type  `NULL` for none.
- * @param token         `NULL` for none.
+ * @param content_type      `NULL` for none.
+ * @param content_encoding  `NULL` for none.
+ * @param token             `NULL` for none.
  * @return A cw_http_web_result_t.
  */
 int
 cw_http_web_fetch(
 	const char* method, const char* url,
-	const char* content_type, const char* token,
+	const char* content_type, const char* content_encoding, const char* token,
 	const void* body, size_t body_len,
 	char* reply, size_t reply_cap,
 	long timeout_ms, int* status, size_t* reply_len
@@ -42,7 +43,7 @@ cw_http_backend_send(const cw_request_t* req, cw_response_t* resp) {
 	size_t reply_len = 0;
 	int result = cw_http_web_fetch(
 		req->method, req->url,
-		req->content_type, req->token,
+		req->content_type, req->content_encoding, req->token,
 		req->body, req->body_len,
 		req->reply, req->reply_cap,
 		CW_HTTP_TIMEOUT_MS, &status, &reply_len

@@ -347,6 +347,16 @@ bool
 cw_env_has(const char* key);
 
 /**
+ * Compress `in` as gzip.
+ *
+ * @param out_len  Receives the size of the result.
+ * @return A buffer for the caller to free, or `NULL` when memory ran
+ *         out or `len` is more than the encoder takes.
+ */
+void*
+cw_gzip(const void* in, size_t len, size_t* out_len);
+
+/**
  * Write one envelope into `<report_dir>/pending/`.
  *
  * @param out_path  Receives the final path on success.

@@ -101,6 +101,7 @@ test_http_request(const test_http_server_t* server, int index) {
 		FIELD(uri);
 		FIELD(query);
 		FIELD(content_type);
+		FIELD(content_encoding);
 		FIELD(content_length);
 		FIELD(authorization);
 		FIELD(user_agent);

@@ -446,7 +446,12 @@ BTEST(minidump, uploaded_when_wanted) {
 	BTEST_EXPECT(strcmp(test_json_str(attach, "/method"), "POST") == 0);
 	BTEST_EXPECT(strcmp(test_json_str(attach, "/content_type"), "application/octet-stream") == 0);
 	BTEST_EXPECT(yyjson_is_null(test_json_get(attach, "/token")));
-	BTEST_EXPECT_RELATION("%" PRIu64, yyjson_get_uint(test_json_get(attach, "/body_len")), >, (uint64_t)MDMP_HEADER_SIZE);
+	/* The dump travels gzipped, and decodes to something at least as large as a dump header. */
+	BTEST_EXPECT(strcmp(test_json_str(attach, "/content_encoding"), "gzip") == 0);
+	BTEST_EXPECT(yyjson_get_bool(test_json_get(attach, "/decodable")));
+	BTEST_EXPECT_RELATION("%" PRIu64, yyjson_get_uint(test_json_get(attach, "/raw_len")), >, (uint64_t)MDMP_HEADER_SIZE);
+	BTEST_EXPECT_RELATION("%" PRIu64, yyjson_get_uint(test_json_get(attach, "/body_len")), <, yyjson_get_uint(test_json_get(attach, "/raw_len")));
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/content_encoding"), "gzip") == 0);
 }
 
 /** A declined dump is deleted with its envelope and never sent. */

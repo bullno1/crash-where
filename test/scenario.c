@@ -97,16 +97,28 @@ test_send(void* user, const cw_request_t* req, cw_response_t* resp) {
 		yyjson_mut_obj_add_null(doc, root, "token");
 	}
 	yyjson_mut_obj_add_uint(doc, root, "body_len", req->body_len);
-	if (req->content_type != NULL && strcmp(req->content_type, "application/json") == 0) {
+	/* A compressed body is recorded decoded, so an event reads the same whatever the wire carried. */
+	const char* body = req->body;
+	size_t len = req->body_len;
+	uint8_t* decoded = NULL;
+	if (req->content_encoding != NULL) {
+		yyjson_mut_obj_add_str(doc, root, "content_encoding", req->content_encoding);
+		decoded = strcmp(req->content_encoding, "gzip") == 0 ? test_gunzip(req->body, req->body_len, &len) : NULL;
+		body = (const char*)decoded;
+	} else {
+		yyjson_mut_obj_add_null(doc, root, "content_encoding");
+	}
+	yyjson_mut_obj_add_bool(doc, root, "decodable", body != NULL);
+	yyjson_mut_obj_add_uint(doc, root, "raw_len", body != NULL ? len : 0);
+	if (body != NULL && req->content_type != NULL && strcmp(req->content_type, "application/json") == 0) {
 		/* The envelope is one JSON object followed by a newline; splice it in verbatim. */
-		const char* body = req->body;
-		size_t len = req->body_len;
 		while (len > 0 && body[len - 1] == '\n') {
 			--len;
 		}
 		yyjson_mut_obj_add_val(doc, root, "envelope", yyjson_mut_rawn(doc, body, len));
 	}
 	test_write_event(doc);
+	free(decoded);
 
 	int n;
 	if (route_is(req, "auth")) {

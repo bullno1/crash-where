@@ -126,6 +126,7 @@ typedef struct {
 	const char* method;       /**< "POST", "PUT", or "GET". */
 	const char* url;          /**< Absolute URL. */
 	const char* content_type; /**< Media type of `body`, or `NULL` when there is no body. */
+	const char* content_encoding; /**< Encoding `body` was compressed with, such as "gzip", or `NULL` when it was not. */
 	const char* token;        /**< Bearer token, or `NULL` when unauthenticated. */
 	const void* body;         /**< Request body, or `NULL`. */
 	size_t body_len;          /**< Length of `body` in bytes. */
@@ -156,7 +157,8 @@ typedef struct {
 	 * Perform one HTTP request and wait for the reply.
 	 *
 	 * Send `body`, when present, with its `Content-Type` and
-	 * `Content-Length`.
+	 * `Content-Length`, and `Content-Encoding` when an encoding is given;
+	 * the body is already compressed and must go out as it is.
 	 * Send `Authorization: Bearer <token>` when a token is given.
 	 * Never follow redirects.
 	 * Copy at most `reply_cap` bytes of the reply body into `reply`, reading

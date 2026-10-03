@@ -2,6 +2,7 @@ add_executable(cw_test
 	main.c
 	scenario.c
 	auth.c
+	compress.c
 	consent.c
 	crash.c
 	dialog.c
@@ -11,6 +12,7 @@ add_executable(cw_test
 	report.c
 	http.c
 	http_server.c
+	inflate.c
 	minidump.c
 	normalize.c
 	table.c

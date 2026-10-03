@@ -40,6 +40,7 @@ record(struct wby_con* con, test_http_request_t* req) {
 	snprintf(req->uri, sizeof(req->uri), "%s", con->request.uri);
 	snprintf(req->query, sizeof(req->query), "%s", con->request.query_params != NULL ? con->request.query_params : "");
 	copy_header(con, "Content-Type", req->content_type, sizeof(req->content_type));
+	copy_header(con, "Content-Encoding", req->content_encoding, sizeof(req->content_encoding));
 	copy_header(con, "Content-Length", req->content_length, sizeof(req->content_length));
 	copy_header(con, "Authorization", req->authorization, sizeof(req->authorization));
 	copy_header(con, "User-Agent", req->user_agent, sizeof(req->user_agent));

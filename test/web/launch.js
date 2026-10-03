@@ -115,6 +115,7 @@ function startPeer(reply, done) {
 					uri: decodeURIComponent(url.pathname),
 					query: url.search.slice(1),
 					content_type: header('content-type'),
+					content_encoding: header('content-encoding'),
 					content_length: header('content-length'),
 					authorization: header('authorization'),
 					user_agent: header('user-agent'),

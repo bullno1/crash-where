@@ -151,6 +151,9 @@ cw_http_backend_send(const cw_request_t* req, cw_response_t* resp) {
 	if (req->content_type != NULL) {
 		ok = ok && add_header(&headers, "Content-Type", req->content_type);
 	}
+	if (req->content_encoding != NULL) {
+		ok = ok && add_header(&headers, "Content-Encoding", req->content_encoding);
+	}
 	if (req->token != NULL) {
 		size_t len = strlen(req->token) + sizeof("Bearer ");
 		char* bearer = malloc(len);

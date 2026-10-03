@@ -18,7 +18,7 @@ addToLibrary({
 		REDIRECT: 302,
 
 		// What both ways of sending start from, or null for a URL neither can use.
-		prepare(method, url, contentType, token) {
+		prepare(method, url, contentType, contentEncoding, token) {
 			let target;
 			try {
 				// No base: a relative URL would otherwise name the page itself.
@@ -36,6 +36,9 @@ addToLibrary({
 			if (contentType) {
 				headers['Content-Type'] = UTF8ToString(contentType);
 			}
+			if (contentEncoding) {
+				headers['Content-Encoding'] = UTF8ToString(contentEncoding);
+			}
 			if (token) {
 				headers['Authorization'] = 'Bearer ' + UTF8ToString(token);
 			}
@@ -50,8 +53,8 @@ addToLibrary({
 			return cwHttp.RESPONDED;
 		},
 
-		async fetch(method, url, contentType, token, body, bodyLen, reply, replyCap, timeoutMs, status, replyLen) {
-			const req = cwHttp.prepare(method, url, contentType, token);
+		async fetch(method, url, contentType, contentEncoding, token, body, bodyLen, reply, replyCap, timeoutMs, status, replyLen) {
+			const req = cwHttp.prepare(method, url, contentType, contentEncoding, token);
 			if (!req) {
 				return cwHttp.INVALID_URL;
 			}
@@ -88,11 +91,11 @@ addToLibrary({
 		// A synchronous request follows redirects by itself and cannot be told
 		// not to. One is only noticed afterwards, by the address the reply came
 		// from, and by then the browser has asked the other address too.
-		send(method, url, contentType, token, body, bodyLen, reply, replyCap, timeoutMs, status, replyLen) {
+		send(method, url, contentType, contentEncoding, token, body, bodyLen, reply, replyCap, timeoutMs, status, replyLen) {
 			if (typeof XMLHttpRequest === 'undefined') {
 				return cwHttp.UNSUPPORTED;
 			}
-			const req = cwHttp.prepare(method, url, contentType, token);
+			const req = cwHttp.prepare(method, url, contentType, contentEncoding, token);
 			if (!req) {
 				return cwHttp.INVALID_URL;
 			}
@@ -125,6 +128,6 @@ addToLibrary({
 	},
 
 	cw_http_web_fetch__deps: ['$cwHttp'],
-	cw_http_web_fetch: (method, url, contentType, token, body, bodyLen, reply, replyCap, timeoutMs, status, replyLen) =>
-		cwHttp.send(method, url, contentType, token, body, bodyLen, reply, replyCap, timeoutMs, status, replyLen),
+	cw_http_web_fetch: (method, url, contentType, contentEncoding, token, body, bodyLen, reply, replyCap, timeoutMs, status, replyLen) =>
+		cwHttp.send(method, url, contentType, contentEncoding, token, body, bodyLen, reply, replyCap, timeoutMs, status, replyLen),
 });

@@ -15,6 +15,7 @@ function(cw_target_defaults target)
 endfunction()
 
 add_library(cw STATIC
+	compress.c
 	core.c
 	envelope.c
 	hang.c

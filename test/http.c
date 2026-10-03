@@ -71,6 +71,7 @@ BTEST(http, post_carries_body_and_headers) {
 	cw_status_t status = send_path("/v1/game/report", (cw_request_t){
 		.method = "POST",
 		.content_type = "application/json",
+		.content_encoding = "gzip",
 		.token = "tok-123",
 		.body = "{\"a\":1}",
 		.body_len = 7,
@@ -85,6 +86,7 @@ BTEST(http, post_carries_body_and_headers) {
 	BTEST_EXPECT(strcmp(req->method, "POST") == 0);
 	BTEST_EXPECT(strcmp(req->uri, "/v1/game/report") == 0);
 	BTEST_EXPECT(strcmp(req->content_type, "application/json") == 0);
+	BTEST_EXPECT(strcmp(req->content_encoding, "gzip") == 0);
 	BTEST_EXPECT(strcmp(req->content_length, "7") == 0);
 	BTEST_EXPECT(strcmp(req->authorization, "Bearer tok-123") == 0);
 	if (TEST_HTTP_OWN_USER_AGENT) {
@@ -117,6 +119,7 @@ BTEST(http, large_body_arrives_intact) {
 	const test_http_request_t* req = test_http_request(server, 0);
 	BTEST_ASSERT(req != NULL);
 	BTEST_EXPECT(strcmp(req->content_length, "40000") == 0);
+	BTEST_EXPECT(strcmp(req->content_encoding, "") == 0);
 	BTEST_EXPECT(strcmp(req->expect, "") == 0);
 	BTEST_ASSERT_EQUAL("%zu", req->body_len, sizeof(body));
 	BTEST_EXPECT(memcmp(req->body, body, sizeof(body)) == 0);

@@ -107,6 +107,9 @@ build_headers(const cw_request_t* req) {
 	if (req->content_type != NULL) {
 		len += sizeof("Content-Type: \r\n") + strlen(req->content_type);
 	}
+	if (req->content_encoding != NULL) {
+		len += sizeof("Content-Encoding: \r\n") + strlen(req->content_encoding);
+	}
 	if (req->token != NULL) {
 		len += sizeof("Authorization: Bearer \r\n") + strlen(req->token);
 	}
@@ -117,6 +120,9 @@ build_headers(const cw_request_t* req) {
 	utf8[0] = '\0';
 	if (req->content_type != NULL) {
 		snprintf(utf8 + strlen(utf8), len - strlen(utf8), "Content-Type: %s\r\n", req->content_type);
+	}
+	if (req->content_encoding != NULL) {
+		snprintf(utf8 + strlen(utf8), len - strlen(utf8), "Content-Encoding: %s\r\n", req->content_encoding);
 	}
 	if (req->token != NULL) {
 		snprintf(utf8 + strlen(utf8), len - strlen(utf8), "Authorization: Bearer %s\r\n", req->token);
