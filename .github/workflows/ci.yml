@@ -170,5 +170,7 @@ jobs:
           path: bin/gcc/RelWithDebInfo
       # Artifacts do not keep permissions.
       - run: chmod +x bin/gcc/RelWithDebInfo/cwsym bin/gcc/RelWithDebInfo/crashme
-      - run: test/e2e/upload.sh bin/gcc/RelWithDebInfo/cwsym
-      - run: test/e2e/report.sh bin/gcc/RelWithDebInfo/crashme bin/gcc/RelWithDebInfo/cwsym
+      - run: npm run e2e
+        working-directory: collector
+        env:
+          CW_BIN_DIR: ${{ github.workspace }}/bin/gcc/RelWithDebInfo

@@ -4,5 +4,5 @@ HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../env.sh"
 
 "$HERE/build"
-"$ROOT/test/e2e/upload.sh" "$BIN_DIR/cwsym"
-exec "$ROOT/test/e2e/report.sh" "$BIN_DIR/crashme" "$BIN_DIR/cwsym"
+cd "$ROOT/collector"
+CW_BIN_DIR="$BIN_DIR" exec npm run e2e

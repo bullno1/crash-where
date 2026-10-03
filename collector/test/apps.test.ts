@@ -79,6 +79,7 @@ describe("app listing", () => {
 		);
 		expect(css.status).toBe(200);
 		expect(css.headers.get("Content-Type")).toMatch(/^text\/css/);
+		expect(css.headers.get("Vary")).toBeNull();
 		expect(await css.text()).toContain("--pico-");
 		const anonymous = await worker.fetch(new Request("https://dash.example/dashboard/pico.css"), env);
 		expect(anonymous.status).toBe(401);
@@ -184,5 +185,47 @@ describe("schema", () => {
 		);
 		await expect(insert.bind("Bad Name").run()).rejects.toThrow(/CHECK/);
 		await expect(insert.bind("fine_name-1").run()).resolves.toBeTruthy();
+	});
+});
+
+describe("apps as JSON", () => {
+	const json = { Authorization: auth, Accept: "application/json" };
+	it("lists the rows", async () => {
+		await createApp(createDb(bindings.DB), { name: "json-list", display_name: "JSON List" }, { sub: "bob" });
+		const r = await worker.fetch(new Request("https://dash.example/dashboard", { headers: json }), env);
+		expect(r.status).toBe(200);
+		const data = await r.json() as { apps: { name: string }[] };
+		expect(data.apps.map((a) => a.name)).toEqual(["json-list"]);
+	});
+	it("marks every negotiated reply as varying by Accept", async () => {
+		const page = await get();
+		expect(page.headers.get("Vary")).toBe("Accept");
+		const created = await post({ name: "json-vary", display_name: "Vary" }, { ...json, Origin: origin });
+		expect(created.status).toBe(201);
+		expect(created.headers.get("Vary")).toBe("Accept");
+		const redirected = await create({ name: "form-vary", display_name: "Vary" });
+		expect(redirected.status).toBe(303);
+		expect(redirected.headers.get("Vary")).toBe("Accept");
+	});
+	it("creates from a JSON body without an origin and answers with the row", async () => {
+		const r = await worker.fetch(
+			new Request("https://dash.example/dashboard/apps", {
+				method: "POST",
+				headers: { ...json, "Content-Type": "application/json" },
+				body: JSON.stringify({ name: "json-made", display_name: " JSON Made " }),
+			}),
+			env
+		);
+		expect(r.status).toBe(201);
+		expect(await r.json()).toMatchObject({ app: { name: "json-made", display_name: "JSON Made", created_by: "alice" } });
+	});
+	it("names the field at fault, and a taken name", async () => {
+		const bad = await post({ name: "Bad", display_name: "X" }, { ...json, Origin: origin });
+		expect(bad.status).toBe(400);
+		expect(await bad.json()).toEqual({ error: { field: "name", message: expect.stringMatching(/^The name must be/) } });
+		await createApp(createDb(bindings.DB), { name: "json-taken", display_name: "Taken" }, { sub: "bob" });
+		const taken = await post({ name: "json-taken", display_name: "Again" }, { ...json, Origin: origin });
+		expect(taken.status).toBe(409);
+		expect(await taken.json()).toEqual({ error: { field: "name", message: "An app named 'json-taken' already exists." } });
 	});
 });
