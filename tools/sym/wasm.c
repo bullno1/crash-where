@@ -1,9 +1,12 @@
 /**
  * @file wasm.c
- * Wasm reader: function bodies from the code section, names from the
- * name section or the Emscripten symbol map, identity from the
- * `build_id` custom section. The module is a sequence of
- * length-prefixed vectors, so nothing is loaded to read it.
+ * Wasm reader. Function bodies come from the code section. Names, lines
+ * and inline sites come from the DWARF custom sections through libdw
+ * when the build carries them, in the module or in the file its
+ * `external_debug_info` section names; names alone come from the name
+ * section or the Emscripten symbol map. Identity is the `build_id`
+ * custom section. The module is a sequence of length-prefixed vectors,
+ * so nothing is loaded to walk it.
  */
 #include <errno.h>
 #include <inttypes.h>
@@ -16,6 +19,9 @@
 #define BARRAY_API static inline
 #define BARRAY_IMPLEMENTATION
 #include "vendor/barray.h"
+
+#define MAX_DEBUG_SECTIONS 16
+#define MAX_SECTION_NAME   32
 
 enum {
 	SECTION_CUSTOM   = 0,
@@ -110,6 +116,12 @@ span_equals(span_t s, const char* text) {
 	return s.len == strlen(text) && memcmp(s.s, text, s.len) == 0;
 }
 
+static bool
+span_starts_with(span_t s, const char* prefix) {
+	size_t n = strlen(prefix);
+	return s.len >= n && memcmp(s.s, prefix, n) == 0;
+}
+
 /** A value type: one byte, or a reference type followed by its heap type. */
 static void
 skip_valtype(cursor_t* c) {
@@ -129,29 +141,34 @@ skip_limits(cursor_t* c) {
 	}
 }
 
-/** State of one read. */
+/** What one module file holds that the reader uses. */
 typedef struct {
 	const char* path;
-	const cwsym_log_t* log;
+	char* own_path;          /**< `path`, when this module was located through another's link. */
 	uint8_t* data;
 	size_t len;
 	uint32_t imports;        /**< Function imports; they come first in the index space. */
 	barray(body_t) bodies;
+	uint32_t code_start;     /**< File offset of the code section's payload, which DWARF addresses count from. */
 	span_t function_names;   /**< The function subsection of the name section, when present. */
 	bool has_function_names;
 	span_t build_id;
 	bool has_build_id;
-	char* map;               /**< Contents of the symbol map, when read. */
-} reader_t;
+	span_t debug_link;       /**< `external_debug_info`: the file that holds the DWARF. */
+	bool has_debug_link;
+	cwsym_dwarf_section_t debug[MAX_DEBUG_SECTIONS];
+	char debug_names[MAX_DEBUG_SECTIONS][MAX_SECTION_NAME];
+	int debug_count;
+} module_t;
 
 /**
  * Walk the sections once. Only the imports, the code section, and the
- * two custom sections the reader needs are decoded; the rest are skipped
- * by their size.
+ * custom sections the reader needs are decoded; the rest are skipped by
+ * their size.
  */
 static bool
-parse_sections(reader_t* r) {
-	cursor_t c = { .data = r->data, .len = r->len, .pos = 8 };
+parse_sections(module_t* m, const cwsym_log_t* log) {
+	cursor_t c = { .data = m->data, .len = m->len, .pos = 8 };
 	while (!c.bad && c.pos < c.len) {
 		uint32_t id = read_u8(&c);
 		uint32_t size = read_u32(&c);
@@ -168,13 +185,27 @@ parse_sections(reader_t* r) {
 					uint32_t sub = read_u8(&c);
 					span_t payload = read_vector(&c);
 					if (sub == NAMES_FUNCTIONS) {
-						r->function_names = payload;
-						r->has_function_names = true;
+						m->function_names = payload;
+						m->has_function_names = true;
 					}
 				}
 			} else if (span_equals(name, "build_id")) {
-				r->build_id = read_vector(&c);
-				r->has_build_id = !c.bad;
+				m->build_id = read_vector(&c);
+				m->has_build_id = !c.bad;
+			} else if (span_equals(name, "external_debug_info")) {
+				m->debug_link = read_vector(&c);
+				m->has_debug_link = !c.bad;
+			} else if (span_starts_with(name, ".debug_") && !span_equals(name, ".debug_aranges")) {
+				/* The linker tombstones .debug_aranges, and libdw does not need it. */
+				if (!c.bad && m->debug_count < MAX_DEBUG_SECTIONS && name.len < MAX_SECTION_NAME) {
+					char* dst = m->debug_names[m->debug_count];
+					memcpy(dst, name.s, name.len);
+					dst[name.len] = '\0';
+					m->debug[m->debug_count] = (cwsym_dwarf_section_t){
+						.name = dst, .data = c.data + c.pos, .len = end - c.pos,
+					};
+					++m->debug_count;
+				}
 			}
 		} else if (id == SECTION_IMPORT) {
 			for (uint32_t n = read_u32(&c); n > 0 && !c.bad; --n) {
@@ -184,7 +215,7 @@ parse_sections(reader_t* r) {
 				switch (kind) {
 				case IMPORT_FUNC:
 					read_u32(&c);
-					++r->imports;
+					++m->imports;
 					break;
 				case IMPORT_TABLE:
 					skip_valtype(&c);
@@ -202,17 +233,18 @@ parse_sections(reader_t* r) {
 					read_u32(&c);
 					break;
 				default:
-					cwsym_logf(r->log, "%s: import kind %" PRIu32 " is not known", r->path, kind);
+					cwsym_logf(log, "%s: import kind %" PRIu32 " is not known", m->path, kind);
 					return false;
 				}
 			}
 		} else if (id == SECTION_CODE) {
+			m->code_start = (uint32_t)start;
 			for (uint32_t n = read_u32(&c); n > 0 && !c.bad; --n) {
 				uint32_t body_size = read_u32(&c);
 				body_t body = { .start = (uint32_t)c.pos, .size = body_size };
 				read_span(&c, body_size);
 				if (!c.bad) {
-					barray_push(r->bodies, body, NULL);
+					barray_push(m->bodies, body, NULL);
 				}
 			}
 		}
@@ -222,10 +254,89 @@ parse_sections(reader_t* r) {
 		c.pos = end;
 	}
 	if (c.bad) {
-		cwsym_logf(r->log, "%s: malformed at offset %#zx", r->path, c.pos);
+		cwsym_logf(log, "%s: malformed at offset %#zx", m->path, c.pos);
 		return false;
 	}
 	return true;
+}
+
+/** Read and parse the file at `m->path`. */
+static cwsym_status_t
+load_module(module_t* m, const cwsym_log_t* log) {
+	FILE* f = fopen(m->path, "rb");
+	if (f == NULL) {
+		cwsym_logf(log, "%s: %s", m->path, strerror(errno));
+		return CWSYM_ERR_IO;
+	}
+	fseek(f, 0, SEEK_END);
+	long size = ftell(f);
+	fseek(f, 0, SEEK_SET);
+	m->data = size >= 0 ? malloc((size_t)size + 1) : NULL;
+	if (m->data == NULL || fread(m->data, 1, (size_t)size, f) != (size_t)size) {
+		cwsym_logf(log, "%s: %s", m->path, m->data == NULL ? "out of memory" : "short read");
+		fclose(f);
+		return m->data == NULL ? CWSYM_ERR_NOMEM : CWSYM_ERR_IO;
+	}
+	fclose(f);
+	m->len = (size_t)size;
+
+	if (m->len < 8 || memcmp(m->data, "\0asm\x01\0\0\0", 8) != 0) {
+		cwsym_logf(log, "%s: not a version 1 Wasm module", m->path);
+		return CWSYM_ERR_FORMAT;
+	}
+	return parse_sections(m, log) ? CWSYM_OK : CWSYM_ERR_FORMAT;
+}
+
+static void
+free_module(module_t* m) {
+	barray_free(m->bodies, NULL);
+	free(m->data);
+	free(m->own_path);
+}
+
+/**
+ * Load the file `m`'s `external_debug_info` names, looked up by its last
+ * path component beside `m`. It must carry `m`'s build id.
+ */
+static cwsym_status_t
+follow_debug_link(const module_t* m, module_t* debug, const cwsym_log_t* log) {
+	span_t link = m->debug_link;
+	size_t base = 0;
+	for (size_t i = 0; i < link.len; ++i) {
+		if (link.s[i] == '/' || link.s[i] == '\\') {
+			base = i + 1;
+		}
+	}
+	size_t dir_len = 0;
+	for (size_t i = 0; m->path[i] != '\0'; ++i) {
+		if (m->path[i] == '/' || m->path[i] == '\\') {
+			dir_len = i + 1;
+		}
+	}
+	size_t name_len = link.len - base;
+	debug->own_path = malloc(dir_len + name_len + 1);
+	if (debug->own_path == NULL) {
+		return CWSYM_ERR_NOMEM;
+	}
+	memcpy(debug->own_path, m->path, dir_len);
+	memcpy(debug->own_path + dir_len, link.s + base, name_len);
+	debug->own_path[dir_len + name_len] = '\0';
+	debug->path = debug->own_path;
+
+	cwsym_status_t status = load_module(debug, log);
+	if (status == CWSYM_ERR_NOMEM) {
+		return status;
+	}
+	if (status != CWSYM_OK) {
+		cwsym_logf(log, "%s: its debug file %s cannot be read", m->path, debug->path);
+		return CWSYM_ERR_NO_DEBUG;
+	}
+	if (!debug->has_build_id || debug->build_id.len != m->build_id.len
+		|| memcmp(debug->build_id.s, m->build_id.s, m->build_id.len) != 0) {
+		cwsym_logf(log, "%s: debug file %s is of another build", m->path, debug->path);
+		return CWSYM_ERR_NO_DEBUG;
+	}
+	return CWSYM_OK;
 }
 
 /**
@@ -233,8 +344,8 @@ parse_sections(reader_t* r) {
  * index and name. An index outside the module is ignored.
  */
 static bool
-names_from_section(reader_t* r, span_t* names, uint32_t total) {
-	cursor_t c = { .data = r->function_names.s, .len = r->function_names.len };
+names_from_section(const module_t* m, span_t* names, uint32_t total, const cwsym_log_t* log) {
+	cursor_t c = { .data = m->function_names.s, .len = m->function_names.len };
 	for (uint32_t n = read_u32(&c); n > 0 && !c.bad; --n) {
 		uint32_t index = read_u32(&c);
 		span_t name = read_vector(&c);
@@ -243,7 +354,7 @@ names_from_section(reader_t* r, span_t* names, uint32_t total) {
 		}
 	}
 	if (c.bad) {
-		cwsym_logf(r->log, "%s: malformed name section", r->path);
+		cwsym_logf(log, "%s: malformed name section", m->path);
 		return false;
 	}
 	return true;
@@ -252,28 +363,30 @@ names_from_section(reader_t* r, span_t* names, uint32_t total) {
 /**
  * Names from the symbol map Emscripten writes with `--emit-symbol-map`:
  * one `index:name` per line, imports included. Lines of another shape
- * are skipped.
+ * are skipped. The caller frees the returned text, which the names
+ * point into.
  */
 static cwsym_status_t
-names_from_map(reader_t* r, const char* path, span_t* names, uint32_t total) {
+names_from_map(const char* path, span_t* names, uint32_t total, char** text, const cwsym_log_t* log) {
 	FILE* f = fopen(path, "rb");
 	if (f == NULL) {
-		cwsym_logf(r->log, "%s: %s", path, strerror(errno));
+		cwsym_logf(log, "%s: %s", path, strerror(errno));
 		return CWSYM_ERR_IO;
 	}
 	fseek(f, 0, SEEK_END);
 	long size = ftell(f);
 	fseek(f, 0, SEEK_SET);
-	r->map = size >= 0 ? malloc((size_t)size + 1) : NULL;
-	if (r->map == NULL) {
+	char* map = size >= 0 ? malloc((size_t)size + 1) : NULL;
+	if (map == NULL) {
 		fclose(f);
 		return CWSYM_ERR_NOMEM;
 	}
-	size_t len = fread(r->map, 1, (size_t)size, f);
+	size_t len = fread(map, 1, (size_t)size, f);
 	fclose(f);
-	r->map[len] = '\0';
+	map[len] = '\0';
+	*text = map;
 
-	for (char* line = r->map; *line != '\0';) {
+	for (char* line = map; *line != '\0';) {
 		size_t line_len = strcspn(line, "\n");
 		char* next = line + line_len + (line[line_len] == '\n');
 		if (line_len > 0 && line[line_len - 1] == '\r') {
@@ -289,25 +402,65 @@ names_from_map(reader_t* r, const char* path, span_t* names, uint32_t total) {
 	return CWSYM_OK;
 }
 
-static uint8_t*
-read_file(const char* path, size_t* len, const cwsym_log_t* log) {
-	FILE* f = fopen(path, "rb");
-	if (f == NULL) {
-		cwsym_logf(log, "%s: %s", path, strerror(errno));
-		return NULL;
+/** Index of the body holding file offset `at`, or -1. Bodies are sorted and disjoint. */
+static long
+body_at(const module_t* m, uint32_t at) {
+	size_t lo = 0;
+	size_t hi = barray_len(m->bodies);
+	while (lo < hi) {
+		size_t mid = (lo + hi) / 2;
+		if (m->bodies[mid].start <= at) {
+			lo = mid + 1;
+		} else {
+			hi = mid;
+		}
 	}
-	fseek(f, 0, SEEK_END);
-	long size = ftell(f);
-	fseek(f, 0, SEEK_SET);
-	uint8_t* data = size >= 0 ? malloc((size_t)size + 1) : NULL;
-	if (data == NULL || fread(data, 1, (size_t)size, f) != (size_t)size) {
-		cwsym_logf(log, "%s: %s", path, data == NULL ? "out of memory" : "short read");
-		free(data);
-		data = NULL;
+	return lo > 0 && at < m->bodies[lo - 1].start + m->bodies[lo - 1].size ? (long)lo - 1 : -1;
+}
+
+/**
+ * Passes DWARF rows on, noting which bodies DWARF described. A row that
+ * starts in no body is dropped: the post-link optimizer relocates the
+ * ranges of code it removed onto offset 0, where they would overlap the
+ * first function.
+ */
+typedef struct {
+	const cwsym_sink_t* sink;
+	const module_t* m;
+	bool* covered;
+	bool stopped;
+} forward_t;
+
+static bool
+forward_symbol(void* user, const cwsym_symbol_t* sym) {
+	forward_t* f = user;
+	long body = body_at(f->m, sym->start);
+	if (body < 0) {
+		return true;
 	}
-	fclose(f);
-	*len = data != NULL ? (size_t)size : 0;
-	return data;
+	f->covered[body] = true;
+	f->stopped = !f->sink->symbol(f->sink->user, sym);
+	return !f->stopped;
+}
+
+static bool
+forward_line(void* user, const cwsym_line_t* line) {
+	forward_t* f = user;
+	if (body_at(f->m, line->start) < 0) {
+		return true;
+	}
+	f->stopped = !f->sink->line(f->sink->user, line);
+	return !f->stopped;
+}
+
+static bool
+forward_site(void* user, const cwsym_site_t* site) {
+	forward_t* f = user;
+	if (body_at(f->m, site->start) < 0) {
+		return true;
+	}
+	f->stopped = !f->sink->site(f->sink->user, site);
+	return !f->stopped;
 }
 
 cwsym_status_t
@@ -315,57 +468,67 @@ cwsym_read_wasm(
 	const char* path, const cwsym_read_options_t* opts,
 	const cwsym_sink_t* sink, const cwsym_log_t* log
 ) {
-	cwsym_status_t status = CWSYM_ERR_FORMAT;
-	reader_t r = { .path = path, .log = log };
+	module_t m = { .path = path };
+	module_t debug = { 0 };
 	span_t* names = NULL;
+	char* map = NULL;
 	char* name = NULL;
+	bool* covered = NULL;
 
-	r.data = read_file(path, &r.len, log);
-	if (r.data == NULL) {
-		return CWSYM_ERR_IO;
-	}
-	if (r.len < 8 || memcmp(r.data + 4, "\x01\x00\x00\x00", 4) != 0) {
-		cwsym_logf(log, "%s: not a version 1 Wasm module", path);
+	cwsym_status_t status = load_module(&m, log);
+	if (status != CWSYM_OK) {
 		goto done;
 	}
-	if (!parse_sections(&r)) {
-		goto done;
-	}
-
-	if (!r.has_build_id) {
+	if (!m.has_build_id) {
 		cwsym_logf(log, "%s: no build_id section; link with -Wl,--build-id=sha1", path);
 		status = CWSYM_ERR_NO_BUILD_ID;
 		goto done;
 	}
-	if (r.build_id.len == 0 || r.build_id.len > CWSYM_BUILD_ID_CAP) {
+	if (m.build_id.len == 0 || m.build_id.len > CWSYM_BUILD_ID_CAP) {
 		cwsym_logf(
 			log, "%s: build id is %zu bytes; at most %d fit, link with -Wl,--build-id=sha1",
-			path, r.build_id.len, CWSYM_BUILD_ID_CAP
+			path, m.build_id.len, CWSYM_BUILD_ID_CAP
 		);
 		status = CWSYM_ERR_NO_BUILD_ID;
 		goto done;
 	}
 
-	uint32_t body_count = (uint32_t)barray_len(r.bodies);
-	uint32_t total = r.imports + body_count;
-	names = calloc(total > 0 ? total : 1, sizeof(*names));
-	if (names == NULL) {
-		status = CWSYM_ERR_NOMEM;
-		goto done;
-	}
-	if (r.has_function_names) {
-		if (!names_from_section(&r, names, total)) {
-			goto done;
-		}
-	} else if (opts->symbol_map != NULL) {
-		status = names_from_map(&r, opts->symbol_map, names, total);
+	/* DWARF lives in the module or in the file it points at. */
+	const module_t* dwarf = m.debug_count > 0 ? &m : NULL;
+	if (dwarf == NULL && m.has_debug_link) {
+		status = follow_debug_link(&m, &debug, log);
 		if (status != CWSYM_OK) {
 			goto done;
 		}
-	} else {
+		dwarf = debug.debug_count > 0 ? &debug : NULL;
+	}
+
+	uint32_t body_count = (uint32_t)barray_len(m.bodies);
+	uint32_t total = m.imports + body_count;
+	names = calloc(total > 0 ? total : 1, sizeof(*names));
+	covered = calloc(body_count > 0 ? body_count : 1, sizeof(*covered));
+	if (names == NULL || covered == NULL) {
+		status = CWSYM_ERR_NOMEM;
+		goto done;
+	}
+	bool has_names = false;
+	if (m.has_function_names) {
+		if (!names_from_section(&m, names, total, log)) {
+			status = CWSYM_ERR_FORMAT;
+			goto done;
+		}
+		has_names = true;
+	} else if (opts->symbol_map != NULL) {
+		status = names_from_map(opts->symbol_map, names, total, &map, log);
+		if (status != CWSYM_OK) {
+			goto done;
+		}
+		has_names = true;
+	}
+	if (dwarf == NULL && !has_names) {
 		cwsym_logf(
-			log, "%s: no name section; keep it with -g2 or --profiling-funcs, "
-			"or pass --symbol-map with the .symbols file of --emit-symbol-map", path
+			log, "%s: neither DWARF nor a name section; build with -g, keep the names with -g2 or "
+			"--profiling-funcs, or pass --symbol-map with the .symbols file of --emit-symbol-map", path
 		);
 		status = CWSYM_ERR_NO_DEBUG;
 		goto done;
@@ -381,15 +544,36 @@ cwsym_read_wasm(
 		goto done;
 	}
 
-	cwsym_module_t mod = { .arch = CWSYM_ARCH_WASM32, .build_id_len = (uint8_t)r.build_id.len };
-	memcpy(mod.build_id, r.build_id.s, r.build_id.len);
+	cwsym_module_t mod = { .arch = CWSYM_ARCH_WASM32, .build_id_len = (uint8_t)m.build_id.len };
+	memcpy(mod.build_id, m.build_id.s, m.build_id.len);
 	if (sink->begin != NULL) {
 		sink->begin(sink->user, &mod);
 	}
-	status = CWSYM_OK;
+
+	bool stopped = false;
+	if (dwarf != NULL) {
+		forward_t f = { .sink = sink, .m = &m, .covered = covered };
+		cwsym_sink_t forward = {
+			.symbol = forward_symbol,
+			.line = sink->line != NULL ? forward_line : NULL,
+			.site = sink->site != NULL ? forward_site : NULL,
+			.user = &f,
+		};
+		status = cwsym_read_dwarf(dwarf->path, dwarf->debug, dwarf->debug_count, (int64_t)m.code_start, &forward, log);
+		if (status == CWSYM_ERR_UNSUPPORTED && has_names) {
+			cwsym_logf(log, "%s: its DWARF is skipped on this host; names only, no lines", path);
+			status = CWSYM_OK;
+		}
+		stopped = f.stopped;
+	}
+
+	/* What DWARF did not describe is named by the name section, else by index. */
 	uint32_t unnamed = 0;
-	for (uint32_t i = 0; i < body_count; ++i) {
-		uint32_t index = r.imports + i;
+	for (uint32_t i = 0; status == CWSYM_OK && !stopped && i < body_count; ++i) {
+		if (covered[i]) {
+			continue;
+		}
+		uint32_t index = m.imports + i;
 		span_t n = names[index];
 		if (n.len > 0) {
 			memcpy(name, n.s, n.len);
@@ -401,16 +585,14 @@ cwsym_read_wasm(
 		}
 		const char* scope[] = { name };
 		cwsym_symbol_t sym = {
-			.start = r.bodies[i].start,
-			.size = r.bodies[i].size,
+			.start = m.bodies[i].start,
+			.size = m.bodies[i].size,
 			.scope = scope,
 			.scope_len = 1,
 			/* A demangled spelling carries the parameter list, which is the display column. */
 			.display = strchr(name, '(') != NULL ? name : NULL,
 		};
-		if (!sink->symbol(sink->user, &sym)) {
-			break;
-		}
+		stopped = !sink->symbol(sink->user, &sym);
 	}
 	if (unnamed > 0) {
 		cwsym_logf(log, "%s: %" PRIu32 " functions have no name and are listed by index", path, unnamed);
@@ -420,10 +602,11 @@ cwsym_read_wasm(
 	}
 
 done:
+	free(covered);
 	free(name);
+	free(map);
 	free(names);
-	free(r.map);
-	barray_free(r.bodies, NULL);
-	free(r.data);
+	free_module(&debug);
+	free_module(&m);
 	return status;
 }

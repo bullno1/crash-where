@@ -173,12 +173,14 @@ typedef struct {
  * which must sit beside the file `path` resolves to and carry the same
  * build id; anything else is ::CWSYM_ERR_NO_DEBUG. Functions without DWARF entries fall back to
  * `.symtab`. Names are copied verbatim from the debug info's
- * scope tree; nothing is demangled. A Wasm module names its functions
- * from its name section, or from `opts->symbol_map` when that section
- * was stripped; neither is ::CWSYM_ERR_NO_DEBUG, and a function both
- * leave unnamed is listed as `wasm-function[N]`, the engines' spelling.
- * Its build id is the `build_id` custom section; a module without one
- * is ::CWSYM_ERR_NO_BUILD_ID. Wasm yields no lines or sites.
+ * scope tree; nothing is demangled. A Wasm module that carries DWARF, in
+ * its own sections or in the file its `external_debug_info` section
+ * names beside it, which must carry the same build id, is read like
+ * ELF. Functions DWARF leaves out, or all of them without it, are named
+ * from the name section or from `opts->symbol_map`, and one no source
+ * names is listed as `wasm-function[N]`, the engines' spelling. Its
+ * build id is the `build_id` custom section; a module without one is
+ * ::CWSYM_ERR_NO_BUILD_ID.
  *
  * @param opts  Extra inputs, or `NULL` for the defaults.
  */

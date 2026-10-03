@@ -53,6 +53,7 @@ static struct {
 	bool tried;
 	__typeof__(elf_version)* elf_version;
 	__typeof__(elf_begin)* elf_begin;
+	__typeof__(elf_memory)* elf_memory;
 	__typeof__(elf_end)* elf_end;
 	__typeof__(elf_kind)* elf_kind;
 	__typeof__(elf_errmsg)* elf_errmsg;
@@ -115,6 +116,7 @@ load(const cwsym_log_t* log) {
 
 	bool ok = DW_SYM(libelf, elf_version)
 		&& DW_SYM(libelf, elf_begin)
+		&& DW_SYM(libelf, elf_memory)
 		&& DW_SYM(libelf, elf_end)
 		&& DW_SYM(libelf, elf_kind)
 		&& DW_SYM(libelf, elf_errmsg)
@@ -232,7 +234,8 @@ typedef struct {
 	int debug_fd;
 	char* debug_path;
 	Dwarf* dwarf;
-	uint64_t base;            /**< Address the client's offsets are relative to. */
+	int64_t shift;            /**< Added to a DWARF address to reach the client's offset: minus the load base on ELF, the code section's file offset on Wasm. */
+	uint64_t tombstone;       /**< Addresses from here up are the linker's mark on code it dropped: -2 and -1 in the unit's address size, and whatever a line or range added to one. The DIEs stay; the address does not. */
 	bool stopped;             /**< A callback returned `false`. */
 	bool warned_scope;        /**< The scope stack overflowed once; said so. */
 	bool warned_range;        /**< A range did not fit the table; said so. */
@@ -249,7 +252,12 @@ typedef struct {
 /** Module-relative range of `[start, end)`, or false when it cannot be in the table. */
 static bool
 to_module(reader_t* r, Dwarf_Addr start, Dwarf_Addr end, range_t* out) {
-	if (end <= start || start < r->base || end - r->base > UINT32_MAX) {
+	if (start >= r->tombstone) {
+		return false;
+	}
+	int64_t first = (int64_t)start + r->shift;
+	int64_t last = (int64_t)end + r->shift;
+	if (end <= start || first < 0 || last > UINT32_MAX) {
 		if (!r->warned_range && end > start) {
 			r->warned_range = true;
 			cwsym_logf(
@@ -259,7 +267,7 @@ to_module(reader_t* r, Dwarf_Addr start, Dwarf_Addr end, range_t* out) {
 		}
 		return false;
 	}
-	*out = (range_t){ .start = (uint32_t)(start - r->base), .end = (uint32_t)(end - r->base) };
+	*out = (range_t){ .start = (uint32_t)first, .end = (uint32_t)last };
 	return true;
 }
 
@@ -648,7 +656,9 @@ walk_units(reader_t* r) {
 	Dwarf_Off off = 0;
 	Dwarf_Off next;
 	size_t header;
-	while (!r->stopped && dw.dwarf_nextcu(r->dwarf, off, &next, &header, NULL, NULL, NULL) == 0) {
+	uint8_t address_size;
+	while (!r->stopped && dw.dwarf_nextcu(r->dwarf, off, &next, &header, NULL, &address_size, NULL) == 0) {
+		r->tombstone = address_size == 4 ? UINT32_MAX - 1 : UINT64_MAX - 1;
 		Dwarf_Die cu;
 		if (dw.dwarf_offdie(r->dwarf, off + header, &cu) != NULL) {
 			r->unit = dw.dwarf_diename(&cu);
@@ -985,7 +995,7 @@ cwsym_read_elf(
 		for (size_t i = 0; i < phnum && !found_load; ++i) {
 			GElf_Phdr phdr;
 			if (dw.gelf_getphdr(r.elf, (int)i, &phdr) != NULL && phdr.p_type == PT_LOAD) {
-				r.base = phdr.p_vaddr & ~PAGE_MASK;
+				r.shift = -(int64_t)(phdr.p_vaddr & ~PAGE_MASK);
 				found_load = true;
 			}
 		}
@@ -1054,6 +1064,114 @@ done:
 	return status;
 }
 
+/* DWARF outside ELF {{{ */
+
+#define IMAGE_ALIGN 8
+
+/**
+ * An ELF image around foreign DWARF sections: header, section contents,
+ * section name table, section headers. 32-bit and little-endian with no
+ * machine; libdw takes the address size from the units themselves.
+ */
+static uint8_t*
+wrap_sections(const cwsym_dwarf_section_t* sections, int count, size_t* image_len) {
+	size_t names_len = 1 + sizeof(".shstrtab");
+	size_t off = sizeof(Elf32_Ehdr);
+	for (int i = 0; i < count; ++i) {
+		names_len += strlen(sections[i].name) + 1;
+		off = (off + IMAGE_ALIGN - 1) & ~(size_t)(IMAGE_ALIGN - 1);
+		off += sections[i].len;
+	}
+	size_t names_off = off;
+	size_t shdr_off = (names_off + names_len + IMAGE_ALIGN - 1) & ~(size_t)(IMAGE_ALIGN - 1);
+	size_t total = shdr_off + (size_t)(count + 2) * sizeof(Elf32_Shdr);
+	uint8_t* image = calloc(1, total);
+	if (image == NULL) {
+		return NULL;
+	}
+
+	Elf32_Ehdr* ehdr = (Elf32_Ehdr*)image;
+	memcpy(ehdr->e_ident, ELFMAG, SELFMAG);
+	ehdr->e_ident[EI_CLASS] = ELFCLASS32;
+	ehdr->e_ident[EI_DATA] = ELFDATA2LSB;
+	ehdr->e_ident[EI_VERSION] = EV_CURRENT;
+	ehdr->e_type = ET_EXEC;
+	ehdr->e_machine = EM_NONE;
+	ehdr->e_version = EV_CURRENT;
+	ehdr->e_ehsize = sizeof(Elf32_Ehdr);
+	ehdr->e_shoff = (Elf32_Off)shdr_off;
+	ehdr->e_shentsize = sizeof(Elf32_Shdr);
+	ehdr->e_shnum = (Elf32_Half)(count + 2);
+	ehdr->e_shstrndx = (Elf32_Half)(count + 1);
+
+	Elf32_Shdr* shdr = (Elf32_Shdr*)(image + shdr_off);
+	char* names = (char*)image + names_off;
+	size_t name_pos = 1;
+	off = sizeof(Elf32_Ehdr);
+	for (int i = 0; i < count; ++i) {
+		off = (off + IMAGE_ALIGN - 1) & ~(size_t)(IMAGE_ALIGN - 1);
+		memcpy(image + off, sections[i].data, sections[i].len);
+		strcpy(names + name_pos, sections[i].name);
+		shdr[i + 1] = (Elf32_Shdr){
+			.sh_name = (Elf32_Word)name_pos, .sh_type = SHT_PROGBITS,
+			.sh_offset = (Elf32_Off)off, .sh_size = (Elf32_Word)sections[i].len, .sh_addralign = 1,
+		};
+		name_pos += strlen(sections[i].name) + 1;
+		off += sections[i].len;
+	}
+	strcpy(names + name_pos, ".shstrtab");
+	shdr[count + 1] = (Elf32_Shdr){
+		.sh_name = (Elf32_Word)name_pos, .sh_type = SHT_STRTAB,
+		.sh_offset = (Elf32_Off)names_off, .sh_size = (Elf32_Word)names_len, .sh_addralign = 1,
+	};
+	*image_len = total;
+	return image;
+}
+
+cwsym_status_t
+cwsym_read_dwarf(
+	const char* path, const cwsym_dwarf_section_t* sections, int count, int64_t shift,
+	const cwsym_sink_t* sink, const cwsym_log_t* log
+) {
+	if (!load(log)) {
+		return CWSYM_ERR_UNSUPPORTED;
+	}
+	load_demangler(log);
+
+	size_t image_len;
+	uint8_t* image = wrap_sections(sections, count, &image_len);
+	if (image == NULL) {
+		return CWSYM_ERR_NOMEM;
+	}
+	cwsym_status_t status = CWSYM_ERR_FORMAT;
+	reader_t r = { .path = path, .sink = sink, .log = log, .shift = shift, .debug_fd = -1 };
+	r.elf = dw.elf_memory((char*)image, image_len);
+	if (r.elf == NULL) {
+		cwsym_logf(log, "%s: %s", path, dw.elf_errmsg(-1));
+		goto done;
+	}
+	r.dwarf = dw.dwarf_begin_elf(r.elf, DWARF_C_READ, NULL);
+	if (r.dwarf == NULL) {
+		cwsym_logf(log, "%s: cannot read DWARF: %s", path, dw.dwarf_errmsg(-1));
+		goto done;
+	}
+	walk_units(&r);
+	status = CWSYM_OK;
+
+done:
+	barray_free(r.ranges, NULL);
+	if (r.dwarf != NULL) {
+		dw.dwarf_end(r.dwarf);
+	}
+	if (r.elf != NULL) {
+		dw.elf_end(r.elf);
+	}
+	free(image);
+	return status;
+}
+
+/* }}} */
+
 #else /* CWSYM_HAVE_LIBDW */
 
 #ifdef __linux__
@@ -1068,6 +1186,19 @@ cwsym_read_elf(
 	(void)opts;
 	(void)sink;
 	cwsym_logf(log, "%s: ELF is read through libdw, which this build of the tool does not have", path);
+	return CWSYM_ERR_UNSUPPORTED;
+}
+
+cwsym_status_t
+cwsym_read_dwarf(
+	const char* path, const cwsym_dwarf_section_t* sections, int count, int64_t shift,
+	const cwsym_sink_t* sink, const cwsym_log_t* log
+) {
+	(void)sections;
+	(void)count;
+	(void)shift;
+	(void)sink;
+	cwsym_logf(log, "%s: DWARF is read through libdw, which this build of the tool does not have", path);
 	return CWSYM_ERR_UNSUPPORTED;
 }
 
