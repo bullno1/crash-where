@@ -1,8 +1,11 @@
 import type { Db } from "./db";
+import type { AppShard } from "./shard";
 
 /** Bindings and secrets the Worker reads; which secrets are set selects the login mode. */
 export interface Env {
 	DB: D1Database;
+	/** One Durable Object per app, addressed by the app's `name`. */
+	SHARD: DurableObjectNamespace<AppShard>;
 	ACCESS_TEAM_DOMAIN?: string;
 	ACCESS_AUD?: string;
 	DASHBOARD_PASSWORD?: string;

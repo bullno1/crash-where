@@ -61,12 +61,10 @@ Tests run inside the Workers runtime  with the migrations applied to a fresh dat
 
 ### Database
 
-Apps and crash metadata live in a D1 database bound as `DB`.
-Its schema is the numbered SQL files under `migrations/`, applied with Wrangler's D1 migrations, which record what has run in the `d1_migrations` table.
-`npm run dev` applies them to the local database before starting the dev server, and `npm run deploy` applies them to the deployed one before deploying the Worker, so a migration must be safe to run against the version of the Worker that is live while it runs.
-Add a migration with `npx wrangler d1 migrations create DB <name>` and never edit one that has been applied anywhere.
-Queries go through Kysely with its D1 dialect, typed by `src/db.generated.ts`.
-`npm run db:types` regenerates that file by applying the migrations locally and introspecting the result with `kysely-codegen`, so run it after adding a migration and commit the output.
+Schema changes are numbered SQL files under `migrations/`: `migrations/root` for the collector's own D1 database and `migrations/shard` for the per-app storage.
+`npm run dev` and `npm run deploy` apply the root migrations before starting or deploying; the per-app storage migrates itself.
+Add a root migration with `npx wrangler d1 migrations create DB <name>`, a shard migration by adding the next numbered file and listing it in `migrations/shard/index.ts`, and never edit a migration that has been applied anywhere.
+After adding one, run `npm run db:types` and commit its output.
 
 `wrangler.toml` names the database but carries no id.
 The Deploy button creates the database and writes the id into the clone it deploys from.

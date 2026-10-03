@@ -18,3 +18,4 @@ app.route("/dashboard", dashboard);
 app.route("/dev", dev);
 
 export default app;
+export { AppShard } from "./shard";
