@@ -295,9 +295,24 @@ cw_write_envelope(
 	char tmp_path[CW_STR_CAP + 64];
 	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", out_path);
 
+	/* The attachment takes its final name first, so the envelope never names one that is missing. */
+	bool minidump = false;
+	char dmp_path[CW_STR_CAP + 64];
+	if (info->minidump[0] != '\0') {
+		snprintf(dmp_path, sizeof(dmp_path), "%.*s.dmp", (int)(strlen(out_path) - 5), out_path);
+		minidump = cw_platform_replace(info->minidump, dmp_path);
+		if (!minidump) {
+			cw_log(CW_LOG_WARN, "cannot move the minidump to %s", dmp_path);
+			cw_platform_remove(info->minidump);
+		}
+	}
+
 	FILE* f = fopen(tmp_path, "w");
 	if (f == NULL) {
 		cw_log(CW_LOG_ERROR, "cannot open %s", tmp_path);
+		if (minidump) {
+			cw_platform_remove(dmp_path);
+		}
 		return false;
 	}
 
@@ -341,11 +356,14 @@ cw_write_envelope(
 	put_crumbs(f, shared);
 	fputs(",\"state\":", f);
 	put_state(f, shared);
-	fputs(",\"attachments\":{\"log_tail\":false,\"minidump\":false,\"snapshot\":false}}\n", f);
+	fprintf(f, ",\"attachments\":{\"log_tail\":false,\"minidump\":%s,\"snapshot\":false}}\n", minidump ? "true" : "false");
 
 	if (fclose(f) != 0 || !cw_platform_replace(tmp_path, out_path)) {
 		cw_log(CW_LOG_ERROR, "cannot finish %s", out_path);
 		cw_platform_remove(tmp_path);
+		if (minidump) {
+			cw_platform_remove(dmp_path);
+		}
 		return false;
 	}
 	return true;

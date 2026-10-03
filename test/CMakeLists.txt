@@ -11,6 +11,7 @@ add_executable(cw_test
 	report.c
 	http.c
 	http_server.c
+	minidump.c
 	normalize.c
 	table.c
 	upload.c

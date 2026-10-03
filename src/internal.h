@@ -217,6 +217,7 @@ typedef struct {
 	int module_count;
 	cw_frame_t frames[CW_MAX_FRAMES];
 	int frame_count;
+	char minidump[CW_STR_CAP + 64]; /**< A dump the platform wrote for this report, renamed to the `.dmp` attachment; empty when there is none. */
 } cw_crash_info_t;
 
 /* Implemented by the platform. */

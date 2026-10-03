@@ -86,4 +86,14 @@ cw_install_exception_handler(void);
 bool
 cw_unwind(HANDLE game, const cw_crash_t* crash, cw_crash_info_t* out);
 
+/**
+ * Write a minidump of the game to a temporary file in `pending/`.
+ *
+ * @param crash  The record to blame, or `NULL` for a dump without an exception.
+ * @param out    Receives the file's path, or an empty string on failure.
+ * @return `true` when the file was written.
+ */
+bool
+cw_write_minidump(HANDLE game, const cw_crash_t* crash, char* out, size_t cap);
+
 #endif /* CW_WINDOWS_PLATFORM_H */

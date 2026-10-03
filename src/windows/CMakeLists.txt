@@ -1,6 +1,7 @@
 target_sources(cw PRIVATE
 	exception.c
 	game.c
+	minidump.c
 	platform.c
 	unwind.c
 	watcher.c

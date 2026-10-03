@@ -30,6 +30,7 @@ crash/debugger_forced
 hang/stall_then_exit
 hang/stall_then_crash
 hang/stopped
+minidump/hang_writes_dump
 
 # Converts this executable. A page has no file for it.
 cli/convert_debug_file

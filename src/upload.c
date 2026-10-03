@@ -114,17 +114,17 @@ cw_reply_get(const char* text, const char* key, char* out, size_t cap) {
  */
 static cw_status_t
 send_request(
-	const char* route, const char* token,
+	const char* route, const char* content_type, const char* token,
 	const void* body, size_t body_len,
 	char* reply, size_t reply_cap, int* status
 ) {
 	const cw_transport_t* tr = cw_ctx.cfg.transport;
-	char url[CW_STR_CAP + 128];
+	char url[CW_STR_CAP + 256];
 	snprintf(url, sizeof(url), "%s/v1/%s/%s", cw_ctx.cfg.endpoint, cw_ctx.cfg.app, route);
 	cw_request_t req = {
 		.method = "POST",
 		.url = url,
-		.content_type = "application/json",
+		.content_type = content_type,
 		.token = token,
 		.body = body,
 		.body_len = body_len,
@@ -168,7 +168,7 @@ exchange_proof(cw_drain_t* d) {
 
 	char reply[CW_REPLY_CAP];
 	int http = 0;
-	cw_status_t status = send_request("auth", NULL, body, body_len, reply, sizeof(reply), &http);
+	cw_status_t status = send_request("auth", "application/json", NULL, body, body_len, reply, sizeof(reply), &http);
 	char token[CW_TOKEN_CAP];
 	char expires[24];
 	if (status == CW_OK) {
@@ -212,6 +212,58 @@ upload_allowed(const cw_drain_t* d, const cw_pending_t* p) {
 	return d->consent == CW_CONSENT_ALWAYS || p->approved;
 }
 
+/** Sidecars that travel as attachments, in upload order. */
+static const char* const attachment_exts[] = { ".dmp", ".log", ".snap" };
+
+/**
+ * Send the attachments of a delivered report through the attach route.
+ * Each one is deleted as soon as the server accepts or refuses it, so a
+ * retry of the report sends only what is left.
+ *
+ * @return ::CW_RETRY when one must be tried again, else ::CW_OK.
+ */
+static cw_status_t
+upload_attachments(const cw_pending_t* p, const char* id, const char* token) {
+	cw_status_t result = CW_OK;
+	size_t stem = strlen(p->name) - 5;
+	for (size_t i = 0; i < sizeof(attachment_exts) / sizeof(attachment_exts[0]); ++i) {
+		char name[sizeof(p->name) + 8];
+		snprintf(name, sizeof(name), "%.*s%s", (int)stem, p->name, attachment_exts[i]);
+		char path[CW_STR_CAP + 128];
+		snprintf(path, sizeof(path), "%s/pending/%s", cw_ctx.report_dir, name);
+		size_t len = 0;
+		char* data = read_file(path, &len);
+		if (data == NULL) {
+			continue;
+		}
+
+		char route[sizeof(name) + 64];
+		snprintf(route, sizeof(route), "attach?report=%s&name=%s", id, name);
+		char reply[CW_REPLY_CAP];
+		int http = 0;
+		cw_status_t status = send_request(route, "application/octet-stream", token, data, len, reply, sizeof(reply), &http);
+		free(data);
+		if (status == CW_OK) {
+			status = map_status(http);
+		}
+		switch (status) {
+		case CW_OK:
+			cw_log(CW_LOG_INFO, "attachment %s uploaded", name);
+			cw_platform_remove(path);
+			break;
+		case CW_RETRY:
+			cw_log(CW_LOG_WARN, "upload of attachment %s failed, kept", name);
+			result = CW_RETRY;
+			break;
+		case CW_DROP:
+			cw_log(CW_LOG_WARN, "attachment %s rejected (%d), deleted", name, http);
+			cw_platform_remove(path);
+			break;
+		}
+	}
+	return result;
+}
+
 static bool
 failed_this_run(const cw_drain_t* d, const char* id) {
 	for (int i = 0; i < d->failed_count; ++i) {
@@ -230,7 +282,9 @@ failed_this_run(const cw_drain_t* d, const char* id) {
  * report whatever its token; one it does not recognize only leaves the
  * report unauthorized. Delivered and rejected envelopes are deleted;
  * failed ones stay in `pending/` and are not tried again before the
- * next launch.
+ * next launch. A delivered envelope whose attachment failed stays too:
+ * the next attempt sends the envelope again, which the server dedups
+ * by report id, then what is left of the attachments.
  */
 static cw_status_t
 upload_report(cw_drain_t* d, const cw_pending_t* p) {
@@ -265,7 +319,8 @@ upload_report(cw_drain_t* d, const cw_pending_t* p) {
 	bool have_token = d->token[0] != '\0' && d->token_expires > (int64_t)time(NULL);
 	char reply[CW_REPLY_CAP];
 	int http = 0;
-	cw_status_t status = send_request("report", have_token ? d->token : NULL, json, len, reply, sizeof(reply), &http);
+	const char* token = have_token ? d->token : NULL;
+	cw_status_t status = send_request("report", "application/json", token, json, len, reply, sizeof(reply), &http);
 	free(json);
 
 	bool want_attachments = false;
@@ -279,9 +334,9 @@ upload_report(cw_drain_t* d, const cw_pending_t* p) {
 			&& cw_reply_get(reply, "want_attachments", value, sizeof(value))
 			&& strcmp(value, "1") == 0;
 	}
-	/* The prototype writes no attachments yet. */
+	/* Declined attachments go with the envelope when it is deleted below. */
 	if (want_attachments) {
-		cw_log(CW_LOG_DEBUG, "server wants attachments for report %s, none written", id);
+		status = upload_attachments(p, id, token);
 	}
 
 	switch (status) {

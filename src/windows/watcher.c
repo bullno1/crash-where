@@ -17,6 +17,7 @@ static bool
 write_crash_report(const char* report_dir, char* path, size_t cap) {
 	static cw_crash_info_t info;
 	info = (cw_crash_info_t){ .kind = CW_REPORT_CRASH, .main_module = -1 };
+	cw_write_minidump(cw_win.handles.game, &cw_win.region->crash, info.minidump, sizeof(info.minidump));
 	if (!cw_unwind(cw_win.handles.game, &cw_win.region->crash, &info)) {
 		cw_log(CW_LOG_WARN, "unwind produced no frames");
 	}
@@ -120,6 +121,7 @@ write_hang_report(const char* report_dir, uint64_t silent_ms, char* path, size_t
 	info = (cw_crash_info_t){ .kind = CW_REPORT_HANG, .main_module = -1 };
 	DWORD tid = atomic_load_explicit(&cw_win.region->common.heartbeat_tid, memory_order_relaxed);
 	snapshot_thread(cw_win.handles.game, tid, &info);
+	cw_write_minidump(cw_win.handles.game, NULL, info.minidump, sizeof(info.minidump));
 	snprintf(info.type, sizeof(info.type), "HANG");
 	snprintf(info.message_raw, sizeof(info.message_raw), "no heartbeat for %" PRIu64 " ms", silent_ms);
 	info.fault_addr = 0;
