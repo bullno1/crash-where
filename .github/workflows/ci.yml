@@ -33,6 +33,15 @@ jobs:
           make-default: false
       - name: Build and test
         run: cmd/${{ matrix.toolchain }}/test
+      - name: Keep the symbol tool for the end-to-end job
+        if: matrix.toolchain == 'gcc'
+        uses: actions/upload-artifact@v4
+        with:
+          name: cwsym-gcc
+          path: bin/gcc/RelWithDebInfo/cwsym
+          if-no-files-found: error
+          # Only the e2e job of this run reads it; one day is the minimum.
+          retention-days: 1
 
   steamrt:
     name: clang-mold (Steam Runtime 4)
@@ -106,7 +115,7 @@ jobs:
         run: cmd\msvc\test.bat
 
   collector:
-    name: collector (check)
+    name: collector (check and test)
     runs-on: ubuntu-24.04
     defaults:
       run:
@@ -124,3 +133,36 @@ jobs:
       # Type check, lint, and verify that the generated database types
       # match the migrations; the last step applies them to a local D1.
       - run: npm run check
+      - run: npm test
+
+  e2e:
+    name: cwsym upload (end to end)
+    runs-on: ubuntu-24.04
+    # Runs only once both halves passed on their own, so a failure here is
+    # the seam between them. `linux` is the matrix job, so this waits for
+    # clang-mold as well as gcc; the binary comes from gcc.
+    needs: [linux, collector]
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: collector/package-lock.json
+      - run: npm ci
+        working-directory: collector
+      - name: Install the symbol tool's libraries
+        # The tool links libdw; the same package the build installs brings
+        # the runtime library.
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends libdw-dev
+      - uses: actions/download-artifact@v4
+        with:
+          name: cwsym-gcc
+          path: bin/gcc/RelWithDebInfo
+      # Artifacts do not keep permissions.
+      - run: chmod +x bin/gcc/RelWithDebInfo/cwsym
+      - run: test/e2e/upload.sh bin/gcc/RelWithDebInfo/cwsym
