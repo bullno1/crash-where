@@ -3,10 +3,35 @@
  * Please do not edit it manually.
  */
 
+import type { ColumnType } from "kysely";
+
+export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
+  ? ColumnType<S, I | undefined, U>
+  : ColumnType<T, T | undefined, T>;
+
 export interface Builds {
   build_id: string;
   uploaded_at: number;
   version: string;
+}
+
+export interface CrashCounts {
+  channel: string;
+  count: Generated<number>;
+  day: number;
+  group_id: number;
+  trust: number;
+  version: string;
+}
+
+export interface CrashGroups {
+  fault: string;
+  fingerprint: string;
+  first_seen: number;
+  frames: string;
+  id: Generated<number>;
+  last_seen: number;
+  message: string | null;
 }
 
 export interface Releases {
@@ -16,6 +41,11 @@ export interface Releases {
   version: string;
 }
 
+export interface Reports {
+  received_at: number;
+  report_id: string;
+}
+
 export interface Versions {
   created_at: number;
   version: string;
@@ -23,6 +53,9 @@ export interface Versions {
 
 export interface DB {
   builds: Builds;
+  crash_counts: CrashCounts;
+  crash_groups: CrashGroups;
   releases: Releases;
+  reports: Reports;
   versions: Versions;
 }

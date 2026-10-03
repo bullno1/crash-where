@@ -42,8 +42,20 @@ const enum Field {
 	LEN_DSTRINGS = 120,
 }
 
-/** Parses the header of a complete table, or says why the bytes are not one. */
-export function parseHeader(bytes: Uint8Array): CwsymParse {
+/** The header plus where the hashed sections lie, as far as `bytes` holds them. */
+interface Layout {
+	header: CwsymHeader;
+	offStarts: number;
+	offSizes: number;
+	offNames: number;
+	offStrings: number;
+	lenStrings: number;
+}
+
+type LayoutParse = { ok: true; layout: Layout } | { ok: false; reason: string };
+
+/** Reads the header and checks that the hashed sections lie inside `bytes`. */
+function readLayout(bytes: Uint8Array): LayoutParse {
 	if (bytes.length < HEADER_SIZE || MAGIC.some((b, i) => bytes[i] !== b)) {
 		return { ok: false, reason: "not a cwsym table" };
 	}
@@ -60,18 +72,7 @@ export function parseHeader(bytes: Uint8Array): CwsymParse {
 	if (arch < 1 || arch > ARCH_MAX || idLen < 1 || idLen > BUILD_ID_CAP || count === 0) {
 		return { ok: false, reason: `bad header: arch ${arch}, build id length ${idLen}, ${count} functions` };
 	}
-	const inside = (off: number, len: number) => off % 4 === 0 && off + len <= bytes.length;
-	const words = (at: Field, n: number) => inside(u32(at), n * 4);
-	if (!words(Field.OFF_STARTS, count) || !words(Field.OFF_SIZES, count) || !words(Field.OFF_NAMES, count)
-		|| !inside(u32(Field.OFF_STRINGS), u32(Field.LEN_STRINGS))) {
-		return { ok: false, reason: "a section lies outside the file" };
-	}
-	const lenDstrings = u32(Field.LEN_DSTRINGS);
-	if (lenDstrings === 0 || !inside(u32(Field.OFF_DSTRINGS), lenDstrings) || !words(Field.OFF_DISP, count)) {
-		return { ok: false, reason: "the table is a prefix without its display sections; upload the complete file" };
-	}
-	return {
-		ok: true,
+	const layout: Layout = {
 		header: {
 			rules: u16(Field.RULES),
 			arch,
@@ -79,5 +80,90 @@ export function parseHeader(bytes: Uint8Array): CwsymParse {
 			count,
 			flags: u32(Field.FLAGS),
 		},
+		offStarts: u32(Field.OFF_STARTS),
+		offSizes: u32(Field.OFF_SIZES),
+		offNames: u32(Field.OFF_NAMES),
+		offStrings: u32(Field.OFF_STRINGS),
+		lenStrings: u32(Field.LEN_STRINGS),
 	};
+	const words = count * 4;
+	if (!inside(bytes, layout.offStarts, words) || !inside(bytes, layout.offSizes, words)
+		|| !inside(bytes, layout.offNames, words) || !inside(bytes, layout.offStrings, layout.lenStrings)) {
+		return { ok: false, reason: "a section lies outside the file" };
+	}
+	return { ok: true, layout };
+}
+
+function inside(bytes: Uint8Array, off: number, len: number): boolean {
+	return off % 4 === 0 && off + len <= bytes.length;
+}
+
+/** Parses the header of a complete table, or says why the bytes are not one. */
+export function parseHeader(bytes: Uint8Array): CwsymParse {
+	const read = readLayout(bytes);
+	if (!read.ok) return read;
+	const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+	const lenDstrings = view.getUint32(Field.LEN_DSTRINGS, true);
+	if (lenDstrings === 0 || !inside(bytes, view.getUint32(Field.OFF_DSTRINGS, true), lenDstrings)
+		|| !inside(bytes, view.getUint32(Field.OFF_DISP, true), read.layout.header.count * 4)) {
+		return { ok: false, reason: "the table is a prefix without its display sections; upload the complete file" };
+	}
+	return { ok: true, header: read.layout.header };
+}
+
+/**
+ * How many bytes from the start of the file hold the hashed sections, read
+ * from a header, or null when the bytes are not a header. The sections
+ * are laid out in order and `strings` is the last of them.
+ */
+export function prefixLength(header: Uint8Array): number | null {
+	if (header.length < HEADER_SIZE || MAGIC.some((b, i) => header[i] !== b)) return null;
+	const view = new DataView(header.buffer, header.byteOffset, header.byteLength);
+	return view.getUint32(Field.OFF_STRINGS, true) + view.getUint32(Field.LEN_STRINGS, true);
+}
+
+/**
+ * The function table of one build: the prefix of a `cwsym` file, which
+ * names the function covering any module-relative offset.
+ */
+export class CwsymTable {
+	private constructor(
+		readonly header: CwsymHeader,
+		private readonly starts: Uint32Array,
+		private readonly sizes: Uint32Array,
+		private readonly names: Uint32Array,
+		private readonly strings: Uint8Array,
+	) {}
+
+	/** Reads a prefix or a complete file; null when the bytes are not one. */
+	static parse(bytes: Uint8Array): CwsymTable | null {
+		const read = readLayout(bytes);
+		if (!read.ok) return null;
+		const { layout } = read;
+		const words = (off: number) => new Uint32Array(bytes.buffer.slice(bytes.byteOffset + off, bytes.byteOffset + off + layout.header.count * 4));
+		return new CwsymTable(
+			layout.header,
+			words(layout.offStarts), words(layout.offSizes), words(layout.offNames),
+			bytes.slice(layout.offStrings, layout.offStrings + layout.lenStrings),
+		);
+	}
+
+	/** The normalized name of the function covering the offset, or null when none does. */
+	lookup(offset: number): string | null {
+		// The last start at or below the offset; starts are ascending and disjoint.
+		let lo = 0;
+		let hi = this.starts.length;
+		while (lo < hi) {
+			const mid = (lo + hi) >>> 1;
+			if (this.starts[mid]! <= offset) lo = mid + 1;
+			else hi = mid;
+		}
+		const row = lo - 1;
+		if (row < 0 || offset >= this.starts[row]! + this.sizes[row]!) return null;
+		const at = this.names[row]!;
+		if (at >= this.strings.length) return null;
+		let end = at;
+		while (end < this.strings.length && this.strings[end] !== 0) ++end;
+		return new TextDecoder().decode(this.strings.subarray(at, end));
+	}
 }

@@ -1,0 +1,312 @@
+import { env as bindings, runInDurableObject } from "cloudflare:test";
+import { beforeEach, describe, expect, it } from "vitest";
+import worker from "../src/index";
+import { symbolKey } from "../src/releases";
+import type { AppShard } from "../src/shard";
+import { forgetTables } from "../src/symbols";
+import { BUILD_ID_HEX, makeTable, type SymbolRow } from "./table";
+
+const env = { DB: bindings.DB, SHARD: bindings.SHARD, SYMBOLS: bindings.SYMBOLS };
+
+/** The game's functions; frames point into them by offset. */
+const FUNCTIONS: SymbolRow[] = [
+	{ start: 0x1000, size: 0x100, name: "render_mesh" },
+	{ start: 0x2000, size: 0x100, name: "draw_scene" },
+	{ start: 0x3000, size: 0x100, name: "tick" },
+	{ start: 0x4000, size: 0x100, name: "run" },
+	{ start: 0x5000, size: 0x100, name: "main" },
+	{ start: 0x6000, size: 0x100, name: "std::sort" },
+	{ start: 0x7000, size: 0x100, name: "cw_handle_signal" },
+	{ start: 0x8000, size: 0x100, name: "load_level" },
+];
+
+async function addApp(name: string, disabled: number | null = null): Promise<void> {
+	await bindings.DB.prepare(
+		"INSERT INTO apps (name, display_name, created_at, created_by, disabled_at) VALUES (?1, ?1, 1, 'bob', ?2)"
+	)
+		.bind(name, disabled)
+		.run();
+}
+
+function inShard<T>(name: string, fn: (obj: AppShard) => T | Promise<T>): Promise<T> {
+	const ns = bindings.SHARD;
+	return runInDurableObject(ns.get(ns.idFromName(name)), (obj) => fn(obj as AppShard));
+}
+
+/** An app with the game's table stored and a version released on `stable`. */
+async function release(name: string, version = "1.0.0", channel = "stable"): Promise<void> {
+	await addApp(name);
+	await bindings.SYMBOLS.put(symbolKey(name, BUILD_ID_HEX), makeTable({ functions: FUNCTIONS }));
+	await inShard(name, (obj) => obj.registerRelease({ version, channel, buildId: BUILD_ID_HEX, now: 1 }));
+}
+
+interface FrameSpec {
+	module?: string | null;
+	build_id?: string | null;
+	offset: number;
+}
+
+const frame = (offset: number, module: string | null = "game.exe", build_id: string | null = BUILD_ID_HEX): FrameSpec =>
+	({ module, build_id, offset });
+
+/** The default stack: render_mesh called from draw_scene, tick and run. */
+const STACK = [frame(0x1010), frame(0x2010), frame(0x3010), frame(0x4010)];
+
+let nextId = 1;
+
+/** An envelope as the client writes one, with every field ingest reads overridable. */
+function envelope(over: Record<string, unknown> = {}, frames: FrameSpec[] = STACK): Record<string, unknown> {
+	return {
+		schema: 2,
+		report_id: `00000000-0000-4000-8000-${String(nextId++).padStart(12, "0")}`,
+		install_id: "11111111-1111-4111-8111-111111111111",
+		sent_at: 1758100000,
+		app: { name: "forest-quest", version: "1.0.0", build_id: BUILD_ID_HEX, channel: "stable" },
+		env: { os: "linux" },
+		exception: { type: "SIGSEGV", message_norm: "read from <ADDR>", message_raw: "read from 0x10", thread: 1 },
+		modules: [{ name: "game.exe", build_id: BUILD_ID_HEX, base: "0x400000", size: 1 }],
+		frames,
+		breadcrumbs: [],
+		state: {},
+		attachments: { log_tail: false, minidump: false, snapshot: false },
+		...over,
+	};
+}
+
+interface PostOptions {
+	gzip?: boolean;
+	headers?: Record<string, string>;
+	raw?: BodyInit;
+}
+
+async function gzip(bytes: Uint8Array): Promise<Uint8Array> {
+	const stream = new Blob([bytes]).stream().pipeThrough(new CompressionStream("gzip"));
+	return new Uint8Array(await new Response(stream).arrayBuffer());
+}
+
+async function post(app: string, body: Record<string, unknown>, opts: PostOptions = {}): Promise<Response> {
+	const headers: Record<string, string> = { "Content-Type": "application/json", ...opts.headers };
+	let payload: BodyInit = opts.raw ?? JSON.stringify(body);
+	if (opts.gzip) {
+		payload = await gzip(new TextEncoder().encode(payload as string));
+		headers["Content-Encoding"] = "gzip";
+	}
+	return worker.fetch(new Request(`https://api.example/v1/${app}/report`, { method: "POST", headers, body: payload }), env);
+}
+
+/** Posts an envelope for the app, naming the app in it too. */
+function report(app: string, over: Record<string, unknown> = {}, frames: FrameSpec[] = STACK, opts: PostOptions = {}) {
+	const body = envelope(over, frames);
+	body.app = { ...(body.app as object), name: app };
+	return post(app, body, opts);
+}
+
+async function state(name: string) {
+	return inShard(name, async (obj) => ({
+		groups: await obj.db.selectFrom("crash_groups").selectAll().orderBy("id").execute(),
+		counts: await obj.db.selectFrom("crash_counts").selectAll().orderBy("group_id").orderBy("day").execute(),
+		reports: await obj.db.selectFrom("reports").select("report_id").execute(),
+	}));
+}
+
+const today = () => Math.floor(Date.now() / 1000 / 86400);
+
+beforeEach(async () => {
+	await bindings.DB.exec("DELETE FROM apps");
+	forgetTables();
+});
+
+describe("report routing", () => {
+	it("is 404 for an unknown app and 403 for a disabled one", async () => {
+		expect((await report("rt-unknown")).status).toBe(404);
+		await addApp("rt-disabled", 2);
+		const r = await report("rt-disabled");
+		expect(r.status).toBe(403);
+		expect(await r.text()).toMatch(/disabled/);
+	});
+	it("refuses an envelope that is not what the client writes", async () => {
+		await release("rt-shape");
+		const bad = async (body: Record<string, unknown>, pattern: RegExp) => {
+			const r = await report("rt-shape", body);
+			expect(r.status, JSON.stringify(body)).toBe(400);
+			expect(await r.text()).toMatch(pattern);
+		};
+		await bad({ schema: 1 }, /schema 1/);
+		await bad({ report_id: "has spaces" }, /report_id/);
+		await bad({ exception: {} }, /exception\.type/);
+		await bad({ frames: "none" }, /frames/);
+		await bad({ frames: [{ module: "game.exe", build_id: BUILD_ID_HEX, offset: -1 }] }, /offset/);
+		await bad({ app: { name: "rt-shape", version: "1.0.0", channel: "a b" } }, /channel/);
+		const other = await post("rt-shape", envelope({ app: { name: "forest-quest", version: "1.0.0", channel: "stable" } }));
+		expect(other.status).toBe(400);
+		expect(await other.text()).toMatch(/another app/);
+		const r = await post("rt-shape", {}, { raw: "{not json" });
+		expect(r.status).toBe(400);
+		expect(await r.text()).toMatch(/JSON/);
+		expect((await state("rt-shape")).reports).toEqual([]);
+	});
+	it("refuses a crash without frames", async () => {
+		await release("rt-noframes");
+		const r = await report("rt-noframes", {}, []);
+		expect(r.status).toBe(400);
+		expect(await r.text()).toMatch(/no frames/);
+	});
+	it("is 410 for a version not released on the channel, writing nothing", async () => {
+		await release("rt-unreleased");
+		const r = await report("rt-unreleased", { app: { name: "rt-unreleased", version: "1.0.1", channel: "stable" } });
+		expect(r.status).toBe(410);
+		expect(await r.text()).toMatch(/not released/);
+		const beta = await report("rt-unreleased", { app: { name: "rt-unreleased", version: "1.0.0", channel: "beta" } });
+		expect(beta.status).toBe(410);
+		expect((await state("rt-unreleased")).reports).toEqual([]);
+	});
+	it("is 410 for a version past its window", async () => {
+		await release("rt-expired");
+		await inShard("rt-expired", (obj) =>
+			obj.db.updateTable("releases").set({ supported_until: 2 }).where("version", "=", "1.0.0").execute()
+		);
+		const r = await report("rt-expired");
+		expect(r.status).toBe(410);
+		expect(await r.text()).toMatch(/no longer supported/);
+	});
+});
+
+describe("report body", () => {
+	it("accepts a gzipped envelope", async () => {
+		await release("body-gzip");
+		const r = await report("body-gzip", {}, STACK, { gzip: true });
+		expect(r.status).toBe(201);
+		expect((await state("body-gzip")).counts).toHaveLength(1);
+	});
+	it("refuses bad gzip, another encoding and an oversize body", async () => {
+		await release("body-bad");
+		const notGzip = await post("body-bad", {}, { raw: "{}", headers: { "Content-Encoding": "gzip" } });
+		expect(notGzip.status).toBe(400);
+		expect(await notGzip.text()).toMatch(/gzip/);
+		const br = await post("body-bad", {}, { raw: "{}", headers: { "Content-Encoding": "br" } });
+		expect(br.status).toBe(415);
+		const big = await post("body-bad", {}, { raw: "{}", headers: { "Content-Length": String(10 * 1024 * 1024) } });
+		expect(big.status).toBe(413);
+		const inflated = await post("body-bad", {}, { raw: "[" + "0,".repeat(600 * 1024) + "0]", gzip: true });
+		expect(inflated.status).toBe(413);
+	});
+});
+
+describe("report counting", () => {
+	it("counts a first report in a new group and asks for no attachments", async () => {
+		await release("count-first");
+		const r = await report("count-first");
+		expect(r.status).toBe(201);
+		expect(await r.text()).toBe("want_attachments 0\n");
+		const { groups, counts, reports } = await state("count-first");
+		expect(reports).toHaveLength(1);
+		expect(groups).toHaveLength(1);
+		const g = groups[0]!;
+		expect(g.fault).toBe("memory");
+		expect(g.message).toBeNull();
+		expect(g.fingerprint).toMatch(/^[0-9a-f]{16}$/);
+		expect(JSON.parse(g.frames)).toEqual([
+			{ module: "game.exe", name: "render_mesh" },
+			{ module: "game.exe", name: "draw_scene" },
+			{ module: "game.exe", name: "tick" },
+			{ module: "game.exe", name: "run" },
+		]);
+		expect(g.first_seen).toBe(g.last_seen);
+		expect(counts).toEqual([
+			{ group_id: g.id, version: "1.0.0", channel: "stable", trust: 0, day: today(), count: 1 },
+		]);
+	});
+	it("counts a retried report once and replies as before", async () => {
+		await release("count-retry");
+		const body = envelope();
+		body.app = { ...(body.app as object), name: "count-retry" };
+		expect((await post("count-retry", body)).status).toBe(201);
+		const again = await post("count-retry", body);
+		expect(again.status).toBe(200);
+		expect(await again.text()).toBe("want_attachments 0\n");
+		const { counts, reports } = await state("count-retry");
+		expect(reports).toHaveLength(1);
+		expect(counts[0]!.count).toBe(1);
+	});
+	it("adds a second report of the same crash to the group's count", async () => {
+		await release("count-same");
+		await report("count-same");
+		await report("count-same");
+		const { groups, counts } = await state("count-same");
+		expect(groups).toHaveLength(1);
+		expect(counts).toHaveLength(1);
+		expect(counts[0]!.count).toBe(2);
+	});
+	it("keeps channels and versions apart in the counts", async () => {
+		await release("count-keys");
+		await inShard("count-keys", (obj) => obj.registerRelease({ version: "1.0.0", channel: "beta", buildId: BUILD_ID_HEX, now: 1 }));
+		await report("count-keys");
+		await report("count-keys", { app: { name: "count-keys", version: "1.0.0", channel: "beta" } });
+		const { groups, counts } = await state("count-keys");
+		expect(groups).toHaveLength(1);
+		expect(counts.map((c) => [c.channel, c.count])).toEqual([["beta", 1], ["stable", 1]]);
+	});
+});
+
+describe("report grouping", () => {
+	it("merges the same fault under its platform names and ignores its message", async () => {
+		await release("group-platform");
+		await report("group-platform", { exception: { type: "SIGSEGV", message_norm: "read from <ADDR>" } });
+		await report("group-platform", { exception: { type: "EXCEPTION_ACCESS_VIOLATION", message_norm: "write address <ADDR>" } });
+		expect((await state("group-platform")).groups).toHaveLength(1);
+	});
+	it("splits aborts by message and stores it", async () => {
+		await release("group-abort");
+		await report("group-abort", { exception: { type: "SIGABRT", message_norm: "expected non-null texture" } });
+		await report("group-abort", { exception: { type: "SIGABRT", message_norm: "expected non-null mesh" } });
+		await report("group-abort", { exception: { type: "SIGABRT", message_norm: "expected non-null mesh" } });
+		const { groups, counts } = await state("group-abort");
+		expect(groups.map((g) => [g.fault, g.message])).toEqual([
+			["abort", "expected non-null texture"], ["abort", "expected non-null mesh"],
+		]);
+		expect(counts.map((c) => c.count)).toEqual([1, 2]);
+	});
+	it("keeps a type the game named as its own fault", async () => {
+		await release("group-named");
+		await report("group-named", { exception: { type: "ASSERT", message_norm: "i < n" } });
+		expect((await state("group-named")).groups[0]).toMatchObject({ fault: "ASSERT", message: "i < n" });
+	});
+	it("accepts an abnormal exit without frames", async () => {
+		await release("group-exit");
+		const r = await report("group-exit", { exception: { type: "KILLED", message_norm: "exit code <N>" } }, []);
+		expect(r.status).toBe(201);
+		expect((await state("group-exit")).groups[0]).toMatchObject({ fault: "exit", message: null, frames: "[]" });
+	});
+	it("skips noise frames and hashes four", async () => {
+		await release("group-skip");
+		// memcpy in libc, the handler and std::sort in the game: all noise.
+		const noisy = [frame(0x10, "libc.so.6", "ab".repeat(20)), frame(0x7010), frame(0x1010), frame(0x6010), frame(0x2010), frame(0x3010), frame(0x4010), frame(0x5010)];
+		const clean = [frame(0x1010), frame(0x2010), frame(0x3010), frame(0x4010), frame(0x8010)];
+		await report("group-skip", {}, noisy);
+		await report("group-skip", {}, clean);
+		const { groups } = await state("group-skip");
+		expect(groups).toHaveLength(1);
+		expect(JSON.parse(groups[0]!.frames)).toHaveLength(8);
+		// A different fourth frame is another group.
+		await report("group-skip", {}, [frame(0x1010), frame(0x2010), frame(0x3010), frame(0x8010)]);
+		expect((await state("group-skip")).groups).toHaveLength(2);
+	});
+	it("names a frame in a module without a table by its module", async () => {
+		await release("group-unknown");
+		await report("group-unknown", {}, [frame(0x10, "nvoglv64.dll", "cc".repeat(20)), frame(0x1010)]);
+		await report("group-unknown", {}, [frame(0x20, "nvoglv64.dll", "cc".repeat(20)), frame(0x1010)]);
+		await report("group-unknown", {}, [frame(0x20, null, null), frame(0x1010)]);
+		const { groups } = await state("group-unknown");
+		expect(groups).toHaveLength(2);
+		expect(JSON.parse(groups[0]!.frames)[0]).toEqual({ module: "nvoglv64.dll", name: null });
+		expect(JSON.parse(groups[1]!.frames)[0]).toEqual({ module: "?", name: null });
+	});
+	it("looks a return address up inside the call", async () => {
+		await release("group-return");
+		// 0x1100 is the byte after render_mesh; as a return address it belongs to render_mesh's last call.
+		await report("group-return", {}, [frame(0x1010), frame(0x1100)]);
+		expect(JSON.parse((await state("group-return")).groups[0]!.frames)).toEqual([
+			{ module: "game.exe", name: "render_mesh" }, { module: "game.exe", name: "render_mesh" },
+		]);
+	});
+});
