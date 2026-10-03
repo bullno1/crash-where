@@ -25,6 +25,7 @@
 #define CW_CORE_MAX_THREADS  256
 #define CW_CORE_MAX_MAPS     1024
 #define CW_CORE_MAX_RANGES   4096
+#define CW_CORE_MAX_SEGMENTS 8192
 #define CW_CORE_STACK_CAP    (1024u * 1024u)       /**< Per thread, from its stack pointer up. */
 #define CW_CORE_INDIRECT_CAP (2u * 1024u * 1024u)  /**< All windows around pointers found on stacks. */
 #define CW_CORE_DATA_CAP     (16u * 1024u * 1024u) /**< The executable's writable mappings. */
@@ -82,6 +83,16 @@ typedef struct {
 } cw_range_t;
 
 /**
+ * One loadable segment of the file. A segment without `data` is all
+ * zero and gets a memory size but no file bytes.
+ */
+typedef struct {
+	uint64_t start;
+	uint64_t end;
+	bool data;
+} cw_segment_t;
+
+/**
  * Everything gathered before the file is laid out.
  */
 typedef struct {
@@ -93,6 +104,8 @@ typedef struct {
 	int thread_count;
 	cw_range_t ranges[CW_CORE_MAX_RANGES];
 	int range_count;
+	cw_segment_t segments[CW_CORE_MAX_SEGMENTS];
+	int segment_count;
 	cw_range_t stacks[CW_CORE_MAX_THREADS]; /**< The ranges that are stacks; pointers into them are not followed. */
 	int stack_count;
 	uint64_t indirect_bytes;
@@ -407,6 +420,70 @@ add_vdso(cw_core_t* core) {
 	}
 }
 
+/**
+ * Read `want` bytes of the game at `at` into the chunk, falling back on
+ * the handler's stack copy where the game cannot be read; bytes neither
+ * has are zero.
+ */
+static void
+read_chunk(cw_core_t* core, const cw_crash_t* crash, uint64_t at, size_t want) {
+	size_t got = read_mem(core->game, at, core->chunk, want);
+	if (got == 0 && crash != NULL && at >= crash->sp && at < crash->sp + crash->stack_len) {
+		got = crash->sp + crash->stack_len - at;
+		got = got > want ? want : got;
+		memcpy(core->chunk, crash->stack + (at - crash->sp), got);
+	}
+	if (got < want) {
+		memset(core->chunk + got, 0, want - got);
+	}
+}
+
+static bool
+page_is_zero(const uint8_t* p, size_t len) {
+	for (size_t i = 0; i + sizeof(uint64_t) <= len; i += sizeof(uint64_t)) {
+		uint64_t word;
+		memcpy(&word, p + i, sizeof(word));
+		if (word != 0) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/**
+ * Cut the ranges into segments, folding runs of all-zero pages into
+ * segments without file bytes: a reader gives zeros for the part of a
+ * segment the file does not hold, the way a kernel core leaves an
+ * untouched `.bss` out, so an unused arena costs nothing. Should the
+ * segment table fill up, the ranges go out whole instead.
+ */
+static void
+split_segments(cw_core_t* core, const cw_crash_t* crash) {
+	core->segment_count = 0;
+	for (int i = 0; i < core->range_count; ++i) {
+		const cw_range_t* r = &core->ranges[i];
+		for (uint64_t at = r->start; at < r->end; at += CW_CORE_CHUNK) {
+			size_t want = r->end - at > CW_CORE_CHUNK ? CW_CORE_CHUNK : (size_t)(r->end - at);
+			read_chunk(core, crash, at, want);
+			for (size_t off = 0; off < want; off += core->page) {
+				bool data = !page_is_zero(core->chunk + off, core->page);
+				cw_segment_t* last = core->segment_count > 0 ? &core->segments[core->segment_count - 1] : NULL;
+				if (last != NULL && last->data == data && last->end == at + off) {
+					last->end += core->page;
+				} else if (core->segment_count < CW_CORE_MAX_SEGMENTS) {
+					core->segments[core->segment_count++] = (cw_segment_t){ at + off, at + off + core->page, data };
+				} else {
+					core->segment_count = 0;
+					for (int k = 0; k < core->range_count; ++k) {
+						core->segments[core->segment_count++] = (cw_segment_t){ core->ranges[k].start, core->ranges[k].end, true };
+					}
+					return;
+				}
+			}
+		}
+	}
+}
+
 static int
 range_cmp(const void* a, const void* b) {
 	const cw_range_t* x = a;
@@ -714,27 +791,17 @@ notes_add_files(cw_notes_t* n, const cw_core_t* core) {
 }
 
 /**
- * Copy one range out of the game into the file, falling back on the
- * handler's stack copy where the game cannot be read, and on zeros
- * where neither has the bytes, so every segment keeps its size.
+ * Copy one segment out of the game into the file. Every segment keeps
+ * its size: bytes that cannot be read go out as zeros.
  */
 static bool
-write_range(FILE* f, cw_core_t* core, const cw_crash_t* crash, cw_range_t r) {
-	for (uint64_t at = r.start; at < r.end;) {
-		size_t want = r.end - at > CW_CORE_CHUNK ? CW_CORE_CHUNK : (size_t)(r.end - at);
-		size_t got = read_mem(core->game, at, core->chunk, want);
-		if (got == 0 && crash != NULL && at >= crash->sp && at < crash->sp + crash->stack_len) {
-			got = crash->sp + crash->stack_len - at;
-			got = got > want ? want : got;
-			memcpy(core->chunk, crash->stack + (at - crash->sp), got);
-		}
-		if (got < want) {
-			memset(core->chunk + got, 0, want - got);
-		}
+write_segment(FILE* f, cw_core_t* core, const cw_crash_t* crash, const cw_segment_t* s) {
+	for (uint64_t at = s->start; at < s->end; at += CW_CORE_CHUNK) {
+		size_t want = s->end - at > CW_CORE_CHUNK ? CW_CORE_CHUNK : (size_t)(s->end - at);
+		read_chunk(core, crash, at, want);
 		if (fwrite(core->chunk, 1, want, f) != want) {
 			return false;
 		}
-		at += want;
 	}
 	return true;
 }
@@ -754,8 +821,8 @@ write_zeros(FILE* f, uint64_t count) {
 
 static bool
 write_core(FILE* f, cw_core_t* core, const cw_crash_t* crash, const cw_notes_t* notes) {
-	uint64_t page = (uint64_t)sysconf(_SC_PAGESIZE);
-	size_t phnum = 1 + (size_t)core->range_count;
+	uint64_t page = core->page;
+	size_t phnum = 1 + (size_t)core->segment_count;
 	uint64_t notes_off = sizeof(Elf64_Ehdr) + phnum * sizeof(Elf64_Phdr);
 	uint64_t data_off = (notes_off + notes->len + page - 1) & ~(page - 1);
 
@@ -782,21 +849,21 @@ write_core(FILE* f, cw_core_t* core, const cw_crash_t* crash, const cw_notes_t* 
 		return false;
 	}
 	uint64_t off = data_off;
-	for (int i = 0; i < core->range_count; ++i) {
-		const cw_range_t* r = &core->ranges[i];
+	for (int i = 0; i < core->segment_count; ++i) {
+		const cw_segment_t* s = &core->segments[i];
 		ph = (Elf64_Phdr){
 			.p_type = PT_LOAD,
 			.p_flags = PF_R | PF_W,
 			.p_offset = off,
-			.p_vaddr = r->start,
-			.p_filesz = r->end - r->start,
-			.p_memsz = r->end - r->start,
+			.p_vaddr = s->start,
+			.p_filesz = s->data ? s->end - s->start : 0,
+			.p_memsz = s->end - s->start,
 			.p_align = page,
 		};
 		if (fwrite(&ph, sizeof(ph), 1, f) != 1) {
 			return false;
 		}
-		off = (off + ph.p_filesz + page - 1) & ~(page - 1);
+		off += ph.p_filesz;
 	}
 	if (fwrite(notes->data, 1, notes->len, f) != notes->len) {
 		return false;
@@ -804,11 +871,9 @@ write_core(FILE* f, cw_core_t* core, const cw_crash_t* crash, const cw_notes_t* 
 	if (!write_zeros(f, data_off - notes_off - notes->len)) {
 		return false;
 	}
-	for (int i = 0; i < core->range_count; ++i) {
-		const cw_range_t* r = &core->ranges[i];
-		uint64_t len = r->end - r->start;
-		uint64_t padded = (len + page - 1) & ~(page - 1);
-		if (!write_range(f, core, crash, *r) || !write_zeros(f, padded - len)) {
+	for (int i = 0; i < core->segment_count; ++i) {
+		const cw_segment_t* s = &core->segments[i];
+		if (s->data && !write_segment(f, core, crash, s)) {
 			return false;
 		}
 	}
@@ -853,6 +918,7 @@ cw_write_core(pid_t game, pid_t tid, const cw_crash_t* crash, char* out, size_t 
 	add_link_map(&core);
 	add_vdso(&core);
 	merge_ranges(&core);
+	split_segments(&core, crash);
 
 	int signo = crash != NULL ? crash->signo : 0;
 	cw_notes_t notes = { 0 };
@@ -884,6 +950,13 @@ cw_write_core(pid_t game, pid_t tid, const cw_crash_t* crash, char* out, size_t 
 		out[0] = '\0';
 		return false;
 	}
-	cw_log(CW_LOG_DEBUG, "core holds %d threads and %d ranges", core.thread_count, core.range_count);
+	uint64_t bytes = 0;
+	for (int i = 0; i < core.segment_count; ++i) {
+		bytes += core.segments[i].data ? core.segments[i].end - core.segments[i].start : 0;
+	}
+	cw_log(
+		CW_LOG_DEBUG, "core holds %d threads and %d segments, %" PRIu64 " KB of them in the file",
+		core.thread_count, core.segment_count, bytes >> 10
+	);
 	return true;
 }

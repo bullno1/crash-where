@@ -36,16 +36,18 @@ expect_in_output() {
 	return 1
 }
 
-# gdb must list the shared libraries, unwind to the scenario, and print
-# the local the scenario left on the stack. `-nx` keeps the user's init
-# file out of it.
+# gdb must list the shared libraries, unwind to the scenario, print the
+# local the scenario left on the stack, and read a global the game never
+# touched as zero, since the core keeps such pages out of the file. `-nx`
+# keeps the user's init file out of it.
 check_core_gdb() {
 	out=$(gdb -batch -nx \
 		-ex 'info sharedlibrary' -ex 'bt' -ex 'frame 1' -ex 'p/x marker' \
+		-ex 'p cw_write_core::core.map_count' \
 		"$2" "$1" 2>&1) || true
 	expect_in_output gdb "$out" \
-		'write_null ()' 'crash_with_marker ()' 'libc.so' '0xc5, 0x3a, 0x9e, 0x11' \
-		&& echo "core check: gdb lists the libraries, unwinds, and shows the marker local"
+		'write_null ()' 'crash_with_marker ()' 'libc.so' '0xc5, 0x3a, 0x9e, 0x11' '$2 = 0' \
+		&& echo "core check: gdb lists the libraries, unwinds, shows the marker local, and reads an untouched global"
 }
 
 # eu-stack must name the scenario's frames and reach libc, which it can
