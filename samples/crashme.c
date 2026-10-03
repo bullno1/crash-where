@@ -24,8 +24,16 @@
 
 static volatile int sink;
 
-/* Loaded at run time so the compiler cannot prove the store is undefined and delete it. */
+/*
+ * Loaded at run time so the compiler cannot prove the store is undefined
+ * and delete it. Address 0 is ordinary memory in Wasm; only a store past
+ * the end of memory traps there.
+ */
+#if defined(__EMSCRIPTEN__)
+static int* volatile null_ptr = (int*)0xfffffff0u;
+#else
 static int* volatile null_ptr;
+#endif
 
 static void
 log_to_stderr(cw_log_level_t level, const char* msg) {
