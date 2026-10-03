@@ -1,0 +1,26 @@
+name: Collector branch
+
+# Keeps the `collector` branch equal to the collector/ directory of
+# master, with that directory as its root. A deployment created from the
+# branch shares history with it, so the deployment's `./update` script
+# fast-forwards.
+
+on:
+  push:
+    branches: [master]
+    paths: [collector/**]
+
+permissions:
+  contents: write
+
+jobs:
+  split:
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+      - name: Split and push
+        run: |
+          commit=$(git subtree split --prefix=collector)
+          git push origin "$commit:refs/heads/collector"

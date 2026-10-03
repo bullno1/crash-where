@@ -21,5 +21,15 @@
   "allowScripts": {
     "workerd@1.20261001.1": true,
     "esbuild@0.28.1": true
+  },
+  "cloudflare": {
+    "bindings": {
+      "ACCESS_TEAM_DOMAIN": {
+        "description": "Your Zero Trust team domain. e.g: `<team>.cloudflareaccess.com`."
+      },
+      "ACCESS_AUD": {
+        "description": "The Application Audience (AUD) Tag of the Access application that protects the dashboard hostname, from the application overview in Zero Trust."
+      }
+    }
   }
 }

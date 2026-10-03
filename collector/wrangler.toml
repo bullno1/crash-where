@@ -1,9 +1,6 @@
-name = "collector"
+name = "crash-where-collector"
 main = "src/index.ts"
 compatibility_date = "2026-10-01"
-
-[vars]
-# Zero Trust team domain and the AUD tag of the Access application that
-# protects the dashboard. Empty values make every dashboard request fail.
-ACCESS_TEAM_DOMAIN = "bullno1.cloudflareaccess.com"
-ACCESS_AUD = "ceafbf9af162e6926ccbabeeb9415fa398f18636f4057573db45f3420c018ec1"  # Public
+# Deploys leave values set in the Workers dashboard in place, so the Access
+# values survive whether they were entered as secrets or as plain vars.
+keep_vars = true
