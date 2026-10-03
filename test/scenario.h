@@ -53,7 +53,7 @@ AUTOLIST_DECLARE(test_scenarios)
  * prompt is configured.
  */
 typedef struct {
-	const char* status;    /**< HTTP status the test transport answers: "ok" (200), "retry" (503), "drop" (400), or "unauthorized" (401 to a request carrying a token). `NULL` means "ok". */
+	const char* status;    /**< HTTP status the test transport answers: "ok" (200), "retry" (503), or "drop" (400). `NULL` means "ok". */
 	bool want_attachments; /**< Value of `want_attachments` in the test transport's reply. */
 	bool disable;          /**< Run the child with `CW_DISABLE=1`. */
 	bool debugger;         /**< Put the child under a debugger before it initializes the library. */

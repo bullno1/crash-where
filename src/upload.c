@@ -226,9 +226,9 @@ failed_this_run(const cw_drain_t* d, const char* id) {
  * Send one envelope with the cached token, if any.
  *
  * This is the only path to the report route, and it goes nowhere
- * without the player's decision and a transport. A token the server
- * refuses costs one bounce: the report is sent again without it and
- * lands unauthenticated. Delivered and rejected envelopes are deleted;
+ * without the player's decision and a transport. The server accepts a
+ * report whatever its token; one it does not recognize only leaves the
+ * report unauthorized. Delivered and rejected envelopes are deleted;
  * failed ones stay in `pending/` and are not tried again before the
  * next launch.
  */
@@ -266,10 +266,6 @@ upload_report(cw_drain_t* d, const cw_pending_t* p) {
 	char reply[CW_REPLY_CAP];
 	int http = 0;
 	cw_status_t status = send_request("report", have_token ? d->token : NULL, json, len, reply, sizeof(reply), &http);
-	if (status == CW_OK && http == 401 && have_token) {
-		cw_log(CW_LOG_WARN, "server refused the token, sending report %s unauthenticated", id);
-		status = send_request("report", NULL, json, len, reply, sizeof(reply), &http);
-	}
 	free(json);
 
 	bool want_attachments = false;

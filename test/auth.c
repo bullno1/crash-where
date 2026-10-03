@@ -1,8 +1,9 @@
 /**
  * @file auth.c
- * Authentication: how a proof becomes a token, which token a report
- * carries, and what a refused one costs.
+ * Identity: how a proof becomes a token, which token a report carries,
+ * and the install id every report names.
  */
+#include <stdio.h>
 #include <string.h>
 
 #include "btest.h"
@@ -81,13 +82,60 @@ BTEST(auth, proof_kept_when_exchange_fails) {
 	BTEST_EXPECT_EQUAL("%d", test_run_pending(run, ".json"), 1);
 }
 
-BTEST(auth, refused_token_bounces_once) {
-	const test_run_t* run = RUN_SCENARIO_WITH(SCENARIO_REF(crash_now), .auth = "token", .status = "unauthorized");
+static bool
+is_uuid(const char* s) {
+	if (s == NULL || strlen(s) != 36) {
+		return false;
+	}
+	for (size_t i = 0; i < 36; ++i) {
+		bool dash = i == 8 || i == 13 || i == 18 || i == 23;
+		bool hex = (s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f');
+		if (dash ? s[i] != '-' : !hex) {
+			return false;
+		}
+	}
+	return true;
+}
+
+/**
+ * The install id is a uuid of its own, distinct from the report id, and
+ * is written whether or not the run authenticated.
+ */
+BTEST(auth, envelope_carries_install_id) {
+	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(crash_now));
 	BTEST_ASSERT(run != NULL);
-	BTEST_ASSERT_EQUAL("%d", run->num_events, 2);
-	BTEST_EXPECT(test_event_is(run->events[0], "report", "local-token"));
-	BTEST_EXPECT(test_event_is(run->events[1], "report", NULL));
-	BTEST_EXPECT_EQUAL("%d", test_run_pending(run, ".json"), 0);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	yyjson_doc* ev = run->events[0];
+	BTEST_EXPECT(test_event_is(ev, "report", NULL));
+	const char* id = test_json_str(ev, "/envelope/install_id");
+	BTEST_EXPECT_EX(is_uuid(id), "install_id: %s", id != NULL ? id : "(null)");
+	BTEST_EXPECT(strcmp(id, test_json_str(ev, "/envelope/report_id")) != 0);
+	BTEST_EXPECT(test_run_has(run, "install_id"));
+}
+
+/**
+ * The id lives in the report directory: a kept directory keeps it, a
+ * fresh one gets a new one.
+ */
+BTEST(auth, install_id_follows_report_dir) {
+	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(crash_now));
+	BTEST_ASSERT(run != NULL);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	char first[64];
+	snprintf(first, sizeof(first), "%s", test_json_str(run->events[0], "/envelope/install_id"));
+	BTEST_ASSERT(is_uuid(first));
+
+	run = RUN_SCENARIO_WITH(SCENARIO_REF(crash_now), .consent = "skip", .keep = true);
+	BTEST_ASSERT(run != NULL);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	BTEST_EXPECT(strcmp(test_json_str(run->events[0], "/envelope/install_id"), first) == 0);
+
+	run = RUN_SCENARIO(SCENARIO_REF(crash_now));
+	BTEST_ASSERT(run != NULL);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	const char* fresh = test_json_str(run->events[0], "/envelope/install_id");
+	BTEST_EXPECT(is_uuid(fresh));
+	BTEST_EXPECT(strcmp(fresh, first) != 0);
 }
 
 /* }}} */

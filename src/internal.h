@@ -323,7 +323,7 @@ cw_write_envelope(
 	const cw_shared_t* shared, char* out_path, size_t cap
 );
 
-/* Report directory files: `consent`, `token`, `proof`, `lock`, and `pending/`. */
+/* Report directory files: `consent`, `install_id`, `token`, `proof`, `lock`, and `pending/`. */
 
 /** Build `<report_dir>/<name>`. */
 bool
@@ -376,6 +376,20 @@ cw_proof_store(const char* store, const void* proof, size_t len);
 
 bool
 cw_token_store(const char* token, int64_t expires);
+
+/** A fresh version 4 UUID in its hyphenated text form. */
+void
+cw_make_uuid(char out[CW_UUID_CAP]);
+
+/**
+ * The id of this install, created and written when the file is missing
+ * or unreadable.
+ *
+ * @return `false` when the id could not be read or written; `out` is
+ *         then empty.
+ */
+bool
+cw_install_id_load(char out[CW_UUID_CAP]);
 
 /**
  * Value of `key` in a text of `key value` lines, the format of server

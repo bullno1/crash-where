@@ -1,7 +1,7 @@
 /**
  * @file store.c
- * Files under the report directory: the consent decision, the cached
- * token, the proof awaiting exchange, and the pending store whose
+ * Files under the report directory: the consent decision, the install
+ * id, the cached token, the proof awaiting exchange, and the pending store whose
  * envelopes are described by their names alone so nothing is parsed to
  * list them.
  *
@@ -11,6 +11,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
+#include <time.h>
 
 #include "internal.h"
 
@@ -137,6 +138,63 @@ cw_token_store(const char* token, int64_t expires) {
 	char buf[CW_TOKEN_CAP + 64];
 	int len = snprintf(buf, sizeof(buf), "token %s\nexpires %lld\n", token, (long long)expires);
 	return len > 0 && (size_t)len < sizeof(buf) && cw_store_write("token", buf, (size_t)len);
+}
+
+void
+cw_make_uuid(char out[CW_UUID_CAP]) {
+	unsigned char b[16] = { 0 };
+	if (!cw_platform_random(b, sizeof(b))) {
+		uint64_t t = (uint64_t)time(NULL);
+		memcpy(b, &t, sizeof(t));
+	}
+	b[6] = (unsigned char)((b[6] & 0x0f) | 0x40);
+	b[8] = (unsigned char)((b[8] & 0x3f) | 0x80);
+	snprintf(
+		out, CW_UUID_CAP,
+		"%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
+		b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
+		b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
+	);
+}
+
+static bool
+is_uuid(const char* s, size_t len) {
+	if (len != CW_UUID_CAP - 1) {
+		return false;
+	}
+	for (size_t i = 0; i < len; ++i) {
+		bool dash = i == 8 || i == 13 || i == 18 || i == 23;
+		bool hex = (s[i] >= '0' && s[i] <= '9') || (s[i] >= 'a' && s[i] <= 'f');
+		if (dash ? s[i] != '-' : !hex) {
+			return false;
+		}
+	}
+	return true;
+}
+
+bool
+cw_install_id_load(char out[CW_UUID_CAP]) {
+	char buf[CW_UUID_CAP + 8];
+	size_t len = 0;
+	if (cw_store_read("install_id", buf, sizeof(buf), &len)) {
+		while (len > 0 && (buf[len - 1] == '\n' || buf[len - 1] == '\r')) {
+			--len;
+		}
+		if (is_uuid(buf, len)) {
+			memcpy(out, buf, len);
+			out[len] = '\0';
+			return true;
+		}
+		cw_log(CW_LOG_WARN, "install id file is not a uuid, replaced");
+	}
+	cw_make_uuid(out);
+	if (!cw_store_write("install_id", out, CW_UUID_CAP - 1)) {
+		cw_log(CW_LOG_ERROR, "cannot store the install id");
+		out[0] = '\0';
+		return false;
+	}
+	cw_log(CW_LOG_INFO, "new install id %s", out);
+	return true;
 }
 
 static size_t

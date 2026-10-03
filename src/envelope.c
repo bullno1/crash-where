@@ -126,23 +126,6 @@ fingerprint(const cw_crash_info_t* info) {
 	return chibihash64_finish(&ctx);
 }
 
-static void
-make_uuid(char out[CW_UUID_CAP]) {
-	unsigned char b[16] = { 0 };
-	if (!cw_platform_random(b, sizeof(b))) {
-		uint64_t t = (uint64_t)time(NULL);
-		memcpy(b, &t, sizeof(t));
-	}
-	b[6] = (unsigned char)((b[6] & 0x0f) | 0x40);
-	b[8] = (unsigned char)((b[8] & 0x3f) | 0x80);
-	snprintf(
-		out, CW_UUID_CAP,
-		"%02x%02x%02x%02x-%02x%02x-%02x%02x-%02x%02x-%02x%02x%02x%02x%02x%02x",
-		b[0], b[1], b[2], b[3], b[4], b[5], b[6], b[7],
-		b[8], b[9], b[10], b[11], b[12], b[13], b[14], b[15]
-	);
-}
-
 static int
 crumb_cmp(const void* a, const void* b) {
 	const cw_crumb_t* x = a;
@@ -279,7 +262,9 @@ cw_write_envelope(
 	uint64_t fp = fingerprint(info);
 	long long now = (long long)time(NULL);
 	char uuid[CW_UUID_CAP];
-	make_uuid(uuid);
+	cw_make_uuid(uuid);
+	char install_id[CW_UUID_CAP];
+	cw_install_id_load(install_id);
 	snprintf(
 		out_path, cap, "%s/pending/%lld_%c_%016" PRIx64 "_%s.json",
 		report_dir, now, cw_report_kind_letter(info->kind), fp, uuid
@@ -295,6 +280,8 @@ cw_write_envelope(
 
 	fputs("{\"schema\":2,\"report_id\":", f);
 	put_str(f, uuid, sizeof(uuid));
+	fputs(",\"install_id\":", f);
+	put_str(f, install_id, sizeof(install_id));
 	fprintf(f, ",\"sent_at\":%lld,\"app\":{\"name\":", now);
 	put_str(f, cw_ctx.app, sizeof(cw_ctx.app));
 	fputs(",\"version\":", f);

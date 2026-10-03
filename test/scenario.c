@@ -31,21 +31,15 @@ test_cw_log(cw_log_level_t level, const char* msg) {
 
 /**
  * HTTP status the runner asked the transport to answer with.
- *
- * "unauthorized" refuses only a request that carries a token, so the
- * bounce without one can succeed.
  */
 static int
-http_status_from_env(const cw_request_t* req) {
+http_status_from_env(void) {
 	const char* status = getenv("CW_TEST_STATUS");
 	if (status != NULL && strcmp(status, "retry") == 0) {
 		return 503;
 	}
 	if (status != NULL && strcmp(status, "drop") == 0) {
 		return 400;
-	}
-	if (status != NULL && strcmp(status, "unauthorized") == 0 && req->token != NULL) {
-		return 401;
 	}
 	return 200;
 }
@@ -125,7 +119,7 @@ test_send(void* user, const cw_request_t* req, cw_response_t* resp) {
 		);
 	}
 	*resp = (cw_response_t){
-		.status = http_status_from_env(req),
+		.status = http_status_from_env(),
 		.reply_len = n > 0 && (size_t)n < req->reply_cap ? (size_t)n : 0,
 	};
 	return CW_OK;

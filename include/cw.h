@@ -202,7 +202,7 @@ typedef struct {
 	const char* version;     /**< Application version such as "1.4.2". The server rejects reports from unknown versions. */
 	const char* channel;     /**< Build stream such as "stable" or "beta". The server rejects reports whose channel differs from the one the release was registered with. */
 	const char* endpoint;    /**< Base URL of the ingest service, without a trailing slash. */
-	const char* report_dir;  /**< Directory for pending reports, or `NULL` for the platform default. */
+	const char* report_dir;  /**< Directory for persistent data, or `NULL` for the platform default. */
 
 	/**
 	 * Heartbeat silence reported as a hang, in milliseconds.
@@ -282,6 +282,12 @@ cw_attach_thread(void);
  *
  * The watcher will use the configured @ref cw_config_t::transport for
  * authentication.
+ *
+ * Authentication is optional. A report can be sent with or without a token.
+ * The token only marks it as authorized on the server, and a failed
+ * exchange costs nothing else. Every report also carries a random id of
+ * the install, created in the report directory on first run, which
+ * identifies the install and nothing about the machine or the player.
  *
  * Authentication serves as a noise filter. It is not meant to be a security
  * boundary.
