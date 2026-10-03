@@ -1,7 +1,6 @@
 add_executable(crashme crashme.c)
 target_link_libraries(crashme PRIVATE cw cw_dialog cw_http cw_host)
 if(MSVC)
-	target_compile_definitions(crashme PRIVATE _CRT_SECURE_NO_WARNINGS)
 	target_compile_options(crashme PRIVATE /W4)
 else()
 	target_compile_options(crashme PRIVATE -Wall -Wextra)

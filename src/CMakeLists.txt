@@ -1,3 +1,19 @@
+# What every library here shares: the internal headers, warnings, and
+# the C runtime settings.
+set(CW_SRC_DIR ${CMAKE_CURRENT_SOURCE_DIR})
+function(cw_target_defaults target)
+	target_include_directories(${target} PRIVATE ${CW_SRC_DIR})
+	if(MSVC)
+		# C4996 flags fopen/getenv/strerror as "unsafe"; the _s variants are not portable.
+		# C11 atomics need the experimental switch on MSVC.
+		target_compile_definitions(${target} PRIVATE _CRT_SECURE_NO_WARNINGS)
+		target_compile_options(${target} PRIVATE /W4 /experimental:c11atomics)
+	else()
+		target_compile_definitions(${target} PRIVATE _GNU_SOURCE)
+		target_compile_options(${target} PRIVATE -Wall -Wextra)
+	endif()
+endfunction()
+
 add_library(cw STATIC
 	core.c
 	envelope.c
@@ -6,155 +22,14 @@ add_library(cw STATIC
 	upload.c
 )
 if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-	target_sources(cw PRIVATE
-		linux/eh_frame.c
-		linux/game.c
-		linux/ipc.c
-		linux/platform.c
-		linux/signal.c
-		linux/unwind.c
-		linux/watcher.c
-	)
-	find_package(Threads REQUIRED)
-	target_link_libraries(cw PRIVATE ${CMAKE_DL_LIBS} Threads::Threads)
+	add_subdirectory(linux)
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-	target_sources(cw PRIVATE
-		windows/exception.c
-		windows/game.c
-		windows/platform.c
-		windows/unwind.c
-		windows/watcher.c
-	)
-	target_link_libraries(cw PRIVATE bcrypt dbghelp)
-	if(MSVC)
-		# Only the watcher calls dbghelp; keep it out of the game's startup.
-		target_link_libraries(cw PRIVATE delayimp)
-		target_link_options(cw INTERFACE /DELAYLOAD:dbghelp.dll)
-	endif()
+	add_subdirectory(windows)
 elseif(EMSCRIPTEN)
-	target_sources(cw PRIVATE
-		web/game.c
-		web/platform.c
-		web/stack.c
-		web/watcher.c
-	)
-	# The shim reaches the game through the library, so the game's build names nothing.
-	# SHELL: keeps CMake from deduplicating the flag apart from its argument.
-	target_link_options(cw INTERFACE
-		"SHELL:--js-library ${CMAKE_CURRENT_SOURCE_DIR}/web/shim.js"
-	)
-	set_property(TARGET cw APPEND PROPERTY
-		INTERFACE_LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/web/shim.js
-	)
-	# Objects built with threads link only into a program built with them,
-	# so the flag is the library's and every consumer inherits it.
-	option(CW_WEB_PTHREADS "Build for a game that uses pthreads" OFF)
-	if(CW_WEB_PTHREADS)
-		target_compile_options(cw PUBLIC -pthread)
-		target_link_options(cw INTERFACE -pthread)
-	endif()
+	add_subdirectory(web)
 endif()
-target_include_directories(cw
-	PUBLIC ${PROJECT_SOURCE_DIR}/include
-	PRIVATE ${CMAKE_CURRENT_SOURCE_DIR}
-)
-if(MSVC)
-	# C4996 flags fopen/getenv/strerror as "unsafe"; the _s variants are not portable.
-	# C11 atomics need the experimental switch on MSVC.
-	target_compile_definitions(cw PRIVATE _CRT_SECURE_NO_WARNINGS)
-	target_compile_options(cw PRIVATE /W4 /experimental:c11atomics)
-else()
-	target_compile_definitions(cw PRIVATE _GNU_SOURCE)
-	target_compile_options(cw PRIVATE -Wall -Wextra)
-endif()
-
-add_library(cw_http STATIC http/http.c)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-	target_sources(cw_http PRIVATE http/curl.c)
-	# Only the header is needed: libcurl is loaded at run time, never linked.
-	target_link_libraries(cw_http PRIVATE ${CMAKE_DL_LIBS})
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-	target_sources(cw_http PRIVATE http/windows.c)
-	target_link_libraries(cw_http PRIVATE winhttp)
-	if(MSVC)
-		# Only the watcher sends; keep winhttp out of the game's startup.
-		target_link_libraries(cw_http PRIVATE delayimp)
-		target_link_options(cw_http INTERFACE /DELAYLOAD:winhttp.dll)
-	endif()
-elseif(EMSCRIPTEN)
-	target_sources(cw_http PRIVATE http/web.c)
-	target_link_options(cw_http INTERFACE
-		"SHELL:--js-library ${CMAKE_CURRENT_SOURCE_DIR}/http/web.js"
-	)
-	set_property(TARGET cw_http APPEND PROPERTY
-		INTERFACE_LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/http/web.js
-	)
-endif()
-target_link_libraries(cw_http PUBLIC cw)
-target_include_directories(cw_http PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-if(MSVC)
-	target_compile_definitions(cw_http PRIVATE _CRT_SECURE_NO_WARNINGS)
-	target_compile_options(cw_http PRIVATE /W4 /experimental:c11atomics)
-else()
-	target_compile_definitions(cw_http PRIVATE _GNU_SOURCE)
-	target_compile_options(cw_http PRIVATE -Wall -Wextra)
-endif()
-
-add_library(cw_dialog STATIC dialog/dialog.c)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-	target_sources(cw_dialog PRIVATE dialog/sdl.c)
-	# SDL is loaded at run time, never linked.
-	target_link_libraries(cw_dialog PRIVATE ${CMAKE_DL_LIBS})
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-	target_sources(cw_dialog PRIVATE dialog/windows.c)
-	# Common Controls is resolved by name, only in the watcher.
-	target_link_libraries(cw_dialog PRIVATE user32)
-elseif(EMSCRIPTEN)
-	target_sources(cw_dialog PRIVATE dialog/web.c)
-	target_link_options(cw_dialog INTERFACE
-		"SHELL:--js-library ${CMAKE_CURRENT_SOURCE_DIR}/dialog/web.js"
-	)
-	set_property(TARGET cw_dialog APPEND PROPERTY
-		INTERFACE_LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/dialog/web.js
-	)
-else()
-	target_sources(cw_dialog PRIVATE dialog/none.c)
-endif()
-target_link_libraries(cw_dialog PUBLIC cw)
-target_include_directories(cw_dialog PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-if(MSVC)
-	target_compile_definitions(cw_dialog PRIVATE _CRT_SECURE_NO_WARNINGS)
-	target_compile_options(cw_dialog PRIVATE /W4 /experimental:c11atomics)
-else()
-	target_compile_definitions(cw_dialog PRIVATE _GNU_SOURCE)
-	target_compile_options(cw_dialog PRIVATE -Wall -Wextra)
-endif()
-
-add_library(cw_host STATIC host/host.c)
-if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
-	target_sources(cw_host PRIVATE host/linux.c)
-elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
-	target_sources(cw_host PRIVATE host/windows.c)
-	# The registry reads at init; dxgi is loaded at run time, only in the watcher.
-	target_link_libraries(cw_host PRIVATE advapi32)
-elseif(EMSCRIPTEN)
-	target_sources(cw_host PRIVATE host/web.c)
-	target_link_options(cw_host INTERFACE
-		"SHELL:--js-library ${CMAKE_CURRENT_SOURCE_DIR}/host/web.js"
-	)
-	set_property(TARGET cw_host APPEND PROPERTY
-		INTERFACE_LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/host/web.js
-	)
-endif()
-target_link_libraries(cw_host PUBLIC cw)
-target_include_directories(cw_host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
-if(MSVC)
-	target_compile_definitions(cw_host PRIVATE _CRT_SECURE_NO_WARNINGS)
-	target_compile_options(cw_host PRIVATE /W4 /experimental:c11atomics)
-else()
-	target_compile_definitions(cw_host PRIVATE _GNU_SOURCE)
-	target_compile_options(cw_host PRIVATE -Wall -Wextra)
-endif()
+target_include_directories(cw PUBLIC ${PROJECT_SOURCE_DIR}/include)
+cw_target_defaults(cw)
 
 # What the watcher needs from the crashing binary; consumers inherit it.
 if(MSVC)
@@ -172,3 +47,7 @@ else()
 		target_link_options(cw INTERFACE -Wl,--build-id=sha1)
 	endif()
 endif()
+
+add_subdirectory(http)
+add_subdirectory(host)
+add_subdirectory(dialog)
