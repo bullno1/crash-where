@@ -17,6 +17,7 @@
   "include": [
     "src",
     "test",
+    "migrations/shard",
     "vitest.config.mts"
   ]
 }

@@ -14,4 +14,20 @@ keep_vars = true
 [[d1_databases]]
 binding = "DB"
 database_name = "crash-where"
-migrations_dir = "migrations"
+migrations_dir = "migrations/root"
+
+# One Durable Object per app holds that app's crash index in SQLite storage,
+# with its schema from migrations/shard applied by the object itself.
+[[durable_objects.bindings]]
+name = "SHARD"
+class_name = "AppShard"
+
+[[migrations]]
+tag = "v1"
+new_sqlite_classes = ["AppShard"]
+
+# Lets the Worker import the shard migrations as text.
+[[rules]]
+type = "Text"
+globs = ["**/*.sql"]
+fallthrough = true

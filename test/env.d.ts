@@ -7,6 +7,8 @@ declare global {
 		interface Env extends WorkerEnv {
 			/** The SQL files under migrations/, read by the Vitest config. */
 			TEST_MIGRATIONS: D1Migration[];
+			/** The SQL files under migrations/shard, read by the Vitest config. */
+			TEST_SHARD_MIGRATIONS: D1Migration[];
 		}
 	}
 }
