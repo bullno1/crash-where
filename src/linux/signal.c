@@ -17,6 +17,8 @@
 #include <string.h>
 #include <sys/mman.h>
 #include <sys/uio.h>
+#include <time.h>
+#include <ucontext.h>
 #include <unistd.h>
 
 #include "linux/platform.h"
@@ -153,6 +155,36 @@ on_signal(int signo, siginfo_t* si, void* ctx) {
 	struct sigaction dfl = { .sa_handler = SIG_DFL };
 	sigaction(signo, &dfl, NULL);
 	raise(signo);
+}
+
+/**
+ * Game side of cw_report(): the calling thread records itself the way
+ * the handler does, with `getcontext` for the kernel's context, then
+ * waits for the watcher to idle the slot.
+ */
+void
+cw_platform_report(void) {
+	cw_crash_t* rec = &cw_linux.region->report;
+	cw_cause_t* slot = &cw_linux.region->common.report;
+	rec->signo = 0;
+	rec->tid = gettid();
+	rec->si = (siginfo_t){ 0 };
+	getcontext(&rec->uc);
+	uintptr_t sp = context_sp(&rec->uc);
+	copy_stack(rec, sp, stack_top_of((uint32_t)rec->tid, sp));
+	atomic_store_explicit(&slot->state, CW_CRASH_DONE, memory_order_release);
+
+	uint64_t deadline = cw_platform_now_ms() + CW_REPLY_TIMEOUT;
+	bool sent = cw_send_msg(cw_linux.sock, CW_MSG_REPORT, 0);
+	while (sent && atomic_load_explicit(&slot->state, memory_order_acquire) != CW_CRASH_IDLE) {
+		if (cw_platform_now_ms() >= deadline) {
+			cw_log(CW_LOG_WARN, "watcher did not write the report in time");
+			break;
+		}
+		nanosleep(&(struct timespec){ .tv_nsec = 1000000 }, NULL);
+	}
+	/* Without a watcher, or after giving up, the slot must not stay taken. */
+	atomic_store_explicit(&slot->state, CW_CRASH_IDLE, memory_order_release);
 }
 
 static void

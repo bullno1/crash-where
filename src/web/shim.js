@@ -309,6 +309,10 @@ addToLibrary({
 					if (fatal) {
 						cwWeb.crashed(fatal, worker.pthread_ptr || 0);
 					}
+					const reported = e.data?.['cwReport'];
+					if (reported) {
+						cwWeb.reported(reported);
+					}
 				});
 				// One the worker could not take: it arrives as a message alone.
 				worker.addEventListener('error', (e) => {
@@ -391,6 +395,20 @@ addToLibrary({
 				'region': HEAPU8.slice(cwWeb.region, cwWeb.region + cwWeb.regionLen),
 				'memory': HEAPU8.length,
 			} });
+		},
+
+		// After cw_report(): a failure the game survives, with the region
+		// as it is now. Reads memory; never calls into the instance.
+		reported(r) {
+			if (!cwWeb.watcher || !cwWeb.regionLen) {
+				return;
+			}
+#if PTHREADS && ALLOW_MEMORY_GROWTH && GROWABLE_ARRAYBUFFERS != 2
+			growMemViews();
+#endif
+			r['region'] = HEAPU8.slice(cwWeb.region, cwWeb.region + cwWeb.regionLen);
+			r['memory'] = HEAPU8.length;
+			cwWeb.post({ 'error': r });
 		},
 
 #if PTHREADS
@@ -504,6 +522,14 @@ addToLibrary({
 				});
 				return {};
 			};
+		},
+
+		// The offsets below, when `stack` needs them: an engine that names
+		// a frame by function index alone.
+		async offsetsFor(stack) {
+			if (/wasm-function\[\d+\](?!:0x)/.test(stack)) {
+				await cwWeb.loadOffsets();
+			}
 		},
 
 		// Function index to the file offset of the function's first
@@ -622,10 +648,7 @@ addToLibrary({
 			};
 			if (m['report']) {
 				const r = m['report'];
-				// An engine that names a frame by function index alone.
-				if (/wasm-function\[\d+\](?!:0x)/.test(r['stack'])) {
-					await cwWeb.loadOffsets();
-				}
+				await cwWeb.offsetsFor(r['stack']);
 				const name = stringToNewUTF8(r['name']);
 				const message = stringToNewUTF8(r['message']);
 				const stack = stringToNewUTF8(r['stack']);
@@ -639,6 +662,21 @@ addToLibrary({
 				_free(message);
 				_free(name);
 				postMessage({ 'done': { 'kind': 'trap', 'message': r['message'] } });
+			} else if (m['error']) {
+				const r = m['error'];
+				await cwWeb.offsetsFor(r['stack']);
+				const type = stringToNewUTF8(r['type']);
+				const message = stringToNewUTF8(r['message']);
+				const stack = stringToNewUTF8(r['stack']);
+				const region = _malloc(r['region'].length);
+				HEAPU8.set(r['region'], region);
+				cwWeb.report = r;
+				await call(cwWeb.entries.error, type, message, stack, r['thread'] || 0, region);
+				cwWeb.report = null;
+				_free(region);
+				_free(stack);
+				_free(message);
+				_free(type);
 			} else if (m['consent'] !== undefined) {
 				await call(cwWeb.entries.consent, m['consent']);
 			} else if (m['auth']) {
@@ -712,6 +750,24 @@ addToLibrary({
 		return true;
 	},
 
+	cw_web_game_report__deps: ['$cwWeb', '$UTF8ToString'],
+	cw_web_game_report: (type, msg, thread) => {
+		const r = {
+			'type': UTF8ToString(type),
+			'message': UTF8ToString(msg),
+			'stack': String(new Error().stack ?? ''),
+			'thread': thread,
+		};
+#if PTHREADS
+		// The watcher is the page's, and the page reads the shared memory.
+		if (ENVIRONMENT_IS_PTHREAD) {
+			postMessage({ 'cwReport': r });
+			return;
+		}
+#endif
+		cwWeb.reported(r);
+	},
+
 	cw_web_game_notify_consent__deps: ['$cwWeb'],
 	cw_web_game_notify_consent: (choice) => {
 		cwWeb.post({ 'consent': choice });
@@ -743,8 +799,8 @@ addToLibrary({
 	},
 
 	cw_web_watcher_ready__deps: ['$cwWeb'],
-	cw_web_watcher_ready: (consent, report, consentFn, auth, shutdown) => {
-		cwWeb.entries = { report, consent: consentFn, auth, shutdown };
+	cw_web_watcher_ready: (consent, report, error, consentFn, auth, shutdown) => {
+		cwWeb.entries = { report, error, consent: consentFn, auth, shutdown };
 		postMessage({ 'snapshot': { 'consent': consent, 'pending': cwWeb.announced } });
 		// The handlers run from the event loop, never from inside main().
 		const waiting = cwWeb.waiting;

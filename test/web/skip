@@ -10,6 +10,7 @@
 crash/null_write
 crash/null_write_leaf
 crash/thread_null_write
+report/frames_name_the_caller
 
 # Expects the report of a game that ended without cw_shutdown(). Game and
 # watcher end together on the web.

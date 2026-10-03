@@ -10,7 +10,7 @@
 #include "windows/platform.h"
 
 #define CW_READY_TIMEOUT 2000
-#define CW_MAX_INHERIT   11 /* Eight shared handles and three standard ones. */
+#define CW_MAX_INHERIT   12 /* Nine shared handles and three standard ones. */
 
 bool
 cw_platform_debugger_present(void) {
@@ -177,23 +177,26 @@ cw_platform_run_game(void) {
 	h.ev_shutdown = make_event();
 	h.ev_auth = make_event();
 	h.ev_consent = make_event();
+	h.ev_report = make_event();
 	if (
 		h.ev_crash == NULL || h.ev_done == NULL || h.ev_ready == NULL
 		|| h.ev_shutdown == NULL || h.ev_auth == NULL || h.ev_consent == NULL
+		|| h.ev_report == NULL
 	) {
 		fail = "cannot create events";
 		goto end;
 	}
 
-	wchar_t watcher_var[200];
+	wchar_t watcher_var[256];
 	swprintf(
 		watcher_var, sizeof(watcher_var) / sizeof(watcher_var[0]),
-		L"" CW_ENV_WATCHER L"=%lu,%llx,%llx,%llx,%llx,%llx,%llx,%llx,%llx",
+		L"" CW_ENV_WATCHER L"=%lu,%llx,%llx,%llx,%llx,%llx,%llx,%llx,%llx,%llx",
 		GetCurrentProcessId(),
 		(unsigned long long)(uintptr_t)h.section, (unsigned long long)(uintptr_t)h.game,
 		(unsigned long long)(uintptr_t)h.ev_crash, (unsigned long long)(uintptr_t)h.ev_done,
 		(unsigned long long)(uintptr_t)h.ev_ready, (unsigned long long)(uintptr_t)h.ev_shutdown,
-		(unsigned long long)(uintptr_t)h.ev_auth, (unsigned long long)(uintptr_t)h.ev_consent
+		(unsigned long long)(uintptr_t)h.ev_auth, (unsigned long long)(uintptr_t)h.ev_consent,
+		(unsigned long long)(uintptr_t)h.ev_report
 	);
 	env = build_env(watcher_var);
 	if (env == NULL) {
@@ -203,8 +206,9 @@ cw_platform_run_game(void) {
 
 	HANDLE inherit[CW_MAX_INHERIT] = {
 		h.section, h.game, h.ev_crash, h.ev_done, h.ev_ready, h.ev_shutdown, h.ev_auth, h.ev_consent,
+		h.ev_report,
 	};
-	DWORD count = 8;
+	DWORD count = 9;
 	STARTUPINFOW std = { .dwFlags = STARTF_USESTDHANDLES };
 	std.hStdInput = add_std_handle(STD_INPUT_HANDLE, inherit, &count);
 	std.hStdOutput = add_std_handle(STD_OUTPUT_HANDLE, inherit, &count);
@@ -260,6 +264,7 @@ end:
 		}
 		HANDLE* handles[] = {
 			&h.section, &h.game, &h.ev_crash, &h.ev_done, &h.ev_ready, &h.ev_shutdown, &h.ev_auth, &h.ev_consent,
+			&h.ev_report,
 		};
 		for (size_t i = 0; i < sizeof(handles) / sizeof(handles[0]); ++i) {
 			if (*handles[i] != NULL) {

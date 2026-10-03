@@ -79,6 +79,7 @@ typedef enum {
 	CW_REPORT_CRASH,
 	CW_REPORT_HANG,
 	CW_REPORT_ABNORMAL_EXIT, /**< The game ended without cw_shutdown(). */
+	CW_REPORT_ERROR,         /**< The game called cw_report() and kept running. */
 } cw_report_kind_t;
 
 /**
@@ -466,6 +467,31 @@ cw_set_snapshot(const char* name, const void* data, size_t len);
  */
 void
 cw_append_log(const char* name, const void* rec, size_t len);
+
+/**
+ * Report a recoverable error such as a desync or a corrupted game state.
+ *
+ * Captures the calling thread's stack with the breadcrumbs and states
+ * then returns.
+ * A failure the program cannot survive should go through @ref cw_abort instead.
+ *
+ * Reports with the same `type`, `msg`, and stack are grouped together.
+ * Keep `msg` constant and put per-occurrence detail in cw_set_state()
+ * or cw_breadcrumb() before the call.
+ *
+ * Blocks until the report is stored, typically a few milliseconds.
+ * On the web it returns immediately.
+ * A call while another thread's report is being written is dropped and logged.
+ *
+ * Safe from any thread, but not from a signal handler.
+ *
+ * @param type  Short uppercase tag such as "DESYNC", truncated to 31
+ *              bytes. `NULL` reports as "ERROR".
+ * @param msg   What went wrong, truncated to 127 bytes. `NULL` means no
+ *              message.
+ */
+void
+cw_report(const char* type, const char* msg);
 
 /**
  * Report a fatal failure, such as a failed assertion, and end the process.

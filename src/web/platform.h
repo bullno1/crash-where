@@ -32,6 +32,20 @@ typedef void (*cw_web_report_fn_t)(
 	uint32_t tid, cw_shared_t* region
 );
 
+/**
+ * Watcher: one failure the game reported with cw_report().
+ *
+ * @param type     The report's type; empty for none.
+ * @param message  The report's message.
+ * @param stack    Stack text at the call.
+ * @param tid      The thread that called, as cw_platform_tid() names it.
+ * @param region   Copy of the game's region, owned by the caller.
+ */
+typedef void (*cw_web_error_fn_t)(
+	const char* type, const char* message, const char* stack,
+	uint32_t tid, cw_shared_t* region
+);
+
 /** Watcher: the player decided; `choice` is a cw_consent_t. */
 typedef void (*cw_web_consent_fn_t)(int choice);
 
@@ -93,6 +107,13 @@ cw_web_game_notify_auth(
 void
 cw_web_game_notify_shutdown(void);
 
+/**
+ * Send a report of the calling thread: `type` and `msg` with the stack
+ * of this call and a copy of the region, taken before the call returns.
+ */
+void
+cw_web_game_report(const char* type, const char* msg, uint32_t tid);
+
 /* Shim, watcher side. */
 
 /** End this watcher: the game runs disabled. */
@@ -111,8 +132,9 @@ cw_web_watcher_pending(const char* name, bool approved);
 void
 cw_web_watcher_ready(
 	int consent,
-	cw_web_report_fn_t on_report, cw_web_consent_fn_t on_consent,
-	cw_web_auth_fn_t on_auth, cw_web_shutdown_fn_t on_shutdown
+	cw_web_report_fn_t on_report, cw_web_error_fn_t on_error,
+	cw_web_consent_fn_t on_consent, cw_web_auth_fn_t on_auth,
+	cw_web_shutdown_fn_t on_shutdown
 );
 
 /**

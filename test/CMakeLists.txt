@@ -8,6 +8,7 @@ add_executable(cw_test
 	drain.c
 	hang.c
 	host.c
+	report.c
 	http.c
 	http_server.c
 	normalize.c

@@ -28,6 +28,29 @@ write_crash_report(const char* report_dir, char* path, size_t cap) {
 }
 
 /**
+ * Report what the game handed over with cw_report().
+ *
+ * @param path  Receives the envelope path on success.
+ * @return `true` when the envelope was written.
+ */
+static bool
+write_error_report(const char* report_dir, char* path, size_t cap) {
+	static cw_crash_info_t info;
+	info = (cw_crash_info_t){ .kind = CW_REPORT_ERROR, .main_module = -1 };
+	if (!cw_unwind(cw_win.handles.game, &cw_win.region->report, &info)) {
+		cw_log(CW_LOG_WARN, "unwind produced no frames");
+	}
+	snprintf(info.type, sizeof(info.type), "ERROR");
+	info.fault_addr = 0;
+	cw_cause_apply(&info, &cw_win.region->common.report);
+	if (!cw_write_envelope(report_dir, &info, &cw_win.region->common, path, cap)) {
+		return false;
+	}
+	cw_log(CW_LOG_INFO, "report written to %s", path);
+	return true;
+}
+
+/**
  * Report a game that vanished without a crash or a shutdown.
  *
  * The exit status tells a fast-fail such as `0xC0000409` from a launcher
@@ -152,8 +175,9 @@ check_hang(cw_hang_t* hang, cw_drain_t* drain, const char* report_dir) {
  *
  * A wait that finds several objects signaled reports the lowest index.
  * The game sets an event before it ends, so the events come before the
- * process handle; and it decides or authenticates before it crashes, so
- * those events come before the crash, which keeps the game's order.
+ * process handle; and it decides, authenticates, or reports before it
+ * crashes, so those events come before the crash, which keeps the
+ * game's order.
  */
 static void
 cw_watch(const char* report_dir, cw_drain_t* drain) {
@@ -163,12 +187,12 @@ cw_watch(const char* report_dir, cw_drain_t* drain) {
 	DWORD interval_ms = (DWORD)cw_hang_poll_ms(cw_ctx.cfg.hang_timeout_ms);
 
 	for (;;) {
-		HANDLE objects[5] = {
-			cw_win.handles.ev_consent, cw_win.handles.ev_auth,
+		HANDLE objects[6] = {
+			cw_win.handles.ev_consent, cw_win.handles.ev_auth, cw_win.handles.ev_report,
 			cw_win.handles.ev_crash, cw_win.handles.ev_shutdown,
 			cw_win.handles.game,
 		};
-		DWORD which = WaitForMultipleObjects(5, objects, FALSE, crashed ? INFINITE : interval_ms);
+		DWORD which = WaitForMultipleObjects(6, objects, FALSE, crashed ? INFINITE : interval_ms);
 		if (!crashed) {
 			check_hang(&hang, drain, report_dir);
 			cw_drain_tick(drain, cw_platform_now_ms());
@@ -181,6 +205,14 @@ cw_watch(const char* report_dir, cw_drain_t* drain) {
 		} else if (which == WAIT_OBJECT_0 + 1) {
 			cw_drain_auth(drain, atomic_exchange_explicit(&cw_win.region->auth, 0, memory_order_acq_rel));
 		} else if (which == WAIT_OBJECT_0 + 2) {
+			/* Idle the slot first: the reporting thread is parked until then. */
+			char path[CW_STR_CAP + 64];
+			bool written = cw_drain_accepts(drain) && write_error_report(report_dir, path, sizeof(path));
+			atomic_store_explicit(&cw_win.region->common.report.state, CW_CRASH_IDLE, memory_order_release);
+			if (written) {
+				cw_drain_report(drain, path);
+			}
+		} else if (which == WAIT_OBJECT_0 + 3) {
 			/* Reply first: the game is parked until it hears back. */
 			char path[CW_STR_CAP + 64];
 			bool written = cw_drain_accepts(drain) && write_crash_report(report_dir, path, sizeof(path));
@@ -189,7 +221,7 @@ cw_watch(const char* report_dir, cw_drain_t* drain) {
 			if (written) {
 				cw_drain_report(drain, path);
 			}
-		} else if (which == WAIT_OBJECT_0 + 3) {
+		} else if (which == WAIT_OBJECT_0 + 4) {
 			shutdown = true;
 		} else {
 			break;
@@ -217,12 +249,12 @@ _Noreturn void
 cw_platform_run_watcher(const char* spec) {
 	_putenv_s(CW_ENV_WATCHER, "");
 	unsigned long game;
-	unsigned long long v[8];
+	unsigned long long v[9];
 	int parsed = sscanf(
-		spec, "%lu,%llx,%llx,%llx,%llx,%llx,%llx,%llx,%llx",
-		&game, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7]
+		spec, "%lu,%llx,%llx,%llx,%llx,%llx,%llx,%llx,%llx,%llx",
+		&game, &v[0], &v[1], &v[2], &v[3], &v[4], &v[5], &v[6], &v[7], &v[8]
 	);
-	if (parsed != 9) {
+	if (parsed != 10) {
 		cw_log(CW_LOG_ERROR, "malformed " CW_ENV_WATCHER);
 		exit(1);
 	}
@@ -235,6 +267,7 @@ cw_platform_run_watcher(const char* spec) {
 		.ev_shutdown = (HANDLE)(uintptr_t)v[5],
 		.ev_auth = (HANDLE)(uintptr_t)v[6],
 		.ev_consent = (HANDLE)(uintptr_t)v[7],
+		.ev_report = (HANDLE)(uintptr_t)v[8],
 	};
 
 	cw_region_t* region = MapViewOfFile(cw_win.handles.section, FILE_MAP_ALL_ACCESS, 0, 0, sizeof(cw_region_t));

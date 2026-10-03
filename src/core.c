@@ -356,12 +356,30 @@ cw_append_log(const char* name, const void* rec, size_t len) {
 	cw_log(CW_LOG_WARN, "log ring '%s' (%zu bytes) ignored, not implemented", name, len);
 }
 
+void
+cw_report(const char* type, const char* msg) {
+	if (!cw_ctx.active) {
+		return;
+	}
+	cw_log(CW_LOG_WARN, "%s: %s", type != NULL ? type : "ERROR", msg != NULL ? msg : "");
+	cw_cause_t* slot = &cw_ctx.shared->report;
+	uint32_t expected = CW_CRASH_IDLE;
+	if (!atomic_compare_exchange_strong(&slot->state, &expected, CW_CRASH_WRITING)) {
+		cw_log(CW_LOG_WARN, "report dropped, another is being written");
+		return;
+	}
+	slot->tid = cw_platform_tid();
+	copy_str(slot->type, sizeof(slot->type), type);
+	copy_str(slot->msg, sizeof(slot->msg), msg);
+	cw_platform_report();
+}
+
 CW_NORETURN void
 cw_abort(const char* type, const char* msg) {
 	/* What a developer sees where no report is written: under a debugger or CW_DISABLE. */
 	cw_log(CW_LOG_ERROR, "%s: %s", type != NULL ? type : "abort", msg != NULL ? msg : "");
 	if (cw_ctx.active) {
-		cw_abort_t* slot = &cw_ctx.shared->abort;
+		cw_cause_t* slot = &cw_ctx.shared->abort;
 		uint32_t expected = CW_CRASH_IDLE;
 		if (atomic_compare_exchange_strong(&slot->state, &expected, CW_CRASH_WRITING)) {
 			slot->tid = cw_platform_tid();

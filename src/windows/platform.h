@@ -41,6 +41,7 @@ typedef struct {
 	_Atomic int32_t consent;   /**< Latest cw_consent_t the game chose; read when the consent event is set. */
 	_Atomic uint32_t auth;     /**< cw_auth_event_t bits gathered since the watcher last took them. */
 	cw_crash_t crash;
+	cw_crash_t report;         /**< Thread captured by cw_report(); its handshake is cw_shared_t::report. */
 } cw_region_t;
 
 /**
@@ -58,6 +59,7 @@ typedef struct {
 	HANDLE ev_shutdown;        /**< Game: exiting on purpose, result is in the region. */
 	HANDLE ev_auth;            /**< Game: authentication files rewritten, which ones is in the region. */
 	HANDLE ev_consent;         /**< Game: the player decided, choice is in the region. */
+	HANDLE ev_report;          /**< Game: report record is complete; answered by idling cw_shared_t::report. */
 } cw_handles_t;
 
 typedef struct {

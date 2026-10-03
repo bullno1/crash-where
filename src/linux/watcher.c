@@ -40,6 +40,29 @@ write_crash_report(pid_t game, const char* report_dir, char* path, size_t cap) {
 }
 
 /**
+ * Report what the game handed over with cw_report().
+ *
+ * @param path  Receives the envelope path on success.
+ * @return `true` when the envelope was written.
+ */
+static bool
+write_error_report(pid_t game, const char* report_dir, char* path, size_t cap) {
+	static cw_crash_info_t info;
+	info = (cw_crash_info_t){ .kind = CW_REPORT_ERROR, .main_module = -1 };
+	if (!cw_unwind(game, &cw_linux.region->report, &info)) {
+		cw_log(CW_LOG_WARN, "unwind produced no frames");
+	}
+	snprintf(info.type, sizeof(info.type), "ERROR");
+	info.fault_addr = 0;
+	cw_cause_apply(&info, &cw_linux.region->common.report);
+	if (!cw_write_envelope(report_dir, &info, &cw_linux.region->common, path, cap)) {
+		return false;
+	}
+	cw_log(CW_LOG_INFO, "report written to %s", path);
+	return true;
+}
+
+/**
  * Report a game that vanished without a crash or a shutdown.
  *
  * @param path  Receives the envelope path on success.
@@ -294,6 +317,16 @@ cw_watch(pid_t game, int sock, const char* report_dir, cw_drain_t* drain) {
 					bool written = cw_drain_accepts(drain) && write_crash_report(game, report_dir, path, sizeof(path));
 					crashed = true;
 					cw_send_msg(sock, CW_MSG_DONE, 0);
+					if (written) {
+						cw_drain_report(drain, path);
+					}
+					break;
+				}
+				case CW_MSG_REPORT: {
+					/* Idle the slot first: the reporting thread is parked until then. */
+					char path[CW_STR_CAP + 64];
+					bool written = cw_drain_accepts(drain) && write_error_report(game, report_dir, path, sizeof(path));
+					atomic_store_explicit(&cw_linux.region->common.report.state, CW_CRASH_IDLE, memory_order_release);
 					if (written) {
 						cw_drain_report(drain, path);
 					}

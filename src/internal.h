@@ -78,18 +78,22 @@ typedef struct {
 } cw_env_slot_t;
 
 /**
- * What cw_abort() recorded before calling `abort()`.
+ * A failure the game named through cw_abort() or cw_report().
  *
- * `state` is a cw_crash_state_t; the first caller owns the slot. The
- * envelope writer applies it to the crash of thread `tid`, or to the
- * abnormal exit of a game whose abort went unreported.
+ * `state` is a cw_crash_state_t. For an abort the first caller owns the
+ * slot for good, and the envelope writer applies it to the crash of
+ * thread `tid`, or to the abnormal exit of a game whose abort went
+ * unreported. For a report it is the handshake: ::CW_CRASH_WRITING
+ * while the game fills it and the platform's record, ::CW_CRASH_DONE
+ * once the watcher may read both, ::CW_CRASH_IDLE again once the
+ * envelope is written.
  */
 typedef struct {
 	_Atomic uint32_t state;
 	uint32_t tid;
-	char type[32];             /**< Empty keeps the name of a plain abort. */
+	char type[32];             /**< Empty keeps the name the platform gave the report. */
 	char msg[128];
-} cw_abort_t;
+} cw_cause_t;
 
 /**
  * Cross-platform head of the shared region.
@@ -104,7 +108,8 @@ typedef struct {
 	cw_crumb_t crumbs[CW_CRUMB_COUNT];
 	cw_state_slot_t state[CW_STATE_COUNT];
 	cw_env_slot_t env[CW_ENV_COUNT];
-	cw_abort_t abort;
+	cw_cause_t abort;
+	cw_cause_t report;
 } cw_shared_t;
 
 /**
@@ -250,6 +255,16 @@ void
 cw_platform_shutdown(void);
 
 /**
+ * Capture the calling thread into the platform's report record, hand
+ * cw_shared_t::report to the watcher, and wait until the slot is idle
+ * again, the sign that the envelope is written. Where the watcher
+ * cannot be waited on, return at once. Called with the slot in
+ * ::CW_CRASH_WRITING; leaves it ::CW_CRASH_IDLE whatever happened.
+ */
+void
+cw_platform_report(void);
+
+/**
  * Attach the calling thread.
  */
 void
@@ -321,6 +336,10 @@ cw_platform_lock(const char* path);
 
 void
 cw_log(cw_log_level_t level, const char* fmt, ...);
+
+/** Copy the type, when `cause` names one, and the message of `cause` into `info`. */
+void
+cw_cause_apply(cw_crash_info_t* info, const cw_cause_t* cause);
 
 /** Whether an environment slot holds `key`. */
 bool

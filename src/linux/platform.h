@@ -52,6 +52,7 @@ typedef struct {
 	cw_shared_t common;
 	cw_thread_t threads[CW_MAX_THREADS];
 	cw_crash_t crash;
+	cw_crash_t report;         /**< Thread captured by cw_report(); its handshake is cw_shared_t::report. */
 } cw_region_t;
 
 /**
@@ -59,6 +60,7 @@ typedef struct {
  */
 typedef enum {
 	CW_MSG_CRASH    = 'C',     /**< Game: crash record is complete. */
+	CW_MSG_REPORT   = 'E',     /**< Game: report record is complete; answered by idling cw_shared_t::report. */
 	CW_MSG_SHUTDOWN = 'S',     /**< Game: exiting on purpose. */
 	CW_MSG_AUTH     = 'A',     /**< Game: authentication files rewritten, `value` holds cw_auth_event_t bits. */
 	CW_MSG_CONSENT  = 'N',     /**< Game: the player decided, `value` is a cw_consent_t. */

@@ -240,7 +240,7 @@ cw_proof_store(const char* store, const void* proof, size_t len) {
 
 /* Pending store {{{ */
 
-static const char kind_letters[] = { 'c', 'h', 'a' };
+static const char kind_letters[] = { 'c', 'h', 'a', 'e' };
 
 char
 cw_report_kind_letter(cw_report_kind_t kind) {

@@ -256,12 +256,20 @@ put_frames(FILE* f, const cw_crash_info_t* info) {
  * abort no handler reported.
  */
 static bool
-abort_applies(const cw_crash_info_t* info, const cw_abort_t* slot) {
+abort_applies(const cw_crash_info_t* info, const cw_cause_t* slot) {
 	if (atomic_load_explicit(&slot->state, memory_order_acquire) != CW_CRASH_DONE) {
 		return false;
 	}
 	return info->kind == CW_REPORT_ABNORMAL_EXIT
 		|| (info->kind == CW_REPORT_CRASH && info->tid == slot->tid);
+}
+
+void
+cw_cause_apply(cw_crash_info_t* info, const cw_cause_t* cause) {
+	if (cause->type[0] != '\0') {
+		snprintf(info->type, sizeof(info->type), "%.*s", (int)sizeof(cause->type), cause->type);
+	}
+	snprintf(info->message_raw, sizeof(info->message_raw), "%.*s", (int)sizeof(cause->msg), cause->msg);
 }
 
 bool

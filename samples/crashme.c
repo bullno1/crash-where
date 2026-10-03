@@ -2,7 +2,7 @@
  * @file crashme.c
  * Test program: initialize the library, then crash on request.
  *
- * Usage: crashme [null|abort|assert|hang|none] [report_dir]
+ * Usage: crashme [null|abort|assert|report|hang|none] [report_dir]
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -117,6 +117,11 @@ main(int argc, char** argv) {
 	}
 	if (strcmp(mode, "assert") == 0) {
 		cw_abort("ASSERT", "mode != assert");
+	}
+	if (strcmp(mode, "report") == 0) {
+		cw_report("DESYNC", "state hash mismatch");
+		cw_shutdown();
+		return 0;
 	}
 	if (strcmp(mode, "hang") == 0) {
 		/* Ticked once above, so the watcher reports this after the default timeout. */

@@ -114,6 +114,33 @@ on_abort(int sig) {
 }
 
 /**
+ * Game side of cw_report(): the calling thread records itself the way
+ * the abort handler does, then waits for the watcher to idle the slot.
+ */
+void
+cw_platform_report(void) {
+	cw_crash_t* rec = &cw_win.region->report;
+	cw_cause_t* slot = &cw_win.region->common.report;
+	rec->tid = GetCurrentThreadId();
+	rec->pointers = 0;
+	rec->record = (EXCEPTION_RECORD){ 0 };
+	RtlCaptureContext(&rec->context);
+	atomic_store_explicit(&slot->state, CW_CRASH_DONE, memory_order_release);
+
+	uint64_t deadline = cw_platform_now_ms() + CW_REPLY_TIMEOUT;
+	bool sent = SetEvent(cw_win.handles.ev_report);
+	while (sent && atomic_load_explicit(&slot->state, memory_order_acquire) != CW_CRASH_IDLE) {
+		if (cw_platform_now_ms() >= deadline) {
+			cw_log(CW_LOG_WARN, "watcher did not write the report in time");
+			break;
+		}
+		Sleep(1);
+	}
+	/* Without a watcher, or after giving up, the slot must not stay taken. */
+	atomic_store_explicit(&slot->state, CW_CRASH_IDLE, memory_order_release);
+}
+
+/**
  * By default an overflowing thread keeps one page, which the exception
  * dispatch alone can use up before the filter runs; the process then
  * dies unreported. The guarantee only ever grows, so a repeated call

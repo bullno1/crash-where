@@ -2,6 +2,7 @@
  * @file web/game.c
  * Game side: the region, and the messages to the watcher.
  */
+#include <stdatomic.h>
 #include <stdio.h>
 #include <string.h>
 
@@ -101,6 +102,14 @@ cw_platform_notify_auth(unsigned what) {
 void
 cw_platform_shutdown(void) {
 	cw_web_game_notify_shutdown();
+}
+
+void
+cw_platform_report(void) {
+	/* The message carries the slot's content, so the slot is free once it is sent. */
+	cw_cause_t* slot = &region.report;
+	cw_web_game_report(slot->type, slot->msg, slot->tid);
+	atomic_store_explicit(&slot->state, CW_CRASH_IDLE, memory_order_release);
 }
 
 void
