@@ -1,8 +1,8 @@
 import { html } from "hono/html";
-import type { HtmlEscapedString } from "hono/utils/html";
+import type { Page } from "./page";
 
 /** Shared chrome of every dashboard page. Pico styles the elements and follows the system colour scheme. */
-export function layout(title: string, who: string, body: HtmlEscapedString | Promise<HtmlEscapedString>) {
+export function layout(title: string, who: string, body: Page): Page {
 	return html`<!doctype html>
 <html lang="en">
 <head>

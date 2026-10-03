@@ -1,11 +1,11 @@
 import pico from "@picocss/pico/css/pico.classless.min.css";
 import { Hono } from "hono";
 import { html } from "hono/html";
-import type { HtmlEscapedString } from "hono/utils/html";
 import { type AppError, type AppInput, type AppRow, createApp, listApps, validateApp } from "./apps";
 import { requireLogin } from "./auth";
 import type { App } from "./env";
 import { layout } from "./layout";
+import { type Page, render } from "./page";
 
 /** The dashboard: a login is required before any of its routes runs. */
 export const dashboard = new Hono<App>();
@@ -24,9 +24,8 @@ function day(unix: number): string {
 
 /** A labelled input, marked invalid with its message when the error is its own. */
 function field(
-	label: string, name: keyof AppInput, value: string,
-	attrs: HtmlEscapedString | Promise<HtmlEscapedString>, error: AppError | null
-) {
+	label: string, name: keyof AppInput, value: string, attrs: Page, error: AppError | null
+): Page {
 	const mine = error?.field === name;
 	return html`<label>${label}
 <input name="${name}" value="${value}" ${attrs} ${mine ? html`aria-invalid="true" aria-describedby="${name}-error"` : ""}>
@@ -34,7 +33,7 @@ ${mine ? html`<small id="${name}-error">${error.message}</small>` : ""}
 </label>`;
 }
 
-function appsPage(who: string, apps: AppRow[], form: AppInput, error: AppError | null) {
+function appsPage(who: string, apps: AppRow[], form: AppInput, error: AppError | null): Page {
 	const rows = apps.map(
 		(app) => html`<tr>
 <td><a href="/dashboard/apps/${app.name}">${app.display_name}</a></td>
@@ -67,7 +66,7 @@ ${field("Display name", "display_name", form.display_name, html`required maxleng
 dashboard.get("/", async (c) => {
 	const who = c.get("identity");
 	const apps = await listApps(c.get("db"));
-	return c.html(appsPage(who.email ?? who.sub, apps, { name: "", display_name: "" }, null));
+	return render(c, appsPage(who.email ?? who.sub, apps, { name: "", display_name: "" }, null));
 });
 
 dashboard.post("/apps", async (c) => {
@@ -77,12 +76,12 @@ dashboard.post("/apps", async (c) => {
 	const input: AppInput = { name: text("name"), display_name: text("display_name") };
 	const error = validateApp(input);
 	if (error) {
-		return c.html(appsPage(who.email ?? who.sub, await listApps(c.get("db")), input, error), 400);
+		return render(c, appsPage(who.email ?? who.sub, await listApps(c.get("db")), input, error), 400);
 	}
 	const created = await createApp(c.get("db"), input, who);
 	if (!created) {
 		const taken: AppError = { field: "name", message: `An app named '${input.name}' already exists.` };
-		return c.html(appsPage(who.email ?? who.sub, await listApps(c.get("db")), input, taken), 409);
+		return render(c, appsPage(who.email ?? who.sub, await listApps(c.get("db")), input, taken), 409);
 	}
 	return c.redirect("/dashboard", 303);
 });

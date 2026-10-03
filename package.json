@@ -7,7 +7,7 @@
     "login": "sh scripts/login.sh",
     "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy",
     "db:types": "sh scripts/db-types.sh",
-    "check": "tsc --noEmit && sh scripts/db-types.sh --verify",
+    "check": "tsc --noEmit && eslint . && sh scripts/db-types.sh --verify",
     "test": "vitest run"
   },
   "dependencies": {
@@ -21,8 +21,10 @@
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^5.0.0",
     "better-sqlite3": "^12.11.1",
+    "eslint": "^10.12.0",
     "kysely-codegen": "^0.20.0",
     "typescript": "^5.6.0",
+    "typescript-eslint": "^8.71.0",
     "vitest": "^4.1.11",
     "wrangler": "^4.0.0"
   },
