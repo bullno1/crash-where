@@ -60,4 +60,39 @@ cwsym_read_dwarf(
 	const cwsym_sink_t* sink, const cwsym_log_t* log
 );
 
+/**
+ * One segment of a source map: from `offset` on, the code came from
+ * `file:line`, until the next segment.
+ */
+typedef struct {
+	uint32_t offset;  /**< File offset in the module. */
+	const char* file; /**< Source path, or `NULL` for a segment that maps to nothing. */
+	uint32_t line;    /**< 1-based; 0 when `file` is `NULL`. */
+} cwsym_map_segment_t;
+
+/**
+ * Receiver of a source map's segments, in ascending offset.
+ */
+typedef struct {
+	/** Return `false` to stop. Pointers are valid until `end`. */
+	bool (*segment)(void* user, const cwsym_map_segment_t* seg);
+	/** Called once after the last segment, also after a stop; not when the map was rejected. May be `NULL`. */
+	void (*end)(void* user);
+	void* user;
+} cwsym_map_sink_t;
+
+/**
+ * Read the source map Emscripten writes with `-gsource-map`, whose
+ * columns are file offsets of the module. A `debugId` in the map must
+ * spell `build_id` in hex. A segment out of order is skipped and
+ * counted in a log line.
+ *
+ * @return ::CWSYM_OK; ::CWSYM_ERR_IO; ::CWSYM_ERR_FORMAT for a file that is not such a map; ::CWSYM_ERR_NO_DEBUG for another build's; ::CWSYM_ERR_NOMEM.
+ */
+cwsym_status_t
+cwsym_read_source_map(
+	const char* path, const uint8_t* build_id, size_t build_id_len,
+	const cwsym_map_sink_t* sink, const cwsym_log_t* log
+);
+
 #endif /* CWSYM_READER_H */

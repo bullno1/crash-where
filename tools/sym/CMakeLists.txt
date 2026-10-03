@@ -5,6 +5,7 @@ add_library(cw_sym STATIC
 	elf.c
 	pe.c
 	wasm.c
+	sourcemap.c
 	normalize.c
 	table.c
 	upload.c

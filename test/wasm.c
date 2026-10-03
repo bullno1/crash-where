@@ -73,6 +73,16 @@ put_name(buf_t* b, const char* s) {
 	put_vector(b, s, strlen(s));
 }
 
+static bool
+write_file(const char* path, const void* data, size_t len) {
+	FILE* f = fopen(path, "wb");
+	if (f == NULL) {
+		return false;
+	}
+	bool ok = fwrite(data, 1, len, f) == len;
+	return fclose(f) == 0 && ok;
+}
+
 /** Append a section and return the file offset of its payload. */
 static size_t
 put_section(buf_t* module, uint8_t id, const buf_t* payload) {
@@ -103,6 +113,7 @@ get_leb(const uint8_t* b, size_t* p) {
 typedef struct {
 	bool names;                   /**< Write a name section. */
 	size_t build_id_len;          /**< 0 leaves the section out. */
+	const char* source_map;       /**< Write a `sourceMappingURL` section naming this, or `NULL`. */
 	uint32_t starts[BODY_COUNT];  /**< File offset of each body. */
 	uint32_t sizes[BODY_COUNT];
 } module_t;
@@ -218,6 +229,77 @@ assemble(buf_t* out, module_t* m) {
 		put_section(out, 0, &id);
 		free(id.data);
 	}
+
+	if (m->source_map != NULL) {
+		buf_t url = { 0 };
+		put_name(&url, "sourceMappingURL");
+		put_name(&url, m->source_map);
+		put_section(out, 0, &url);
+		free(url.data);
+	}
+}
+
+static void
+put_str(buf_t* b, const char* s) {
+	put(b, s, strlen(s));
+}
+
+/** One base64 VLQ value, as a source map spells its deltas. */
+static void
+put_vlq(buf_t* b, int64_t v) {
+	static const char base64[] = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789+/";
+	uint64_t u = v < 0 ? ((uint64_t)(-v) << 1) | 1 : (uint64_t)v << 1;
+	do {
+		uint32_t digit = u & 31;
+		u >>= 5;
+		put_u8(b, (uint8_t)base64[digit | (u != 0 ? 32 : 0)]);
+	} while (u != 0);
+}
+
+/** One segment to write: `src` -1 maps the offset to nothing. */
+typedef struct {
+	uint32_t offset;
+	int src;
+	uint32_t line;
+} segment_t;
+
+/**
+ * A source map as Emscripten writes one, with the sources `src/a.c`,
+ * `b.c` and `c.c`, an escaped path, a `sourcesContent` with nulls, and
+ * a key the reader does not know. `debug_id` may be `NULL`.
+ */
+static bool
+write_source_map(const char* path, const char* debug_id, const segment_t* segs, size_t n) {
+	buf_t b = { 0 };
+	put_str(&b, "{\"version\":3,\"file\":\"mapped.wasm\",");
+	if (debug_id != NULL) {
+		put_str(&b, "\"debugId\":\"");
+		put_str(&b, debug_id);
+		put_str(&b, "\",");
+	}
+	put_str(&b, "\"sourceRoot\":\"\",\"sources\":[\"src\\/a.c\",\"b.c\",\"c.c\"],");
+	put_str(&b, "\"sourcesContent\":[null,\"int x;\\n{}[]\",null],\"names\":[],\"mappings\":\"");
+	int64_t column = 0;
+	int64_t src = 0;
+	int64_t line = 0;
+	for (size_t i = 0; i < n; ++i) {
+		if (i > 0) {
+			put_u8(&b, ',');
+		}
+		put_vlq(&b, (int64_t)segs[i].offset - column);
+		column = segs[i].offset;
+		if (segs[i].src >= 0) {
+			put_vlq(&b, segs[i].src - src);
+			src = segs[i].src;
+			put_vlq(&b, (int64_t)segs[i].line - 1 - line);
+			line = (int64_t)segs[i].line - 1;
+			put_vlq(&b, 0);
+		}
+	}
+	put_str(&b, "\",\"x_extra\":{\"k\":[1,2,{\"z\":true}]}}\n");
+	bool ok = write_file(path, b.data, b.len);
+	free(b.data);
+	return ok;
 }
 
 /**
@@ -248,16 +330,6 @@ strip_debug(const uint8_t* in, size_t len, const char* link, buf_t* out) {
 	put_name(&s, link);
 	put_section(out, 0, &s);
 	free(s.data);
-}
-
-static bool
-write_file(const char* path, const void* data, size_t len) {
-	FILE* f = fopen(path, "wb");
-	if (f == NULL) {
-		return false;
-	}
-	bool ok = fwrite(data, 1, len, f) == len;
-	return fclose(f) == 0 && ok;
 }
 
 /** Contents of `path`, or `NULL`. The caller frees them. */
@@ -332,6 +404,12 @@ typedef struct {
 	seen_t seen[MAX_SEEN];
 	bool refuse;            /**< Stop the reader at the first symbol. */
 	int lines;
+	struct {
+		uint32_t start;
+		uint32_t len;
+		char file[64];
+		uint32_t line;
+	} rows[MAX_SEEN];       /**< The first line rows, in order of arrival. */
 	int sites;
 	uint32_t line_at;       /**< The line row to keep is the one covering this offset. */
 	bool line_found;
@@ -388,6 +466,12 @@ on_symbol(void* user, const cwsym_symbol_t* s) {
 static bool
 on_line(void* user, const cwsym_line_t* l) {
 	capture_t* c = user;
+	if (c->lines < MAX_SEEN) {
+		c->rows[c->lines].start = l->start;
+		c->rows[c->lines].len = l->len;
+		c->rows[c->lines].line = l->line;
+		copy_str(c->rows[c->lines].file, sizeof(c->rows[0].file), l->file);
+	}
 	++c->lines;
 	if (!c->line_found && l->start <= c->line_at && c->line_at < l->start + l->len) {
 		c->line_found = true;
@@ -551,6 +635,7 @@ typedef struct {
 	char function[2][64];
 	uint32_t line[2];
 	bool has_file;
+	char file[64];      /**< Of the innermost location. */
 } locations_t;
 
 static void
@@ -562,6 +647,7 @@ on_location(void* user, const cwsym_location_t* loc) {
 	}
 	if (l->count == 0) {
 		l->has_file = loc->file != NULL;
+		copy_str(l->file, sizeof(l->file), loc->file);
 	}
 	++l->count;
 }
@@ -765,6 +851,156 @@ BTEST(wasm, follows_external_debug_info) {
 	BTEST_EXPECT_EQUAL("%d", cwsym_read("work/wasm/split/split.wasm", NULL, &sink, &logger), CWSYM_ERR_NO_DEBUG);
 	BTEST_EXPECT_EQUAL("%d", c.begins, 0);
 	free(fixture);
+}
+
+/* }}} */
+
+/* Source map and guessed symbol map {{{ */
+
+/** The `i`th line row the reader delivered. */
+static void
+expect_row(const capture_t* c, int i, uint32_t start, uint32_t len, const char* file, uint32_t line) {
+	BTEST_ASSERT_RELATION("%d", c->lines, >, i);
+	BTEST_EXPECT_EQUAL("%u", c->rows[i].start, start);
+	BTEST_EXPECT_EQUAL("%u", c->rows[i].len, len);
+	BTEST_EXPECT_EX(strcmp(c->rows[i].file, file) == 0, "row %d file is %s", i, c->rows[i].file);
+	BTEST_EXPECT_EQUAL("%u", c->rows[i].line, line);
+}
+
+/** The module `mapped.wasm`, named by its own `sourceMappingURL`, with the segments its map holds. */
+static void
+write_mapped(module_t* m, segment_t* segs) {
+	*m = (module_t){ .names = true, .build_id_len = 20, .source_map = "maps/mapped.wasm.map" };
+	BTEST_ASSERT(write_module("work/wasm/mapped.wasm", m, 0));
+	/* Before any body; one per body; a second line in a body; a gap that maps to nothing; past the first segment's body. */
+	segment_t want[] = {
+		{ 8, 0, 10 },
+		{ m->starts[0], 0, 10 },
+		{ m->starts[1], 1, 20 },
+		{ m->starts[1] + 3, 1, 21 },
+		{ m->starts[2] + 1, 2, 5 },
+		{ m->starts[2] + 50, -1, 0 },
+		{ m->starts[2] + 60, 2, 5 },
+	};
+	memcpy(segs, want, sizeof(want));
+}
+
+#define MAPPED_SEGMENTS 7
+
+/** The rows the segments above become, after clipping to bodies. */
+static void
+check_mapped_rows(const capture_t* c, const module_t* m) {
+	BTEST_EXPECT_EQUAL("%d", c->lines, 5);
+	expect_row(c, 0, m->starts[0], m->sizes[0], "src/a.c", 10);
+	expect_row(c, 1, m->starts[1], 3, "b.c", 20);
+	expect_row(c, 2, m->starts[1] + 3, m->sizes[1] - 3, "b.c", 21);
+	expect_row(c, 3, m->starts[2] + 1, 49, "c.c", 5);
+	expect_row(c, 4, m->starts[2] + 60, m->sizes[2] - 60, "c.c", 5);
+}
+
+BTEST(wasm, reads_source_map) {
+	module_t m;
+	segment_t segs[MAPPED_SEGMENTS];
+	write_mapped(&m, segs);
+	char id[41];
+	cwsym_build_id_hex(build_id, 20, id);
+	BTEST_ASSERT(write_source_map("work/wasm/mapped.wasm.map", id, segs, MAPPED_SEGMENTS));
+
+	capture_t c = { 0 };
+	cwsym_sink_t sink = sink_of(&c);
+	BTEST_ASSERT_EQUAL("%d", cwsym_read("work/wasm/mapped.wasm", NULL, &sink, &logger), CWSYM_OK);
+	BTEST_EXPECT_EQUAL("%d", c.count, BODY_COUNT);
+	check_mapped_rows(&c, &m);
+
+	/* A map without a debugId is taken on trust; another build's costs the lines, not the read. */
+	BTEST_ASSERT(write_source_map("work/wasm/mapped.wasm.map", NULL, segs, MAPPED_SEGMENTS));
+	c = (capture_t){ 0 };
+	BTEST_ASSERT_EQUAL("%d", cwsym_read("work/wasm/mapped.wasm", NULL, &sink, &logger), CWSYM_OK);
+	check_mapped_rows(&c, &m);
+	BTEST_ASSERT(write_source_map("work/wasm/mapped.wasm.map", "0000000000000000000000000000000000000000", segs, MAPPED_SEGMENTS));
+	c = (capture_t){ 0 };
+	BTEST_ASSERT_EQUAL("%d", cwsym_read("work/wasm/mapped.wasm", NULL, &sink, &logger), CWSYM_OK);
+	BTEST_EXPECT_EQUAL("%d", c.count, BODY_COUNT);
+	BTEST_EXPECT_EQUAL("%d", c.lines, 0);
+
+	/* So does a missing one, and one that is not a map. */
+	BTEST_ASSERT(remove("work/wasm/mapped.wasm.map") == 0);
+	c = (capture_t){ 0 };
+	BTEST_ASSERT_EQUAL("%d", cwsym_read("work/wasm/mapped.wasm", NULL, &sink, &logger), CWSYM_OK);
+	BTEST_EXPECT_EQUAL("%d", c.lines, 0);
+	BTEST_ASSERT(write_file("work/wasm/mapped.wasm.map", "{\"version\":3,\"sources\":[", 24));
+	c = (capture_t){ 0 };
+	BTEST_ASSERT_EQUAL("%d", cwsym_read("work/wasm/mapped.wasm", NULL, &sink, &logger), CWSYM_OK);
+	BTEST_EXPECT_EQUAL("%d", c.lines, 0);
+
+	/* A map named by the caller is used instead of the module's, and must be there. */
+	BTEST_ASSERT(write_source_map("work/wasm/other.map", id, segs, MAPPED_SEGMENTS));
+	cwsym_read_options_t opts = { .source_map = "work/wasm/other.map" };
+	c = (capture_t){ 0 };
+	BTEST_ASSERT_EQUAL("%d", cwsym_read("work/wasm/mapped.wasm", &opts, &sink, &logger), CWSYM_OK);
+	check_mapped_rows(&c, &m);
+	opts.source_map = "work/wasm/missing.map";
+	BTEST_EXPECT_EQUAL("%d", cwsym_read("work/wasm/mapped.wasm", &opts, &sink, &logger), CWSYM_ERR_IO);
+}
+
+/** The pipeline on a mapped module: a line under the name-section function. */
+BTEST(wasm, builds_table_with_source_map) {
+	module_t m;
+	segment_t segs[MAPPED_SEGMENTS];
+	write_mapped(&m, segs);
+	char id[41];
+	cwsym_build_id_hex(build_id, 20, id);
+	BTEST_ASSERT(write_source_map("work/wasm/mapped.wasm.map", id, segs, MAPPED_SEGMENTS));
+
+	cwsym_table_builder_t* b = cwsym_table_begin();
+	BTEST_ASSERT(b != NULL);
+	cwsym_sink_t sink = cwsym_table_sink(b, true);
+	BTEST_ASSERT_EQUAL("%d", cwsym_read("work/wasm/mapped.wasm", NULL, &sink, &logger), CWSYM_OK);
+	cwsym_table_t t;
+	BTEST_ASSERT_EQUAL("%d", cwsym_table_end(b, &t, &logger), CWSYM_OK);
+	BTEST_EXPECT_EQUAL("%u", t.count, (unsigned)BODY_COUNT);
+	BTEST_EXPECT_EQUAL("%u", t.line_count, 5u);
+	BTEST_EXPECT_EQUAL("%u", t.site_count, 0u);
+
+	locations_t l = { 0 };
+	cwsym_location_sink_t locations = { .location = on_location, .user = &l };
+	BTEST_EXPECT_EQUAL("%d", cwsym_symbolize(&t, m.starts[1] + 4, &locations), 1);
+	BTEST_EXPECT_EX(strcmp(l.function[0], "ns::Foo::bar(int volatile*)") == 0, "function is %s", l.function[0]);
+	BTEST_EXPECT_EX(strcmp(l.file, "b.c") == 0, "file is %s", l.file);
+	BTEST_EXPECT_EQUAL("%u", l.line[0], 21u);
+	cwsym_table_free(&t);
+}
+
+/** Without `--symbol-map`, the names emcc writes beside its output are tried in turn. */
+BTEST(wasm, guesses_symbol_map) {
+	BTEST_ASSERT(prepare_work() && test_remove_tree("work/wasm/guess") && test_mkdir("work/wasm/guess"));
+	module_t m = { .names = false, .build_id_len = 20 };
+	BTEST_ASSERT(write_module("work/wasm/guess/game.wasm", &m, 0));
+
+	capture_t c = { 0 };
+	cwsym_sink_t sink = sink_of(&c);
+	BTEST_EXPECT_EQUAL("%d", cwsym_read("work/wasm/guess/game.wasm", NULL, &sink, &logger), CWSYM_ERR_NO_DEBUG);
+
+	static const char map[] = "0:imp\n1:main\n2:ns::Foo::bar(int volatile*)\n";
+	static const char* const guesses[] = {
+		"work/wasm/guess/game.wasm.symbols", "work/wasm/guess/game.js.symbols", "work/wasm/guess/game.html.symbols",
+	};
+	for (size_t i = 0; i < sizeof(guesses) / sizeof(guesses[0]); ++i) {
+		BTEST_ASSERT(write_file(guesses[i], map, sizeof(map) - 1));
+		c = (capture_t){ 0 };
+		BTEST_ASSERT_EX(cwsym_read("work/wasm/guess/game.wasm", NULL, &sink, &logger) == CWSYM_OK, "with %s", guesses[i]);
+		check_bodies(&c, &m);
+		BTEST_ASSERT(remove(guesses[i]) == 0);
+	}
+
+	/* A map named by the caller is not second-guessed. */
+	static const char other[] = "1:other\n";
+	BTEST_ASSERT(write_file(guesses[0], other, sizeof(other) - 1));
+	BTEST_ASSERT(write_file("work/wasm/guess/named.symbols", map, sizeof(map) - 1));
+	cwsym_read_options_t opts = { .symbol_map = "work/wasm/guess/named.symbols" };
+	c = (capture_t){ 0 };
+	BTEST_ASSERT_EQUAL("%d", cwsym_read("work/wasm/guess/game.wasm", &opts, &sink, &logger), CWSYM_OK);
+	check_bodies(&c, &m);
 }
 
 /* }}} */

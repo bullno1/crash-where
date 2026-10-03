@@ -159,7 +159,8 @@ typedef struct {
  */
 typedef struct {
 	const char* dia;        /**< Path of `msdia140.dll`, or `NULL` to locate it through `VSINSTALLDIR` and vswhere. PE only. */
-	const char* symbol_map; /**< The `.symbols` file Emscripten's `--emit-symbol-map` writes beside its output, for a Wasm module with a stripped name section, or `NULL`. */
+	const char* symbol_map; /**< The `.symbols` file Emscripten's `--emit-symbol-map` writes beside its output, for a Wasm module with a stripped name section; `NULL` looks for `<module>.symbols`, then `<stem>.js.symbols` and `<stem>.html.symbols` beside the module. */
+	const char* source_map; /**< The `.wasm.map` file of `-gsource-map`, for a Wasm module without DWARF; `NULL` follows the module's `sourceMappingURL` section, by the name's last component beside the module. */
 } cwsym_read_options_t;
 
 /**
@@ -177,10 +178,12 @@ typedef struct {
  * its own sections or in the file its `external_debug_info` section
  * names beside it, which must carry the same build id, is read like
  * ELF. Functions DWARF leaves out, or all of them without it, are named
- * from the name section or from `opts->symbol_map`, and one no source
- * names is listed as `wasm-function[N]`, the engines' spelling. Its
- * build id is the `build_id` custom section; a module without one is
- * ::CWSYM_ERR_NO_BUILD_ID.
+ * from the name section or from the symbol map, and one no source names
+ * is listed as `wasm-function[N]`, the engines' spelling. Without DWARF
+ * the lines come from the source map, whose `debugId` must match; a map
+ * that cannot be used costs the lines and a log line, unless
+ * `opts->source_map` named it. Its build id is the `build_id` custom
+ * section; a module without one is ::CWSYM_ERR_NO_BUILD_ID.
  *
  * @param opts  Extra inputs, or `NULL` for the defaults.
  */

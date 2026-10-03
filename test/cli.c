@@ -146,7 +146,7 @@ BTEST(cli, usage) {
 	BTEST_EXPECT(strstr(err_text, "--app is required") != NULL);
 
 	/* Global options are accepted before the command and do not disturb a table input. */
-	BTEST_EXPECT_EQUAL("%d", RUN("--symbol-map", "unused.map", "dump", FIXTURE), CWSYM_CLI_OK);
+	BTEST_EXPECT_EQUAL("%d", RUN("--symbol-map", "unused.map", "--source-map", "unused.wasm.map", "dump", FIXTURE), CWSYM_CLI_OK);
 }
 
 BTEST(cli, dump_matches_golden) {

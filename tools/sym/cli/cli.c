@@ -50,8 +50,15 @@ cwsym_cli_main(const cwsym_cli_t* cli, int argc, const char* argv[]) {
 		},
 		{
 			.name = "symbol-map", .value_name = "file",
-			.summary = "Emscripten --emit-symbol-map output for a Wasm module with a stripped name section",
+			.summary = "Emscripten --emit-symbol-map output for a Wasm module with a stripped name section; "
+				"default: <module>.symbols, <stem>.js.symbols or <stem>.html.symbols beside it",
 			.parser = barg_str(&ctx.read.symbol_map),
+		},
+		{
+			.name = "source-map", .value_name = "file",
+			.summary = "Emscripten -gsource-map output for a Wasm module without DWARF; "
+				"default: the file its sourceMappingURL section names, beside it",
+			.parser = barg_str(&ctx.read.source_map),
 		},
 		barg_opt_help(),
 	};

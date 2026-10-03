@@ -156,6 +156,8 @@ typedef struct {
 	bool has_build_id;
 	span_t debug_link;       /**< `external_debug_info`: the file that holds the DWARF. */
 	bool has_debug_link;
+	span_t source_map_url;   /**< `sourceMappingURL`: the file that holds the lines when there is no DWARF. */
+	bool has_source_map_url;
 	cwsym_dwarf_section_t debug[MAX_DEBUG_SECTIONS];
 	char debug_names[MAX_DEBUG_SECTIONS][MAX_SECTION_NAME];
 	int debug_count;
@@ -195,6 +197,9 @@ parse_sections(module_t* m, const cwsym_log_t* log) {
 			} else if (span_equals(name, "external_debug_info")) {
 				m->debug_link = read_vector(&c);
 				m->has_debug_link = !c.bad;
+			} else if (span_equals(name, "sourceMappingURL")) {
+				m->source_map_url = read_vector(&c);
+				m->has_source_map_url = !c.bad;
 			} else if (span_starts_with(name, ".debug_") && !span_equals(name, ".debug_aranges")) {
 				/* The linker tombstones .debug_aranges, and libdw does not need it. */
 				if (!c.bad && m->debug_count < MAX_DEBUG_SECTIONS && name.len < MAX_SECTION_NAME) {
@@ -295,12 +300,11 @@ free_module(module_t* m) {
 }
 
 /**
- * Load the file `m`'s `external_debug_info` names, looked up by its last
- * path component beside `m`. It must carry `m`'s build id.
+ * The path of the file a link names, by the link's last path component,
+ * beside `path`. The caller frees it; `NULL` when out of memory.
  */
-static cwsym_status_t
-follow_debug_link(const module_t* m, module_t* debug, const cwsym_log_t* log) {
-	span_t link = m->debug_link;
+static char*
+path_beside(const char* path, span_t link) {
 	size_t base = 0;
 	for (size_t i = 0; i < link.len; ++i) {
 		if (link.s[i] == '/' || link.s[i] == '\\') {
@@ -308,19 +312,60 @@ follow_debug_link(const module_t* m, module_t* debug, const cwsym_log_t* log) {
 		}
 	}
 	size_t dir_len = 0;
-	for (size_t i = 0; m->path[i] != '\0'; ++i) {
-		if (m->path[i] == '/' || m->path[i] == '\\') {
+	for (size_t i = 0; path[i] != '\0'; ++i) {
+		if (path[i] == '/' || path[i] == '\\') {
 			dir_len = i + 1;
 		}
 	}
 	size_t name_len = link.len - base;
-	debug->own_path = malloc(dir_len + name_len + 1);
+	char* out = malloc(dir_len + name_len + 1);
+	if (out != NULL) {
+		memcpy(out, path, dir_len);
+		memcpy(out + dir_len, link.s + base, name_len);
+		out[dir_len + name_len] = '\0';
+	}
+	return out;
+}
+
+/**
+ * The symbol map emcc writes beside its output when none was named:
+ * `<module>.symbols`, or `<stem>.js.symbols` and `<stem>.html.symbols`
+ * for `-o <stem>.js` and `-o <stem>.html`. The first that exists, as a
+ * path the caller frees; `NULL` when none does.
+ */
+static char*
+guess_symbol_map(const char* path) {
+	static const char* const suffixes[] = { ".symbols", ".js.symbols", ".html.symbols" };
+	size_t len = strlen(path);
+	size_t stem = len >= 5 && strcmp(path + len - 5, ".wasm") == 0 ? len - 5 : len;
+	for (size_t k = 0; k < sizeof(suffixes) / sizeof(suffixes[0]); ++k) {
+		size_t base = k == 0 ? len : stem;
+		char* candidate = malloc(base + strlen(suffixes[k]) + 1);
+		if (candidate == NULL) {
+			return NULL;
+		}
+		memcpy(candidate, path, base);
+		strcpy(candidate + base, suffixes[k]);
+		FILE* f = fopen(candidate, "rb");
+		if (f != NULL) {
+			fclose(f);
+			return candidate;
+		}
+		free(candidate);
+	}
+	return NULL;
+}
+
+/**
+ * Load the file `m`'s `external_debug_info` names, looked up by its last
+ * path component beside `m`. It must carry `m`'s build id.
+ */
+static cwsym_status_t
+follow_debug_link(const module_t* m, module_t* debug, const cwsym_log_t* log) {
+	debug->own_path = path_beside(m->path, m->debug_link);
 	if (debug->own_path == NULL) {
 		return CWSYM_ERR_NOMEM;
 	}
-	memcpy(debug->own_path, m->path, dir_len);
-	memcpy(debug->own_path + dir_len, link.s + base, name_len);
-	debug->own_path[dir_len + name_len] = '\0';
 	debug->path = debug->own_path;
 
 	cwsym_status_t status = load_module(debug, log);
@@ -463,6 +508,81 @@ forward_site(void* user, const cwsym_site_t* site) {
 	return !f->stopped;
 }
 
+/**
+ * Turns source map segments into line rows: each segment reaches to the
+ * next one, clipped to the body it starts in, and adjacent rows of one
+ * `file:line` merge. A segment outside every body opens no row.
+ */
+typedef struct {
+	const cwsym_sink_t* sink;
+	const module_t* m;
+	bool stopped;
+	bool open;           /**< A segment waits for the next one to end it. */
+	uint32_t start;
+	uint32_t body_end;
+	const char* file;
+	uint32_t line;
+	bool have;           /**< A finished row that may still grow. */
+	cwsym_line_t done;
+} map_rows_t;
+
+static void
+flush_row(map_rows_t* r) {
+	if (r->have) {
+		r->have = false;
+		r->stopped = !r->sink->line(r->sink->user, &r->done);
+	}
+}
+
+static void
+close_row(map_rows_t* r, uint32_t at) {
+	if (!r->open) {
+		return;
+	}
+	r->open = false;
+	uint32_t end = at < r->body_end ? at : r->body_end;
+	if (end <= r->start) {
+		return;
+	}
+	if (r->have && r->done.line == r->line && r->done.start + r->done.len == r->start
+		&& strcmp(r->done.file, r->file) == 0) {
+		r->done.len += end - r->start;
+		return;
+	}
+	flush_row(r);
+	if (!r->stopped) {
+		r->done = (cwsym_line_t){ .start = r->start, .len = end - r->start, .file = r->file, .line = r->line };
+		r->have = true;
+	}
+}
+
+static bool
+map_segment(void* user, const cwsym_map_segment_t* seg) {
+	map_rows_t* r = user;
+	close_row(r, seg->offset);
+	if (r->stopped) {
+		return false;
+	}
+	long body = seg->file != NULL ? body_at(r->m, seg->offset) : -1;
+	if (body >= 0) {
+		r->open = true;
+		r->start = seg->offset;
+		r->body_end = r->m->bodies[body].start + r->m->bodies[body].size;
+		r->file = seg->file;
+		r->line = seg->line;
+	}
+	return true;
+}
+
+static void
+map_end(void* user) {
+	map_rows_t* r = user;
+	close_row(r, UINT32_MAX);
+	if (!r->stopped) {
+		flush_row(r);
+	}
+}
+
 cwsym_status_t
 cwsym_read_wasm(
 	const char* path, const cwsym_read_options_t* opts,
@@ -472,6 +592,8 @@ cwsym_read_wasm(
 	module_t debug = { 0 };
 	span_t* names = NULL;
 	char* map = NULL;
+	char* guessed_map = NULL;
+	char* source_map = NULL;
 	char* name = NULL;
 	bool* covered = NULL;
 
@@ -518,12 +640,22 @@ cwsym_read_wasm(
 			goto done;
 		}
 		has_names = true;
-	} else if (opts->symbol_map != NULL) {
-		status = names_from_map(opts->symbol_map, names, total, &map, log);
-		if (status != CWSYM_OK) {
-			goto done;
+	} else {
+		const char* map_path = opts->symbol_map;
+		if (map_path == NULL) {
+			guessed_map = guess_symbol_map(path);
+			map_path = guessed_map;
+			if (map_path != NULL) {
+				cwsym_logf(log, "%s: names from %s", path, map_path);
+			}
 		}
-		has_names = true;
+		if (map_path != NULL) {
+			status = names_from_map(map_path, names, total, &map, log);
+			if (status != CWSYM_OK) {
+				goto done;
+			}
+			has_names = true;
+		}
 	}
 	if (dwarf == NULL && !has_names) {
 		cwsym_logf(
@@ -551,6 +683,7 @@ cwsym_read_wasm(
 	}
 
 	bool stopped = false;
+	bool dwarf_lines = false;
 	if (dwarf != NULL) {
 		forward_t f = { .sink = sink, .m = &m, .covered = covered };
 		cwsym_sink_t forward = {
@@ -560,8 +693,9 @@ cwsym_read_wasm(
 			.user = &f,
 		};
 		status = cwsym_read_dwarf(dwarf->path, dwarf->debug, dwarf->debug_count, (int64_t)m.code_start, &forward, log);
+		dwarf_lines = status == CWSYM_OK;
 		if (status == CWSYM_ERR_UNSUPPORTED && has_names) {
-			cwsym_logf(log, "%s: its DWARF is skipped on this host; names only, no lines", path);
+			cwsym_logf(log, "%s: its DWARF is skipped on this host; names only", path);
 			status = CWSYM_OK;
 		}
 		stopped = f.stopped;
@@ -597,6 +731,25 @@ cwsym_read_wasm(
 	if (unnamed > 0) {
 		cwsym_logf(log, "%s: %" PRIu32 " functions have no name and are listed by index", path, unnamed);
 	}
+
+	/* Without DWARF lines, the source map: the one asked for, else the one the module names. */
+	if (status == CWSYM_OK && !stopped && !dwarf_lines && sink->line != NULL) {
+		if (opts->source_map == NULL && m.has_source_map_url) {
+			source_map = path_beside(path, m.source_map_url);
+		}
+		const char* map_path = opts->source_map != NULL ? opts->source_map : source_map;
+		if (map_path != NULL) {
+			map_rows_t rows = { .sink = sink, .m = &m };
+			cwsym_map_sink_t segments = { .segment = map_segment, .end = map_end, .user = &rows };
+			cwsym_status_t lines = cwsym_read_source_map(map_path, m.build_id.s, m.build_id.len, &segments, log);
+			if (lines != CWSYM_OK && opts->source_map != NULL) {
+				status = lines;
+			} else if (lines != CWSYM_OK) {
+				cwsym_logf(log, "%s: no lines; its source map %s was not used", path, map_path);
+			}
+			stopped = rows.stopped;
+		}
+	}
 	if (sink->end != NULL) {
 		sink->end(sink->user, status);
 	}
@@ -604,6 +757,8 @@ cwsym_read_wasm(
 done:
 	free(covered);
 	free(name);
+	free(source_map);
+	free(guessed_map);
 	free(map);
 	free(names);
 	free_module(&debug);
