@@ -7,20 +7,36 @@ import worker from "../src/index";
 const password = "correct horse battery staple";
 const env = { DB: bindings.DB, DASHBOARD_PASSWORD: password };
 const auth = `Basic ${btoa(`alice:${password}`)}`;
+const origin = "https://dash.example";
 
 async function get(): Promise<Response> {
 	return worker.fetch(new Request("https://dash.example/dashboard", { headers: { Authorization: auth } }), env);
 }
 
-async function create(fields: Record<string, string>): Promise<Response> {
+/** Posts the form the way a browser does, with this origin's `Origin` header unless `headers` says otherwise. */
+async function post(fields: Record<string, string>, headers: Record<string, string>): Promise<Response> {
 	return worker.fetch(
 		new Request("https://dash.example/dashboard/apps", {
 			method: "POST",
-			headers: { Authorization: auth, "Content-Type": "application/x-www-form-urlencoded" },
+			headers: { "Content-Type": "application/x-www-form-urlencoded", ...headers },
 			body: new URLSearchParams(fields),
 		}),
 		env
 	);
+}
+
+async function create(fields: Record<string, string>): Promise<Response> {
+	return post(fields, { Authorization: auth, Origin: origin });
+}
+
+/** Submits the form and follows the redirect, as a browser would; returns the page it lands on. */
+async function submit(fields: Record<string, string>): Promise<{ location: string; page: string }> {
+	const r = await create(fields);
+	expect(r.status).toBe(303);
+	const location = r.headers.get("Location")!;
+	const landed = await worker.fetch(new Request(`https://dash.example${location}`, { headers: { Authorization: auth } }), env);
+	expect(landed.status).toBe(200);
+	return { location, page: await landed.text() };
 }
 
 beforeEach(async () => {
@@ -42,8 +58,8 @@ describe("app listing", () => {
 		)
 			.bind("old-game", "Old Game", 1_700_000_000, "bob@example.com", 1_750_000_000)
 			.run();
-		expect((await create({ name: "forest-quest", display_name: "Forest Quest" })).status).toBe(303);
-		const page = await (await get()).text();
+		const { location, page } = await submit({ name: "forest-quest", display_name: "Forest Quest" });
+		expect(location).toBe("/dashboard");
 		expect(page).toContain("<code>forest-quest</code>");
 		expect(page).toContain("Forest Quest");
 		expect(page).toContain('href="/dashboard/apps/forest-quest"');
@@ -76,12 +92,17 @@ describe("app listing", () => {
 		expect(re.test("forest-quest_2")).toBe(true);
 		expect(re.test("Forest")).toBe(false);
 	});
-	it("marks the field at fault", async () => {
-		const bad = await (await create({ name: "Bad", display_name: "X" })).text();
-		expect(bad).toMatch(/name="name"[^>]*aria-invalid="true"/);
+	it("marks the field at fault and keeps the typed values", async () => {
+		const bad = (await submit({ name: "Bad", display_name: "X" })).page;
+		expect(bad).toMatch(/name="name"[^>]*value="Bad"[^>]*aria-invalid="true"/);
+		expect(bad).toMatch(/name="display_name"[^>]*value="X"/);
 		expect(bad).not.toMatch(/name="display_name"[^>]*aria-invalid/);
-		const missing = await (await create({ name: "ok" })).text();
+		const missing = (await submit({ name: "ok" })).page;
 		expect(missing).toMatch(/name="display_name"[^>]*aria-invalid="true"/);
+	});
+	it("shows a plain form on a visit without a submission", async () => {
+		const page = await (await get()).text();
+		expect(page).not.toContain("aria-invalid");
 	});
 	it("escapes what it prints", async () => {
 		await create({ name: "x", display_name: "<script>alert(1)</script>" });
@@ -108,30 +129,51 @@ describe("app creation", () => {
 	});
 	it("rejects a name the client could not send", async () => {
 		for (const name of ["", "Forest", "forest quest", "a".repeat(64), "ünïcode"]) {
-			const r = await create({ name, display_name: "X" });
-			expect(r.status, name).toBe(400);
-			expect(await r.text()).toContain("lowercase letters");
+			const { location, page } = await submit({ name, display_name: "X" });
+			expect(location, name).toMatch(/^\/dashboard\?/);
+			expect(page, name).toContain("lowercase letters");
 		}
 		expect(await bindings.DB.prepare("SELECT count(*) AS n FROM apps").first("n")).toBe(0);
 	});
 	it("rejects a missing display name", async () => {
-		const r = await create({ name: "ok" });
-		expect(r.status).toBe(400);
-		expect(await r.text()).toContain("display name is required");
+		const { page } = await submit({ name: "ok" });
+		expect(page).toContain("display name is required");
 	});
 	it("refuses a duplicate name", async () => {
 		await create({ name: "forest-quest", display_name: "One" });
-		const r = await create({ name: "forest-quest", display_name: "Two" });
-		expect(r.status).toBe(409);
-		expect(await r.text()).toContain("already exists");
+		const { page } = await submit({ name: "forest-quest", display_name: "Two" });
+		expect(page).toContain("already exists");
+		expect(page).toMatch(/name="name"[^>]*aria-invalid="true"/);
 		expect(await bindings.DB.prepare("SELECT count(*) AS n FROM apps").first("n")).toBe(1);
 	});
 	it("requires a login", async () => {
-		const r = await worker.fetch(
-			new Request("https://dash.example/dashboard/apps", { method: "POST", body: new URLSearchParams({ name: "x", display_name: "X" }) }),
-			env
-		);
+		const r = await post({ name: "x", display_name: "X" }, { Origin: origin });
 		expect(r.status).toBe(401);
+	});
+});
+
+describe("cross-site protection", () => {
+	const fields = { name: "forged", display_name: "Forged" };
+	async function count(): Promise<unknown> {
+		return bindings.DB.prepare("SELECT count(*) AS n FROM apps").first("n");
+	}
+	it("refuses a form posted from another origin, even with credentials", async () => {
+		const r = await post(fields, { Authorization: auth, Origin: "https://evil.example" });
+		expect(r.status).toBe(403);
+		expect(await count()).toBe(0);
+	});
+	it("refuses a form that names neither origin nor fetch site", async () => {
+		const r = await post(fields, { Authorization: auth });
+		expect(r.status).toBe(403);
+		expect(await count()).toBe(0);
+	});
+	it("accepts a same-origin fetch site without an Origin header", async () => {
+		const r = await post(fields, { Authorization: auth, "Sec-Fetch-Site": "same-origin" });
+		expect(r.status).toBe(303);
+		expect(await count()).toBe(1);
+	});
+	it("does not get in the way of reading the dashboard", async () => {
+		expect((await get()).status).toBe(200);
 	});
 });
 
