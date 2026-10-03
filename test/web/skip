@@ -32,8 +32,5 @@ hang/stall_then_exit
 hang/stall_then_crash
 hang/stopped
 
-# The host backend records nothing.
-host/collects_standard_keys
-
 # Converts this executable. A page has no file for it.
 cli/convert_debug_file

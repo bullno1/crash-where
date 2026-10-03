@@ -102,6 +102,12 @@ elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 	target_link_libraries(cw_host PRIVATE advapi32)
 elseif(EMSCRIPTEN)
 	target_sources(cw_host PRIVATE host/web.c)
+	target_link_options(cw_host INTERFACE
+		"SHELL:--js-library ${CMAKE_CURRENT_SOURCE_DIR}/host/web.js"
+	)
+	set_property(TARGET cw_host APPEND PROPERTY
+		INTERFACE_LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/host/web.js
+	)
 endif()
 target_link_libraries(cw_host PUBLIC cw)
 target_include_directories(cw_host PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})

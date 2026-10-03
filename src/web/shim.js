@@ -189,6 +189,8 @@ addToLibrary({
 		announced: null,
 		canSuspend: false,
 		queue: null,
+		// The report being handled, for the libraries that record facts about the game.
+		report: null,
 
 		boot() {
 			if (Module['cwRole'] === 'none') {
@@ -322,6 +324,7 @@ addToLibrary({
 				'message': String(e?.message ?? e),
 				'stack': stack,
 				'region': HEAPU8.slice(cwWeb.region, cwWeb.region + cwWeb.regionLen),
+				'memory': HEAPU8.length,
 			} });
 		},
 
@@ -513,7 +516,9 @@ addToLibrary({
 				const stack = stringToNewUTF8(r['stack']);
 				const region = _malloc(r['region'].length);
 				HEAPU8.set(r['region'], region);
+				cwWeb.report = r;
 				await call(cwWeb.entries.report, name, message, stack, region);
+				cwWeb.report = null;
 				_free(region);
 				_free(stack);
 				_free(message);

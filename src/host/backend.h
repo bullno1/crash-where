@@ -17,6 +17,8 @@ cw_host_backend_init(void);
 /**
  * Watcher side: record the state of the game process and of the
  * machine at report time. The game is frozen or already gone.
+ *
+ * @param pid  The game process; 0 where the game has none.
  */
 void
 cw_host_backend_report(uint32_t pid);

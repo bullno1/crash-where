@@ -12,6 +12,8 @@
 
 #if defined(_WIN32)
 #	define TEST_HOST_OS "windows"
+#elif defined(__EMSCRIPTEN__)
+#	define TEST_HOST_OS "web"
 #else
 #	define TEST_HOST_OS "linux"
 #endif
@@ -53,15 +55,21 @@ BTEST(host, collects_standard_keys) {
 	/* At init, in the game. */
 	BTEST_ASSERT(test_json_str(ev, "/envelope/env/os") != NULL);
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/env/os"), TEST_HOST_OS) == 0);
-	BTEST_EXPECT(test_json_str(ev, "/envelope/env/os_version") != NULL);
 	BTEST_EXPECT(test_json_str(ev, "/envelope/env/arch") != NULL);
 	BTEST_EXPECT_RELATION("%llu", env_number(ev, "cpu_cores"), >, 0ull);
-	BTEST_EXPECT_RELATION("%llu", env_number(ev, "ram_mb"), >, 0ull);
 
 	/* At report time, in the watcher, about the parked game. */
 	BTEST_EXPECT_RELATION("%llu", env_number(ev, "rss_mb"), >, 0ull);
+#if defined(__EMSCRIPTEN__)
+	/* The browser names itself and the OS; it tells memory, threads, and free memory in no reliable way. */
+	BTEST_EXPECT(test_json_str(ev, "/envelope/env/compat") != NULL);
+	BTEST_EXPECT(test_json_str(ev, "/envelope/env/compat_host") != NULL);
+#else
+	BTEST_EXPECT(test_json_str(ev, "/envelope/env/os_version") != NULL);
+	BTEST_EXPECT_RELATION("%llu", env_number(ev, "ram_mb"), >, 0ull);
 	BTEST_EXPECT_RELATION("%llu", env_number(ev, "threads"), >, 0ull);
 	BTEST_EXPECT_RELATION("%llu", env_number(ev, "free_mb"), >, 0ull);
+#endif
 	BTEST_EXPECT(test_json_str(ev, "/envelope/env/collected_at_init") == NULL);
 }
 

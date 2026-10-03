@@ -123,7 +123,7 @@ host_collect(void* user) {
 	(void)user;
 	if (cw_ctx.active) {
 		cw_host_backend_init();
-	} else if (cw_ctx.game_pid != 0) {
+	} else {
 		cw_host_backend_report(cw_ctx.game_pid);
 	}
 }
