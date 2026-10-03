@@ -357,9 +357,9 @@ cw_append_log(const char* name, const void* rec, size_t len) {
 }
 
 void
-cw_shutdown(int result) {
+cw_shutdown(void) {
 	if (!cw_ctx.active) {
 		return;
 	}
-	cw_platform_shutdown(result);
+	cw_platform_shutdown();
 }

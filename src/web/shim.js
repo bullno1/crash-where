@@ -16,8 +16,8 @@
 // What a page may set on Module:
 //   cwRole    'none' keeps the shim out of this instance.
 //   cwOnDone  called with { kind, ... } once the watcher has dealt with a
-//             trap ('trap', with `message`) or an exit ('shutdown', with
-//             `result`), or has died with work outstanding ('lost').
+//             trap ('trap', with `message`) or an exit ('shutdown'), or
+//             has died with work outstanding ('lost').
 //
 // Message fields are quoted throughout: the watcher's bootstrap is a
 // string, which a minifier does not rename.
@@ -646,9 +646,9 @@ addToLibrary({
 				await call(cwWeb.entries.auth, a['what'], token, a['token'].length, proof, a['proof'].length);
 				_free(proof);
 				_free(token);
-			} else if (m['shutdown'] !== undefined) {
-				await call(cwWeb.entries.shutdown, m['shutdown']);
-				postMessage({ 'done': { 'kind': 'shutdown', 'result': m['shutdown'] } });
+			} else if (m['shutdown']) {
+				await call(cwWeb.entries.shutdown);
+				postMessage({ 'done': { 'kind': 'shutdown' } });
 			}
 		},
 
@@ -720,10 +720,10 @@ addToLibrary({
 	},
 
 	cw_web_game_notify_shutdown__deps: ['$cwWeb'],
-	cw_web_game_notify_shutdown: (result) => {
+	cw_web_game_notify_shutdown: () => {
 		if (cwWeb.watcher) {
 			cwWeb.pending++;
-			cwWeb.post({ 'shutdown': result });
+			cwWeb.post({ 'shutdown': true });
 		}
 	},
 

@@ -271,8 +271,7 @@ end:
 }
 
 void
-cw_platform_shutdown(int result) {
-	cw_win.region->shutdown_result = result;
+cw_platform_shutdown(void) {
 	SetEvent(cw_win.handles.ev_shutdown);
 }
 

@@ -158,7 +158,7 @@ CW_SCENARIO(stall_then_exit) {
 		cw_heartbeat();
 	}
 	stall_until_reported();
-	cw_shutdown(0);
+	cw_shutdown();
 }
 
 CW_SCENARIO(stall_then_crash) {
@@ -174,7 +174,7 @@ CW_SCENARIO(stall_then_crash) {
 CW_SCENARIO(no_heartbeat) {
 	cw_set_state("mode", "no_heartbeat");
 	test_sleep_ms(500);
-	cw_shutdown(0);
+	cw_shutdown();
 }
 
 CW_SCENARIO(steady_heartbeat) {
@@ -183,7 +183,7 @@ CW_SCENARIO(steady_heartbeat) {
 		cw_heartbeat();
 		test_sleep_ms(10);
 	}
-	cw_shutdown(0);
+	cw_shutdown();
 }
 
 CW_SCENARIO(stopped) {
@@ -195,7 +195,7 @@ CW_SCENARIO(stopped) {
 		exit(STALL_EXIT_UNREPORTED);
 	}
 	cw_heartbeat();
-	cw_shutdown(0);
+	cw_shutdown();
 }
 
 /* }}} */

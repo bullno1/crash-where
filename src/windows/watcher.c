@@ -159,7 +159,6 @@ static void
 cw_watch(const char* report_dir, cw_drain_t* drain) {
 	bool crashed = false;
 	bool shutdown = false;
-	int result = 0;
 	cw_hang_t hang = { 0 };
 	DWORD interval_ms = (DWORD)cw_hang_poll_ms(cw_ctx.cfg.hang_timeout_ms);
 
@@ -192,14 +191,13 @@ cw_watch(const char* report_dir, cw_drain_t* drain) {
 			}
 		} else if (which == WAIT_OBJECT_0 + 3) {
 			shutdown = true;
-			result = cw_win.region->shutdown_result;
 		} else {
 			break;
 		}
 	}
 
 	if (shutdown) {
-		cw_log(CW_LOG_INFO, "game exited cleanly with result %d", result);
+		cw_log(CW_LOG_INFO, "game exited cleanly");
 	} else if (!crashed) {
 		cw_log(CW_LOG_WARN, "game ended without cw_shutdown");
 		char path[CW_STR_CAP + 64];

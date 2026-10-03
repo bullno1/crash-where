@@ -261,7 +261,6 @@ cw_watch(pid_t game, int sock, const char* report_dir, cw_drain_t* drain) {
 	int pidfd = pidfd_open(game, 0);
 	bool crashed = false;
 	bool shutdown = false;
-	int result = 0;
 	bool game_gone = false;
 	cw_hang_t hang = { 0 };
 	int interval_ms = cw_hang_poll_ms(cw_ctx.cfg.hang_timeout_ms);
@@ -302,7 +301,6 @@ cw_watch(pid_t game, int sock, const char* report_dir, cw_drain_t* drain) {
 				}
 				case CW_MSG_SHUTDOWN:
 					shutdown = true;
-					result = msg.value;
 					break;
 				case CW_MSG_AUTH:
 					cw_drain_auth(drain, (unsigned)msg.value);
@@ -334,7 +332,7 @@ cw_watch(pid_t game, int sock, const char* report_dir, cw_drain_t* drain) {
 	}
 
 	if (shutdown) {
-		cw_log(CW_LOG_INFO, "game exited cleanly with result %d", result);
+		cw_log(CW_LOG_INFO, "game exited cleanly");
 	} else if (!crashed) {
 		cw_log(CW_LOG_WARN, "game ended without cw_shutdown");
 		char path[CW_STR_CAP + 64];

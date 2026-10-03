@@ -77,7 +77,7 @@ main(int argc, char** argv) {
 	cw_heartbeat();
 
 	if (strcmp(mode, "none") == 0) {
-		cw_shutdown(0);
+		cw_shutdown();
 		return 0;
 	}
 	if (strcmp(mode, "abort") == 0) {

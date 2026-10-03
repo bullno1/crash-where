@@ -256,6 +256,6 @@ end:
 }
 
 void
-cw_platform_shutdown(int result) {
-	cw_send_msg(cw_linux.sock, CW_MSG_SHUTDOWN, result);
+cw_platform_shutdown(void) {
+	cw_send_msg(cw_linux.sock, CW_MSG_SHUTDOWN, 0);
 }

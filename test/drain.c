@@ -21,7 +21,7 @@ CW_SCENARIO(drain_crash) {
 }
 
 CW_SCENARIO(drain_exit) {
-	cw_shutdown(0);
+	cw_shutdown();
 }
 
 /* }}} */

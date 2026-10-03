@@ -49,7 +49,7 @@ typedef void (*cw_web_auth_fn_t)(
 );
 
 /** Watcher: the game is exiting on purpose. */
-typedef void (*cw_web_shutdown_fn_t)(int result);
+typedef void (*cw_web_shutdown_fn_t)(void);
 
 /* Shim, game side. */
 
@@ -91,7 +91,7 @@ cw_web_game_notify_auth(
 );
 
 void
-cw_web_game_notify_shutdown(int result);
+cw_web_game_notify_shutdown(void);
 
 /* Shim, watcher side. */
 

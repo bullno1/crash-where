@@ -459,12 +459,9 @@ cw_append_log(const char* name, const void* rec, size_t len);
  *
  * Required; without it the exit is reported as abnormal. Call this at
  * the end of `main` or from the framework's quit callback.
- *
- * @param result  Process exit status. A nonzero value is recorded as a
- *                controlled failure rather than a crash.
  */
 void
-cw_shutdown(int result);
+cw_shutdown(void);
 
 #ifdef __cplusplus
 }

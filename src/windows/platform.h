@@ -38,7 +38,6 @@ typedef struct {
  */
 typedef struct {
 	cw_shared_t common;
-	int32_t shutdown_result;   /**< Valid once the shutdown event is set. */
 	_Atomic int32_t consent;   /**< Latest cw_consent_t the game chose; read when the consent event is set. */
 	_Atomic uint32_t auth;     /**< cw_auth_event_t bits gathered since the watcher last took them. */
 	cw_crash_t crash;

@@ -99,8 +99,8 @@ cw_platform_notify_auth(unsigned what) {
 }
 
 void
-cw_platform_shutdown(int result) {
-	cw_web_game_notify_shutdown(result);
+cw_platform_shutdown(void) {
+	cw_web_game_notify_shutdown();
 }
 
 void

@@ -155,7 +155,7 @@ CW_SCENARIO(thread_null_write) {
 
 CW_SCENARIO(clean_exit) {
 	cw_set_state("mode", "clean_exit");
-	cw_shutdown(0);
+	cw_shutdown();
 }
 
 CW_SCENARIO(exit_without_shutdown) {

@@ -232,7 +232,7 @@ cw_platform_tid(void);
 
 /** Tell the watcher the game is exiting on purpose. */
 void
-cw_platform_shutdown(int result);
+cw_platform_shutdown(void);
 
 /**
  * Attach the calling thread.

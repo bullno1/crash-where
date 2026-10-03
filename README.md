@@ -26,7 +26,7 @@ main(int argc, char** argv) {
     // The rest of the application code
 
     // Shutdown
-    cw_shutdown(exit_code);
+    cw_shutdown();
     return exit_code;
 }
 ```

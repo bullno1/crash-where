@@ -37,13 +37,13 @@ record_summary(void) {
 
 CW_SCENARIO(summary_then_exit) {
 	record_summary();
-	cw_shutdown(0);
+	cw_shutdown();
 }
 
 CW_SCENARIO(once_then_exit) {
 	record_summary();
 	cw_consent_set(CW_CONSENT_ONCE);
-	cw_shutdown(0);
+	cw_shutdown();
 }
 
 static int* volatile bad_ptr = (int*)TEST_BAD_ADDRESS;
@@ -54,7 +54,7 @@ CW_SCENARIO(consent_crash) {
 }
 
 CW_SCENARIO(consent_exit) {
-	cw_shutdown(0);
+	cw_shutdown();
 }
 
 CW_SCENARIO(consent_vanish) {

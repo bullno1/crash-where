@@ -88,8 +88,8 @@ on_auth(
 }
 
 static void
-on_shutdown(int result) {
-	cw_log(CW_LOG_INFO, "game exited cleanly with result %d", result);
+on_shutdown(void) {
+	cw_log(CW_LOG_INFO, "game exited cleanly");
 	cw_drain_finish(&drain);
 }
 
