@@ -48,6 +48,11 @@ export function listApps(db: Db): Promise<AppRow[]> {
 		.execute();
 }
 
+/** The app with this name, or undefined. */
+export function getApp(db: Db, name: string): Promise<AppRow | undefined> {
+	return db.selectFrom("apps").selectAll().where("name", "=", name).executeTakeFirst();
+}
+
 /**
  * Inserts an app and returns its row, or null when the name is taken.
  * The input must already have passed `validateApp`.

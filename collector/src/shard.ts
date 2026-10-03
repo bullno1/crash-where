@@ -7,6 +7,16 @@ import { ShardDialect } from "./shard-dialect";
 
 export type ShardDb = Kysely<ShardSchema>;
 
+/** A version with where it is released and which builds it has. */
+export interface VersionSummary {
+	version: string;
+	ordinal: number;
+	/** Unix seconds. */
+	created_at: number;
+	channels: { channel: string; released_at: number; supported_until: number | null }[];
+	builds: string[];
+}
+
 /**
  * One app's crash index, named after the app's `name`.
  * The object brings its storage up to date with migrations/shard on every
@@ -41,6 +51,20 @@ export class AppShard extends DurableObject<Env> {
 				);
 			});
 		}
+	}
+
+	/** Every version, newest first, with its channel releases and build ids. */
+	async listVersions(): Promise<VersionSummary[]> {
+		const versions = await this.db.selectFrom("versions").selectAll().orderBy("ordinal", "desc").execute();
+		const releases = await this.db.selectFrom("releases").selectAll().orderBy("channel").execute();
+		const builds = await this.db.selectFrom("builds").select(["version", "build_id"]).orderBy("build_id").execute();
+		return versions.map((v) => ({
+			...v,
+			channels: releases
+				.filter((r) => r.version === v.version)
+				.map(({ channel, released_at, supported_until }) => ({ channel, released_at, supported_until })),
+			builds: builds.filter((b) => b.version === v.version).map((b) => b.build_id),
+		}));
 	}
 
 	/** Names of the migrations this shard has applied, in order. */

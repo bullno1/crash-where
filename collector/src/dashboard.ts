@@ -2,11 +2,12 @@ import pico from "@picocss/pico/css/pico.classless.min.css";
 import { Hono } from "hono";
 import { csrf } from "hono/csrf";
 import { html } from "hono/html";
-import { type AppError, type AppInput, type AppRow, createApp, listApps, validateApp } from "./apps";
+import { type AppError, type AppInput, type AppRow, createApp, getApp, listApps, validateApp } from "./apps";
 import { requireLogin } from "./auth";
 import type { App } from "./env";
 import { layout } from "./layout";
 import { type Page, render } from "./page";
+import type { VersionSummary } from "./shard";
 
 /**
  * The dashboard: a login is required before any of its routes runs, and a
@@ -100,4 +101,44 @@ dashboard.post("/apps", async (c) => {
 	const created = validateApp(input) === null && (await createApp(c.get("db"), input, c.get("identity")));
 	if (!created) return c.redirect(`/dashboard?${new URLSearchParams({ ...input })}`, 303);
 	return c.redirect("/dashboard", 303);
+});
+
+function appPage(who: string, app: AppRow, versions: VersionSummary[]): Page {
+	const rows = versions.map(
+		(v) => html`<tr>
+<td><code>${v.version}</code></td>
+<td>${v.channels.length === 0
+	? html`<small>none</small>`
+	: v.channels.map(
+			(r) => html`<div>${r.channel} ${r.supported_until === null
+				? html`<small>current</small>`
+				: html`<small>until ${day(r.supported_until)}</small>`}</div>`
+		)}</td>
+<td>${v.builds.length === 0 ? html`<small>none</small>` : v.builds.map((b) => html`<div><code>${b}</code></div>`)}</td>
+<td>${day(v.created_at)}</td>
+</tr>`
+	);
+	const table =
+		versions.length === 0
+			? html`<p>No versions yet. The first symbol upload for this app registers one.</p>`
+			: html`<table>
+<thead><tr><th>Version</th><th>Channels</th><th>Builds</th><th>Created</th></tr></thead>
+<tbody>${rows}</tbody>
+</table>`;
+	return layout(
+		app.display_name, who,
+		html`<h1>${app.display_name}</h1>
+<p><code>${app.name}</code> · ${app.disabled_at === null ? "active" : `disabled since ${day(app.disabled_at)}`} · created at ${day(app.created_at)} by ${app.created_by}</p>
+<h2>Versions</h2>
+${table}`
+	);
+}
+
+dashboard.get("/apps/:name", async (c) => {
+	const who = c.get("identity");
+	const app = await getApp(c.get("db"), c.req.param("name"));
+	if (!app) return c.text("No such app", 404);
+	const shard = c.env.SHARD.get(c.env.SHARD.idFromName(app.name));
+	const versions = await shard.listVersions();
+	return render(c, appPage(who.email ?? who.sub, app, versions));
 });
