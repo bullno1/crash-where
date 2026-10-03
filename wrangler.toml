@@ -26,8 +26,8 @@ class_name = "AppShard"
 tag = "v1"
 new_sqlite_classes = ["AppShard"]
 
-# Lets the Worker import the shard migrations as text.
+# Lets the Worker import the shard migrations and the stylesheet as text.
 [[rules]]
 type = "Text"
-globs = ["**/*.sql"]
+globs = ["**/*.sql", "**/*.css"]
 fallthrough = true

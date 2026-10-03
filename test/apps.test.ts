@@ -55,6 +55,34 @@ describe("app listing", () => {
 		const again = await (await get()).text();
 		expect(again.indexOf("aardvark")).toBeLessThan(again.indexOf("Forest Quest"));
 	});
+	it("links the stylesheet and serves it behind the login", async () => {
+		const page = await (await get()).text();
+		expect(page).toContain('<link rel="stylesheet" href="/dashboard/pico.css">');
+		const css = await worker.fetch(
+			new Request("https://dash.example/dashboard/pico.css", { headers: { Authorization: auth } }), env
+		);
+		expect(css.status).toBe(200);
+		expect(css.headers.get("Content-Type")).toMatch(/^text\/css/);
+		expect(await css.text()).toContain("--pico-");
+		const anonymous = await worker.fetch(new Request("https://dash.example/dashboard/pico.css"), env);
+		expect(anonymous.status).toBe(401);
+	});
+	it("gives the name input a pattern browsers can compile", async () => {
+		const page = await (await get()).text();
+		const pattern = /name="name"[^>]*pattern="([^"]*)"/.exec(page)?.[1];
+		expect(pattern).toBeDefined();
+		// Browsers compile the attribute with the v flag, which is stricter inside classes.
+		const re = new RegExp(`^(?:${pattern})$`, "v");
+		expect(re.test("forest-quest_2")).toBe(true);
+		expect(re.test("Forest")).toBe(false);
+	});
+	it("marks the field at fault", async () => {
+		const bad = await (await create({ name: "Bad", display_name: "X" })).text();
+		expect(bad).toMatch(/name="name"[^>]*aria-invalid="true"/);
+		expect(bad).not.toMatch(/name="display_name"[^>]*aria-invalid/);
+		const missing = await (await create({ name: "ok" })).text();
+		expect(missing).toMatch(/name="display_name"[^>]*aria-invalid="true"/);
+	});
 	it("escapes what it prints", async () => {
 		await create({ name: "x", display_name: "<script>alert(1)</script>" });
 		const page = await (await get()).text();
