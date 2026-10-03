@@ -9,7 +9,7 @@ Cloudflare Worker that receives crash reports from the `cw` client and serves th
 The button clones the `collector` branch into your GitHub or GitLab account and deploys it with Workers Builds.
 Afterwards, attach your dashboard hostname to the Worker as a custom domain, and keep the clone current with `./update`.
 
-## Updating a deployment
+### Updating a deployment
 
 The [`collector`](https://github.com/bullno1/crash-where/tree/collector) branch of the upstream repository holds this directory as its root.
 To update, inside this directory, run:
@@ -47,12 +47,28 @@ It fetches a token for the deployed dashboard with `cloudflared`, logging in thr
 That route answers only on localhost, and the Worker verifies the cookie on every request as it would a token from the edge.
 `CW_DASHBOARD_URL` replaces the argument, and a second argument picks another port.
 
-# Development
+## Development
 
 ```sh
 npm install
-npm run dev    # Run a dev server
+npm run dev    # Apply migrations locally and run a dev server
 npm run check  # Type check
 npm test       # Run tests
-npm run deploy # Deploy
+npm run deploy # Apply migrations remotely and deploy
 ```
+
+Tests run inside the Workers runtime  with the migrations applied to a fresh database before each test file.
+
+### Database
+
+Apps and crash metadata live in a D1 database bound as `DB`.
+Its schema is the numbered SQL files under `migrations/`, applied with Wrangler's D1 migrations, which record what has run in the `d1_migrations` table.
+`npm run dev` applies them to the local database before starting the dev server, and `npm run deploy` applies them to the deployed one before deploying the Worker, so a migration must be safe to run against the version of the Worker that is live while it runs.
+Add a migration with `npx wrangler d1 migrations create DB <name>` and never edit one that has been applied anywhere.
+Queries go through Kysely with its D1 dialect, typed by `src/db.generated.ts`.
+`npm run db:types` regenerates that file by applying the migrations locally and introspecting the result with `kysely-codegen`, so run it after adding a migration and commit the output.
+
+`wrangler.toml` names the database but carries no id.
+The Deploy button creates the database and writes the id into the clone it deploys from.
+A deployment made by hand needs the database created once, with `npx wrangler d1 create crash-where`, before the first `npm run deploy`.
+Workers Builds runs `npx wrangler deploy` by default, which skips the migrations; set its deploy command to `npm run deploy`.
