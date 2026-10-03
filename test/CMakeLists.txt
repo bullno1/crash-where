@@ -24,15 +24,16 @@ if(CMAKE_SYSTEM_NAME STREQUAL "Linux")
 	# The reader tests need C++ names in the binary; the fixtures are the
 	# only C++ in the project and the test target is the only one built with it.
 	enable_language(CXX)
-	target_sources(cw_test PRIVATE linux.c cfi.c cfi_fixtures.S sym.c cxx_fixtures.cpp)
-	# The .eh_frame interpreter is checked against libdwfl; without the
-	# development package that test skips itself.
+	target_sources(cw_test PRIVATE linux.c cfi.c cfi_fixtures.S core.c sym.c cxx_fixtures.cpp)
+	# The .eh_frame interpreter and the core writer are checked against
+	# libdwfl; without the development package those tests skip themselves.
 	find_library(TEST_LIBDW dw)
+	find_library(TEST_LIBELF elf)
 	find_path(TEST_LIBDW_INCLUDE elfutils/libdwfl.h)
-	if(TEST_LIBDW AND TEST_LIBDW_INCLUDE)
+	if(TEST_LIBDW AND TEST_LIBELF AND TEST_LIBDW_INCLUDE)
 		target_compile_definitions(cw_test PRIVATE TEST_HAVE_LIBDW)
 		target_include_directories(cw_test PRIVATE ${TEST_LIBDW_INCLUDE})
-		target_link_libraries(cw_test PRIVATE ${TEST_LIBDW})
+		target_link_libraries(cw_test PRIVATE ${TEST_LIBDW} ${TEST_LIBELF})
 	endif()
 elseif(CMAKE_SYSTEM_NAME STREQUAL "Windows")
 	enable_language(CXX)

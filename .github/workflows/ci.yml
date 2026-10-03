@@ -18,9 +18,12 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Install toolchain
+        # gdb and elfutils open the core a crash test leaves; the test
+        # script skips that check when they are missing, so they are named
+        # here to make sure it runs.
         run: |
           sudo apt-get update
-          sudo apt-get install -y --no-install-recommends ninja-build clang libdw-dev libcurl4-openssl-dev
+          sudo apt-get install -y --no-install-recommends ninja-build clang libdw-dev libcurl4-openssl-dev gdb elfutils
       - name: Install mold
         if: matrix.toolchain == 'clang-mold'
         uses: rui314/setup-mold@v1
@@ -38,6 +41,11 @@ jobs:
       image: registry.gitlab.steamos.cloud/steamrt/steamrt4/sdk:latest
     steps:
       - uses: actions/checkout@v4
+      # The SDK ships gdb, which checks the core a crash test leaves, and
+      # the test script skips eu-stack as not installed. Installing
+      # elfutils here would only make that check fail: the SDK's mold
+      # (2.37) writes a separate debug file without program headers, and
+      # elfutils cannot map an address into it.
       - name: Build and test
         run: cmd/steamrt/test
 

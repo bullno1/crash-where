@@ -115,6 +115,19 @@ cw_signal_name(int signo);
 bool
 cw_unwind(pid_t pid, const cw_crash_t* crash, cw_crash_info_t* out);
 
+/**
+ * Write a small ELF core of the game to a temporary file in `pending/`:
+ * every thread it can stop, their used stacks, what the stacks point
+ * at, the executable's data, and the loader's link map.
+ *
+ * @param tid    Thread listed first, which a debugger selects.
+ * @param crash  Fault-time context and stack copy of `tid`, or `NULL` to use its live registers.
+ * @param out    Receives the file's path, or an empty string on failure.
+ * @return `true` when the file was written.
+ */
+bool
+cw_write_core(pid_t game, pid_t tid, const cw_crash_t* crash, char* out, size_t cap);
+
 #define CW_REG_COUNT   32
 #define CW_EH_MAX_LOAD 16
 

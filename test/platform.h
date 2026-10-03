@@ -31,11 +31,18 @@
 #	define TEST_BAD_ADDRESS ((uintptr_t)0)
 #endif
 
-/* Whether the watcher writes a minidump beside a crash or hang report. */
-#if defined(_WIN32)
+/* Whether the watcher writes a dump beside a crash or hang report: a minidump on Windows, an ELF core on Linux. */
+#if defined(_WIN32) || defined(__linux__)
 #	define TEST_HAS_MINIDUMP 1
 #else
 #	define TEST_HAS_MINIDUMP 0
+#endif
+
+/* Whether the dump lists the blamed thread first, as an ELF core does; a minidump names it in its exception stream instead. */
+#if defined(__linux__)
+#	define TEST_DUMP_BLAMES_FIRST 1
+#else
+#	define TEST_DUMP_BLAMES_FIRST 0
 #endif
 
 /* Whether the transport names itself in `User-Agent`. A browser sends its own. */

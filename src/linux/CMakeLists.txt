@@ -1,4 +1,5 @@
 target_sources(cw PRIVATE
+	core.c
 	eh_frame.c
 	game.c
 	ipc.c

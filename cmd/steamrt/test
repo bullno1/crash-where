@@ -3,8 +3,9 @@ set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../env.sh"
 . "$HERE/container.sh"
+. "$HERE/../debuggers.sh"
 
 "$HERE/build"
 mkdir -p "$BUILD_DIR/test"
 cd "$BUILD_DIR/test"
-exec "$BIN_DIR/cw_test" "$@"
+run_tests "$@"

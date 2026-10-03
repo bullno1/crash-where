@@ -29,7 +29,9 @@ static bool
 write_crash_report(pid_t game, const char* report_dir, char* path, size_t cap) {
 	static cw_crash_info_t info;
 	info = (cw_crash_info_t){ .kind = CW_REPORT_CRASH, .main_module = -1 };
-	if (!cw_unwind(game, &cw_linux.region->crash, &info)) {
+	const cw_crash_t* crash = &cw_linux.region->crash;
+	cw_write_core(game, crash->tid, crash, info.minidump, sizeof(info.minidump));
+	if (!cw_unwind(game, crash, &info)) {
 		cw_log(CW_LOG_WARN, "unwind produced no frames");
 	}
 	if (!cw_write_envelope(report_dir, &info, &cw_linux.region->common, path, cap)) {
@@ -207,6 +209,7 @@ write_hang_report(pid_t game, const char* report_dir, uint64_t silent_ms, char* 
 	if (snapshot_thread(game, tid, &snap) && !cw_unwind(game, &snap, &info)) {
 		cw_log(CW_LOG_WARN, "unwind produced no frames");
 	}
+	cw_write_core(game, tid, NULL, info.minidump, sizeof(info.minidump));
 	snprintf(info.type, sizeof(info.type), "HANG");
 	snprintf(info.message_raw, sizeof(info.message_raw), "no heartbeat for %" PRIu64 " ms", silent_ms);
 	info.fault_addr = 0;

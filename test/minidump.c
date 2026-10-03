@@ -1,11 +1,11 @@
 /**
  * @file minidump.c
- * The minidump attachment: written beside a crash or hang report where
- * the platform has one, named in the envelope, uploaded when the server
- * asks for it and deleted when it declines.
+ * The dump attachment: a minidump on Windows and an ELF core on Linux,
+ * written beside a crash or hang report, named in the envelope,
+ * uploaded when the server asks for it and deleted when it declines.
  *
- * The dump is read with a reader of its own, so the checks compile
- * everywhere and the platforms without a dump assert its absence.
+ * Both formats are read with readers of their own, so the checks
+ * compile everywhere and the platforms without a dump assert its absence.
  */
 #include <inttypes.h>
 #include <signal.h>
@@ -99,25 +99,41 @@ CW_SCENARIO(minidump_hang) {
 
 /* }}} */
 
-/* Minidump reader (runner side) {{{ */
+/* Dump readers (runner side) {{{ */
 
 #define MDMP_SIGNATURE   0x504d444du
 #define MDMP_HEADER_SIZE 32
 #define MDMP_DIR_SIZE    12
 #define MDMP_THREAD_SIZE 48
 #define MDMP_THREAD_LIST 3
+#define MDMP_MODULE_LIST 4
 #define MDMP_EXCEPTION   6
 
+#define ELF_PT_LOAD      1
+#define ELF_PT_NOTE      4
+#define ELF_NT_PRSTATUS  1
+#define ELF_NT_FILE      0x46494c45u
+#define ELF_PRSTATUS_SIG 12  /* `pr_cursig` */
+#define ELF_PRSTATUS_PID 32  /* `pr_pid` */
+#define ELF_PRSTATUS_REG 112 /* `pr_reg` */
+/* Index of the stack pointer in the register set a core carries. */
+#if defined(__aarch64__)
+#	define ELF_REG_SP 31
+#else
+#	define ELF_REG_SP 19
+#endif
+
 /**
- * What the checks read from a dump.
+ * What the checks read from a dump of either format.
  */
 typedef struct {
-	uint32_t threads;        /**< Entries of the thread list. */
+	uint32_t threads;        /**< Threads listed. */
 	bool thread_found;       /**< The thread asked for is listed. */
-	uint64_t stack_size;     /**< Bytes of that thread's stack in the dump. */
+	uint64_t stack_size;     /**< Bytes of that thread's stack in the dump, from its stack pointer up. */
 	bool marker_in_stack;    /**< The marker bytes are at the address asked for, inside that stack. */
-	bool has_exception;      /**< An exception stream is present. */
-	uint32_t exception_tid;  /**< Thread the exception stream blames. */
+	bool has_exception;      /**< The dump blames a signal or exception. */
+	uint32_t exception_tid;  /**< Thread it blames, or the first one listed. */
+	bool has_modules;        /**< The module or file-mapping list is present. */
 } minidump_t;
 
 static uint32_t
@@ -175,18 +191,9 @@ read_thread(const uint8_t* data, size_t len, const uint8_t* list, uint32_t size,
 	}
 }
 
-/**
- * @return `false` when `path` is not a minidump.
- */
 static bool
-read_minidump(const char* path, uint32_t tid, uintptr_t marker, minidump_t* out) {
-	*out = (minidump_t){ 0 };
-	size_t len;
-	uint8_t* data = load_file(path, &len);
-	if (data == NULL) {
-		return false;
-	}
-	bool ok = len >= MDMP_HEADER_SIZE && u32(data) == MDMP_SIGNATURE;
+read_minidump(const uint8_t* data, size_t len, uint32_t tid, uintptr_t marker, minidump_t* out) {
+	bool ok = len >= MDMP_HEADER_SIZE;
 	uint32_t count = ok ? u32(data + 8) : 0;
 	uint32_t dir = ok ? u32(data + 12) : 0;
 	ok = ok && (uint64_t)dir + (uint64_t)count * MDMP_DIR_SIZE <= len;
@@ -199,10 +206,123 @@ read_minidump(const char* path, uint32_t tid, uintptr_t marker, minidump_t* out)
 			ok = false;
 		} else if (type == MDMP_THREAD_LIST && size >= 4) {
 			read_thread(data, len, data + rva, size, tid, marker, out);
+		} else if (type == MDMP_MODULE_LIST) {
+			out->has_modules = true;
 		} else if (type == MDMP_EXCEPTION && size >= 4) {
 			out->has_exception = true;
 			out->exception_tid = u32(data + rva);
 		}
+	}
+	return ok;
+}
+
+/**
+ * The loadable segment holding `[addr, addr + len)`, or `NULL`.
+ */
+static const uint8_t*
+core_segment(const uint8_t* data, size_t len, uint64_t addr, size_t want, uint64_t* seg_end) {
+	uint64_t phoff = u64(data + 32);
+	uint16_t phentsize = (uint16_t)(data[54] | data[55] << 8);
+	uint16_t phnum = (uint16_t)(data[56] | data[57] << 8);
+	for (uint16_t i = 0; i < phnum; ++i) {
+		uint64_t at = phoff + (uint64_t)i * phentsize;
+		if (at + 56 > len) {
+			return NULL;
+		}
+		const uint8_t* ph = data + at;
+		uint64_t offset = u64(ph + 8);
+		uint64_t vaddr = u64(ph + 16);
+		uint64_t filesz = u64(ph + 32);
+		if (u32(ph) == ELF_PT_LOAD && addr >= vaddr && addr + want <= vaddr + filesz && offset + filesz <= len) {
+			*seg_end = vaddr + filesz;
+			return data + offset + (addr - vaddr);
+		}
+	}
+	return NULL;
+}
+
+/**
+ * Walk the notes of an ELF core: one `NT_PRSTATUS` per thread, with
+ * its signal, id and registers, and the file-mapping note.
+ */
+static bool
+read_core(const uint8_t* data, size_t len, uint32_t tid, uintptr_t marker, minidump_t* out) {
+	if (len < 64) {
+		return false;
+	}
+	uint64_t phoff = u64(data + 32);
+	uint16_t phentsize = (uint16_t)(data[54] | data[55] << 8);
+	uint16_t phnum = (uint16_t)(data[56] | data[57] << 8);
+	uint64_t sp = 0;
+	for (uint16_t i = 0; i < phnum; ++i) {
+		uint64_t at = phoff + (uint64_t)i * phentsize;
+		if (at + 56 > len) {
+			return false;
+		}
+		const uint8_t* ph = data + at;
+		if (u32(ph) != ELF_PT_NOTE) {
+			continue;
+		}
+		uint64_t offset = u64(ph + 8);
+		uint64_t filesz = u64(ph + 32);
+		if (offset + filesz > len) {
+			return false;
+		}
+		for (uint64_t pos = 0; pos + 12 <= filesz;) {
+			const uint8_t* note = data + offset + pos;
+			uint32_t namesz = u32(note);
+			uint32_t descsz = u32(note + 4);
+			uint32_t type = u32(note + 8);
+			uint64_t name_pad = ((uint64_t)namesz + 3) & ~(uint64_t)3;
+			uint64_t desc_pad = ((uint64_t)descsz + 3) & ~(uint64_t)3;
+			const uint8_t* desc = note + 12 + name_pad;
+			if (pos + 12 + name_pad + desc_pad > filesz) {
+				return false;
+			}
+			if (type == ELF_NT_FILE) {
+				out->has_modules = true;
+			} else if (type == ELF_NT_PRSTATUS && descsz >= ELF_PRSTATUS_REG + (ELF_REG_SP + 1) * 8) {
+				uint32_t pid = u32(desc + ELF_PRSTATUS_PID);
+				if (out->threads == 0) {
+					out->exception_tid = pid;
+				}
+				++out->threads;
+				if (pid == tid) {
+					out->thread_found = true;
+					out->has_exception = (desc[ELF_PRSTATUS_SIG] | desc[ELF_PRSTATUS_SIG + 1] << 8) != 0;
+					sp = u64(desc + ELF_PRSTATUS_REG + ELF_REG_SP * 8);
+				}
+			}
+			pos += 12 + name_pad + desc_pad;
+		}
+	}
+	uint64_t end;
+	if (sp != 0 && core_segment(data, len, sp, 8, &end) != NULL) {
+		out->stack_size = end - sp;
+	}
+	const uint8_t* at = marker != 0 ? core_segment(data, len, marker, sizeof(marker_bytes), &end) : NULL;
+	out->marker_in_stack = at != NULL && memcmp(at, marker_bytes, sizeof(marker_bytes)) == 0;
+	return true;
+}
+
+/**
+ * Read whichever dump format the file holds.
+ *
+ * @return `false` when `path` is neither a minidump nor an ELF core.
+ */
+static bool
+read_dump(const char* path, uint32_t tid, uintptr_t marker, minidump_t* out) {
+	*out = (minidump_t){ 0 };
+	size_t len;
+	uint8_t* data = load_file(path, &len);
+	if (data == NULL) {
+		return false;
+	}
+	bool ok = false;
+	if (len >= 4 && u32(data) == MDMP_SIGNATURE) {
+		ok = read_minidump(data, len, tid, marker, out);
+	} else if (len >= 4 && memcmp(data, "\x7f" "ELF", 4) == 0) {
+		ok = read_core(data, len, tid, marker, out);
 	}
 	free(data);
 	return ok;
@@ -223,13 +343,15 @@ static btest_suite_t minidump = {
  */
 static void
 dump_path(const test_run_t* run, yyjson_doc* ev, char kind, char* out, size_t cap) {
+	const char* fp = test_json_str(ev, "/envelope/client_fp");
+	const char* id = test_json_str(ev, "/envelope/report_id");
 	snprintf(
 		out, cap, "%s/report/pending/%" PRIu64 "_%c_%s_%s.dmp",
 		run->dir,
 		yyjson_get_uint(test_json_get(ev, "/envelope/sent_at")),
 		kind,
-		test_json_str(ev, "/envelope/client_fp"),
-		test_json_str(ev, "/envelope/report_id")
+		fp != NULL ? fp : "",
+		id != NULL ? id : ""
 	);
 }
 
@@ -249,11 +371,12 @@ check_dump(const test_run_t* run, yyjson_doc* ev, char kind, bool exception, min
 	char path[512];
 	dump_path(run, ev, kind, path, sizeof(path));
 	uint32_t tid = (uint32_t)yyjson_get_uint(test_json_get(ev, "/envelope/exception/thread"));
-	BTEST_ASSERT_EX(read_minidump(path, tid, test_state_hex(ev, "marker"), dump), "%s is not a minidump", path);
+	BTEST_ASSERT_EX(read_dump(path, tid, test_state_hex(ev, "marker"), dump), "%s is not a dump", path);
 	BTEST_EXPECT_RELATION("%" PRIu32, dump->threads, >=, 1);
 	BTEST_EXPECT_EX(dump->thread_found, "thread %" PRIu32 " is not in the dump", tid);
 	BTEST_EXPECT_RELATION("%" PRIu64, dump->stack_size, >, 0);
 	BTEST_EXPECT_EQUAL("%d", dump->has_exception, exception);
+	BTEST_EXPECT(dump->has_modules);
 }
 
 BTEST(minidump, crash_writes_dump) {
@@ -288,6 +411,12 @@ BTEST(minidump, hang_writes_dump) {
 
 	minidump_t dump;
 	check_dump(run, ev, 'h', false, &dump);
+	if (!TEST_DUMP_BLAMES_FIRST) {
+		return;
+	}
+	/* With no exception to name it, the stalled thread comes first, so it is the one a debugger selects. */
+	uint32_t tid = (uint32_t)yyjson_get_uint(test_json_get(ev, "/envelope/exception/thread"));
+	BTEST_EXPECT_EQUAL("%" PRIu32, dump.exception_tid, tid);
 }
 
 /** The dump follows the envelope through the attach route, then both are gone. */
