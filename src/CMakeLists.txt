@@ -46,6 +46,13 @@ elseif(EMSCRIPTEN)
 	set_property(TARGET cw APPEND PROPERTY
 		INTERFACE_LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/web/shim.js
 	)
+	# Objects built with threads link only into a program built with them,
+	# so the flag is the library's and every consumer inherits it.
+	option(CW_WEB_PTHREADS "Build for a game that uses pthreads" OFF)
+	if(CW_WEB_PTHREADS)
+		target_compile_options(cw PUBLIC -pthread)
+		target_link_options(cw INTERFACE -pthread)
+	endif()
 endif()
 target_include_directories(cw
 	PUBLIC ${PROJECT_SOURCE_DIR}/include

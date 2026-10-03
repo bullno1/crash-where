@@ -24,10 +24,12 @@
  *                 for a trap or an abort.
  * @param message  Message of the exception, as the engine worded it.
  * @param stack    Stack text of the exception.
+ * @param tid      The thread it happened on, as cw_platform_tid() names it.
  * @param region   Copy of the game's region, owned by the caller.
  */
 typedef void (*cw_web_report_fn_t)(
-	const char* name, const char* message, const char* stack, cw_shared_t* region
+	const char* name, const char* message, const char* stack,
+	uint32_t tid, cw_shared_t* region
 );
 
 /** Watcher: the player decided; `choice` is a cw_consent_t. */
@@ -54,10 +56,11 @@ typedef void (*cw_web_shutdown_fn_t)(int result);
 /**
  * Hand the region to the shim, which copies it out when the game traps.
  *
+ * @param tid  The calling thread, which a report of a trap on it names.
  * @return `false` when no watcher answered before `main` was released.
  */
 bool
-cw_web_game_start(const cw_shared_t* region, size_t len);
+cw_web_game_start(const cw_shared_t* region, size_t len, uint32_t tid);
 
 /** The decision the watcher found in its store, as a cw_consent_t. */
 int

@@ -9,9 +9,6 @@
 # the file.
 crash/null_write
 crash/null_write_leaf
-
-# Needs a second thread.
-crash/thread_stack_overflow
 crash/thread_null_write
 
 # Expects the report of a game that ended without cw_shutdown(). Game and

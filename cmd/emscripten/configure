@@ -8,8 +8,16 @@ command -v emcmake >/dev/null 2>&1 || {
 	exit 1
 }
 
+# cmd/emscripten-pthread/ holds links to these scripts; the directory's
+# name picks the build with threads and gives it trees of its own.
+case $TOOLCHAIN in
+	*-pthread) PTHREADS=ON ;;
+	*) PTHREADS=OFF ;;
+esac
+
 emcmake cmake -S "$ROOT" -B "$BUILD_DIR" -G Ninja \
 	-DCMAKE_BUILD_TYPE="$BUILD_TYPE" \
+	-DCW_WEB_PTHREADS="$PTHREADS" \
 	-DCMAKE_RUNTIME_OUTPUT_DIRECTORY="$BIN_DIR" \
 	-DCMAKE_LIBRARY_OUTPUT_DIRECTORY="$BIN_DIR" \
 	-DCMAKE_ARCHIVE_OUTPUT_DIRECTORY="$BIN_DIR"

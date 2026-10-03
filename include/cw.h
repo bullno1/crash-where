@@ -259,9 +259,12 @@ cw_init(const cw_config_t* cfg);
  * Attach the calling thread to crash reporting.
  *
  * A crash on any thread can already be reported.
- * Howver, a stackoverflow can only be reliably reported from an attached thread.
+ * However, a stack overflow can only be reliably reported from an attached thread.
  *
  * On Linux, only an attached thread's stack is captured in full.
+ *
+ * On the web the call has is no-op.
+ * Errors are always recorded in full even without attaching.
  *
  * The thread that calls @ref cw_init is already attached.
  *

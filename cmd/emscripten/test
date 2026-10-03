@@ -4,8 +4,10 @@
 # <name>=<command>. Unset, every one of them found on PATH; safari by
 # its driver, safaridriver, which must have been enabled once.
 #
-# Leaves out the tests listed in test/web/skip, unless CW_TEST_SKIP is
-# set, even to nothing. A test named on the command line always runs.
+# Leaves out the tests listed in test/web/skip, plus those in
+# test/web/skip-nothreads except when run as cmd/emscripten-pthread/test.
+# CW_TEST_SKIP set, even to nothing, replaces both lists. A test named on
+# the command line always runs.
 #
 # CW_TEST_WEB_TRANSPORT=xhr makes the transport send the way it does in a
 # browser that cannot suspend. A run of everything adds the http suite
@@ -14,7 +16,13 @@ set -eu
 HERE=$(cd "$(dirname "$0")" && pwd)
 . "$HERE/../env.sh"
 
-: "${CW_TEST_SKIP=$(sed 's/#.*//' "$ROOT/test/web/skip" | tr '\n' ' ')}"
+SKIP_FILES="$ROOT/test/web/skip"
+case $TOOLCHAIN in
+	*-pthread) ;;
+	*) SKIP_FILES="$SKIP_FILES $ROOT/test/web/skip-nothreads" ;;
+esac
+# shellcheck disable=SC2086
+: "${CW_TEST_SKIP=$(cat $SKIP_FILES | sed 's/#.*//' | tr '\n' ' ')}"
 # A synchronous request follows redirects, so this one cannot pass with it.
 XHR_SKIP="$CW_TEST_SKIP http/redirect_is_not_followed"
 if [ "${CW_TEST_WEB_TRANSPORT:-}" = xhr ]; then

@@ -5,6 +5,7 @@ Nothing here is a second test suite: the tests are the shared ones under `test/`
 
 ```
 cmd/emscripten/test [suite [test]]
+cmd/emscripten-pthread/test [suite [test]]
 ```
 
 ## Files
@@ -17,6 +18,7 @@ cmd/emscripten/test [suite [test]]
 | `testlib.js` | Emscripten JS library linked into `cw_test`: spawn, exit detection, files. |
 | `http_server.c` | `test/http_server.h` for the web, on top of the launcher's servers. |
 | `skip` | Tests the run script leaves out, with reasons. |
+| `skip-nothreads` | Tests left out as well, except from the build with threads. |
 | `../web.c` | The C side: `test/platform.h` for the web. |
 
 The library's own shim is `src/web/shim.js`.
@@ -160,7 +162,7 @@ Safari has no headless mode and takes no URL on its command line so `safaridrive
 | Variable | Meaning |
 |---|---|
 | `CW_TEST_BROWSERS` | Browsers to run in, separated by spaces: `chromium`, `firefox`, `safari`, each optionally `<name>=<command>`. Unset: each of them found on `PATH`, Safari by `safaridriver`. |
-| `CW_TEST_SKIP` | Tests to leave out, as `suite/test` separated by spaces. Unset: the contents of `skip`. Set to nothing: run everything. |
+| `CW_TEST_SKIP` | Tests to leave out, as `suite/test` separated by spaces. Unset: the contents of `skip`, plus `skip-nothreads` except under `cmd/emscripten-pthread`. Set to nothing: run everything. |
 | `CW_TEST_WEB_TRANSPORT` | `xhr` makes the transport send synchronously, the way it does in a browser that cannot suspend. Unset: `fetch`. |
 
 `CW_TEST_SKIP` is read by `test/main.c` and works on every platform.
@@ -174,8 +176,6 @@ A run of everything, with no suite named, also runs the `http` suite a second ti
 
 `test/web.c` answers `false` where the web has no equivalent, and the tests that depend on it are in `skip`:
 
-- `test_run_thread`: the build has no threads.
-  The HTTP server the tests need comes from the launcher instead.
 - `test_stop_self` and `test_debug_self`: a page can neither stop itself nor attach a debugger to itself.
 - `test_image_base` and `TEST_RETURN_ADDRESS` are 0.
   A Wasm function cannot read its return address, so frames are not checked against recorded addresses.

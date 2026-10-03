@@ -9,6 +9,7 @@
 #include <dirent.h>
 #include <emscripten.h>
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -74,11 +75,38 @@ test_spawn_self(const char* const* env, test_exit_t* out) {
 	return true;
 }
 
+#ifdef __EMSCRIPTEN_PTHREADS__
+
+typedef struct {
+	void (*fn)(void);
+} thread_arg_t;
+
+static void*
+thread_main(void* arg) {
+	((thread_arg_t*)arg)->fn();
+	return NULL;
+}
+
+bool
+test_run_thread(void (*fn)(void)) {
+	thread_arg_t arg = { .fn = fn };
+	pthread_t thread;
+	if (pthread_create(&thread, NULL, thread_main, &arg) != 0) {
+		return false;
+	}
+	pthread_join(thread, NULL);
+	return true;
+}
+
+#else
+
 bool
 test_run_thread(void (*fn)(void)) {
 	(void)fn;
 	return false;
 }
+
+#endif
 
 void
 test_platform_init(void) {

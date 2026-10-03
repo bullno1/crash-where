@@ -42,20 +42,33 @@ jobs:
         run: cmd/steamrt/test
 
   web:
-    name: emscripten (${{ matrix.browser }})
+    name: ${{ matrix.toolchain }} (${{ matrix.browser }})
     runs-on: ${{ matrix.os }}
     strategy:
       fail-fast: false
       matrix:
         include:
-          - browser: chromium
+          - toolchain: emscripten
+            browser: chromium
             os: ubuntu-24.04
-          - browser: firefox
+          - toolchain: emscripten
+            browser: firefox
             os: ubuntu-24.04
-          - browser: safari
+          - toolchain: emscripten
+            browser: safari
             # Safari 27 is the first with JavaScript Promise Integration,
             # which the test runner needs. The macOS 26 images carry Safari
             # 26; this preview image, macOS 27, carries 27.
+            os: xcode-27
+          # The build with threads, which a game using pthreads gets.
+          - toolchain: emscripten-pthread
+            browser: chromium
+            os: ubuntu-24.04
+          - toolchain: emscripten-pthread
+            browser: firefox
+            os: ubuntu-24.04
+          - toolchain: emscripten-pthread
+            browser: safari
             os: xcode-27
     steps:
       - uses: actions/checkout@v4
@@ -73,7 +86,7 @@ jobs:
           # Named, so that a missing browser fails the job. Left unset, the
           # script runs whichever browsers it finds.
           CW_TEST_BROWSERS: ${{ matrix.browser }}
-        run: cmd/emscripten/test
+        run: cmd/${{ matrix.toolchain }}/test
 
   msvc:
     name: msvc (Windows)

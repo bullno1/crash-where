@@ -9,6 +9,10 @@
 // The watcher owns the store. Where it can suspend, the store is kept in
 // the origin private file system; elsewhere it lives in memory.
 //
+// In a build with pthreads, each thread's worker loads this script as
+// well. There the shim only watches for the thread to fail and reports to the
+// main thread.
+//
 // What a page may set on Module:
 //   cwRole    'none' keeps the shim out of this instance.
 //   cwOnDone  called with { kind, ... } once the watcher has dealt with a
@@ -155,6 +159,9 @@ addToLibrary({
 		'$addRunDependency', '$removeRunDependency', '$ENV', '$wasmTable',
 		'$stringToNewUTF8', '$stringToUTF8', '$UTF8ToString', 'malloc', 'free',
 		'$cwStore', 'cw_web_store_put', 'cw_web_store_delete', 'cw_web_store_lock',
+#if PTHREADS
+		'$PThread',
+#endif
 	],
 	$cwWeb__postset: () => {
 		// Emitted into preRun(), after the entries of Module.preRun.
@@ -178,8 +185,10 @@ addToLibrary({
 		snapshot: null,
 		region: 0,
 		regionLen: 0,
+		thread: 0,
 		held: false,
 		released: false,
+		// Also a thread's: it fails once.
 		trapped: false,
 		pending: 0,
 
@@ -193,6 +202,14 @@ addToLibrary({
 		report: null,
 
 		boot() {
+#if PTHREADS
+			// Before the page's role: a thread's worker has no Module of the page's.
+			if (ENVIRONMENT_IS_PTHREAD) {
+				cwWeb.role = 'thread';
+				cwWeb.bootThread();
+				return;
+			}
+#endif
 			if (Module['cwRole'] === 'none') {
 				cwWeb.role = 'none';
 			} else if (Module['cwRole'] === 'watcher') {
@@ -274,6 +291,25 @@ addToLibrary({
 			// Listeners, never assignments: the page may own window.onerror.
 			addEventListener('error', (e) => cwWeb.trap(e.error));
 			addEventListener('unhandledrejection', (e) => cwWeb.trap(e.reason));
+#if PTHREADS
+			// Every thread's worker passes through here once, pooled or
+			// started on demand. The handlers Emscripten owns on both ends
+			// ignore a message without a `cmd`.
+			const load = PThread.loadWasmModuleToWorker;
+			PThread.loadWasmModuleToWorker = (worker) => {
+				worker.addEventListener('message', (e) => {
+					const fatal = e.data?.['cw'];
+					if (fatal) {
+						cwWeb.crashed(fatal, worker.pthread_ptr || 0);
+					}
+				});
+				// One the worker could not take: it arrives as a message alone.
+				worker.addEventListener('error', (e) => {
+					cwWeb.crashed({ 'name': 'Error', 'message': String(e.message), 'stack': '' }, worker.pthread_ptr || 0);
+				});
+				return load(worker);
+			};
+#endif
 
 			// The page may instantiate by itself, for a loading bar. Its hook stays in charge.
 			const page = Module['instantiateWasm'];
@@ -305,28 +341,99 @@ addToLibrary({
 			}
 		},
 
-		// After a fatal error. Reads memory; never calls into the instance.
-		// Fatal: a trap, which includes Emscripten's abort, or any error
-		// thrown while C frames were on the stack, since it unwound them.
+		// Whether an error on the game's own thread is fatal: a trap, which
+		// includes Emscripten's abort, or any error thrown while C frames
+		// were on the stack, since it unwound them.
+		isFatal(e) {
+			return e instanceof WebAssembly.RuntimeError || /wasm-function\[/.test(String(e?.stack ?? ''));
+		},
+
+		// What the watcher needs of an error.
+		describe(e) {
+			return {
+				'name': e instanceof WebAssembly.RuntimeError ? '' : String(e?.name || 'Error'),
+				'message': String(e?.message ?? e),
+				'stack': String(e?.stack ?? ''),
+			};
+		},
+
+		// After an error on the game's own thread.
 		trap(e) {
-			if (cwWeb.trapped || !cwWeb.watcher || !cwWeb.regionLen) {
-				return;
+			if (cwWeb.isFatal(e)) {
+				cwWeb.crashed(cwWeb.describe(e), cwWeb.thread);
 			}
-			const trap = e instanceof WebAssembly.RuntimeError;
-			const stack = String(e?.stack ?? '');
-			if (!trap && !/wasm-function\[/.test(stack)) {
+		},
+
+		// After a fatal error on `thread`. Reads memory; never calls into
+		// the instance. The first wins, whichever thread it came from.
+		crashed(fatal, thread) {
+			if (cwWeb.trapped || !cwWeb.watcher || !cwWeb.regionLen) {
 				return;
 			}
 			cwWeb.trapped = true;
 			cwWeb.pending++;
+#if PTHREADS && ALLOW_MEMORY_GROWTH && GROWABLE_ARRAYBUFFERS != 2
+			// Another thread may have grown the memory since this one looked.
+			growMemViews();
+#endif
 			cwWeb.post({ 'report': {
-				'name': trap ? '' : String(e?.name || 'Error'),
-				'message': String(e?.message ?? e),
-				'stack': stack,
+				'name': fatal['name'],
+				'message': fatal['message'],
+				'stack': fatal['stack'],
+				'thread': thread,
 				'region': HEAPU8.slice(cwWeb.region, cwWeb.region + cwWeb.regionLen),
 				'memory': HEAPU8.length,
 			} });
 		},
+
+#if PTHREADS
+		// Thread.
+
+		// Nothing runs on a thread's worker but the thread, so every error
+		// that escapes is fatal, and it is read here, where it is whole:
+		// what Emscripten would pass on to the game is an event without it.
+		bootThread() {
+			const failed = (e) => {
+				if (!cwWeb.trapped) {
+					cwWeb.trapped = true;
+					const fatal = cwWeb.describe(e);
+					err(`crash reporter: thread failed: ${fatal['message']}`);
+					postMessage({ 'cw': fatal });
+				}
+			};
+			// Emscripten's handler, wrapped on each assignment, since it is
+			// reassigned while the worker loads. Firefox fires no `error`
+			// event here for call-stack exhaustion; a catch still gets it.
+			const native = Object.getOwnPropertyDescriptor(self, 'onmessage');
+			if (native?.set && native.configurable) {
+				let handler = self.onmessage;
+				const wrap = (fn) => fn && ((e) => {
+					try {
+						return fn(e);
+					} catch (ex) {
+						failed(ex);
+					}
+				});
+				Object.defineProperty(self, 'onmessage', {
+					configurable: true,
+					get: () => handler,
+					set: (fn) => {
+						handler = fn;
+						native.set.call(self, wrap(fn));
+					},
+				});
+				self.onmessage = handler;
+			}
+			addEventListener('error', (e) => {
+				e.preventDefault();
+				failed(e.error);
+			});
+			addEventListener('unhandledrejection', (e) => {
+				e.preventDefault();
+				failed(e.reason);
+			});
+		},
+#endif
 
 
 		// Watcher.
@@ -375,16 +482,17 @@ addToLibrary({
 			});
 			Module['instantiateWasm'] = (imports, receive) => {
 				cwWeb.canSuspend = cwWeb.suspend(imports);
+				// The module as well: a thread the watcher starts is made from it.
 				gotModule.then(async (mod) => {
 					if (mod) {
 						// A compiled module resolves to the instance alone.
 						cwWeb.module = mod;
-						receive(await WebAssembly.instantiate(mod, imports));
+						receive(await WebAssembly.instantiate(mod, imports), mod);
 					} else {
 						// Bytes resolve to the module and the instance.
 						const r = await cwWeb.instantiate(imports);
 						cwWeb.module = r.module;
-						receive(r.instance);
+						receive(r.instance, r.module);
 					}
 				});
 				return {};
@@ -517,7 +625,7 @@ addToLibrary({
 				const region = _malloc(r['region'].length);
 				HEAPU8.set(r['region'], region);
 				cwWeb.report = r;
-				await call(cwWeb.entries.report, name, message, stack, region);
+				await call(cwWeb.entries.report, name, message, stack, r['thread'] || 0, region);
 				cwWeb.report = null;
 				_free(region);
 				_free(stack);
@@ -570,12 +678,13 @@ addToLibrary({
 	},
 
 	cw_web_game_start__deps: ['$cwWeb'],
-	cw_web_game_start: (region, len) => {
+	cw_web_game_start: (region, len, thread) => {
 		if (cwWeb.role !== 'game' || !cwWeb.snapshot) {
 			return false;
 		}
 		cwWeb.region = region;
 		cwWeb.regionLen = len;
+		cwWeb.thread = thread;
 		return true;
 	},
 

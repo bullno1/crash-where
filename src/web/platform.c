@@ -4,6 +4,7 @@
  */
 #include <dirent.h>
 #include <errno.h>
+#include <pthread.h>
 #include <stdio.h>
 #include <string.h>
 #include <sys/stat.h>
@@ -63,7 +64,8 @@ cw_platform_now_ms(void) {
 
 uint32_t
 cw_platform_tid(void) {
-	return 1;
+	/* The thread's descriptor address, which a thread's worker also knows. */
+	return (uint32_t)(uintptr_t)pthread_self();
 }
 
 bool

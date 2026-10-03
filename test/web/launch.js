@@ -203,6 +203,10 @@ const server = http.createServer((req, res) => {
 		'Content-Type': TYPES[path.extname(file)] || 'application/octet-stream',
 		'Content-Length': content.length,
 		'Cache-Control': 'no-store',
+		// Cross-origin isolation, which a build with threads needs for its
+		// shared memory. On every page, since a frame must match its parent.
+		'Cross-Origin-Opener-Policy': 'same-origin',
+		'Cross-Origin-Embedder-Policy': 'require-corp',
 	});
 	res.end(content);
 });

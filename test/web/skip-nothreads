@@ -1,0 +1,4 @@
+# Tests cmd/emscripten/test leaves out on top of `skip`, which
+# cmd/emscripten-pthread/test runs: they need the build with threads.
+
+crash/thread_stack_overflow

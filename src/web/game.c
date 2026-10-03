@@ -64,7 +64,7 @@ seed_store(void) {
 bool
 cw_platform_run_game(void) {
 	region.magic = CW_REGION_MAGIC;
-	if (!cw_web_game_start(&region, sizeof(region))) {
+	if (!cw_web_game_start(&region, sizeof(region), cw_platform_tid())) {
 		cw_log(CW_LOG_WARN, "no watcher answered, library inactive");
 		return false;
 	}

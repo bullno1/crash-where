@@ -57,6 +57,11 @@ elseif(EMSCRIPTEN)
 		"SHELL:--js-library ${CMAKE_CURRENT_SOURCE_DIR}/web/testlib.js"
 		"SHELL:--preload-file ${CMAKE_CURRENT_SOURCE_DIR}/fixtures@${CMAKE_CURRENT_SOURCE_DIR}/fixtures"
 	)
+	if(CW_WEB_PTHREADS)
+		# A thread starts only once its worker has loaded, which needs the
+		# event loop; a scenario that then blocks on the thread needs one ready.
+		target_link_options(cw_test PRIVATE -sPTHREAD_POOL_SIZE=1)
+	endif()
 	file(GLOB TEST_FIXTURES CONFIGURE_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/fixtures/*)
 	set_property(TARGET cw_test APPEND PROPERTY
 		LINK_DEPENDS ${CMAKE_CURRENT_SOURCE_DIR}/web/testlib.js ${TEST_FIXTURES}

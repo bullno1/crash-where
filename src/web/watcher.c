@@ -16,7 +16,10 @@
 static cw_drain_t drain;
 
 static void
-on_report(const char* name, const char* message, const char* stack, cw_shared_t* region) {
+on_report(
+	const char* name, const char* message, const char* stack,
+	uint32_t tid, cw_shared_t* region
+) {
 	if (region->magic != CW_REGION_MAGIC) {
 		cw_log(CW_LOG_ERROR, "region header mismatch, trap not reported");
 		return;
@@ -25,7 +28,7 @@ on_report(const char* name, const char* message, const char* stack, cw_shared_t*
 	static cw_crash_info_t info;
 	info = (cw_crash_info_t){
 		.kind = CW_REPORT_CRASH,
-		.tid = 1,
+		.tid = tid,
 		.main_module = 0,
 		.module_count = 1,
 	};
