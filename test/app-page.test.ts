@@ -107,6 +107,60 @@ describe("app page", () => {
 		expect(html).toContain("<code>lin2</code>");
 		expect(html.indexOf("<code>lin2</code>")).toBeLessThan(html.indexOf("<code>win2</code>"));
 	});
+	it("serves the same data as JSON when asked", async () => {
+		await addApp("page-json", "Page JSON");
+		await inShard("page-json", async (obj) => {
+			await obj.db.insertInto("versions").values({ version: "2.0.0", created_at: 1 }).execute();
+			await obj.db.insertInto("releases").values({ channel: "stable", version: "2.0.0", released_at: 1 }).execute();
+			await obj.db
+				.insertInto("crash_groups")
+				.values({
+					id: 7, fingerprint: "c".repeat(16), fault: "memory", message: null, first_seen: 5, last_seen: 6,
+					frames: JSON.stringify([{ module: "game", name: "tick" }]),
+				})
+				.execute();
+			await obj.db
+				.insertInto("crash_counts")
+				.values({ group_id: 7, version: "2.0.0", channel: "stable", trust: 0, day: 1, count: 2 })
+				.execute();
+		});
+		await bindings.DB.prepare(
+			"INSERT INTO upload_tokens (app_id, hash, label, created_at, created_by) SELECT id, 'h', 'ci', 3, 'bob' FROM apps WHERE name = 'page-json'"
+		).run();
+		const r = await worker.fetch(
+			new Request("https://dash.example/dashboard/apps/page-json", { headers: { Authorization: auth, Accept: "application/json" } }), env
+		);
+		expect(r.status).toBe(200);
+		expect(r.headers.get("Content-Type")).toMatch(/^application\/json/);
+		expect(r.headers.get("Vary")).toBe("Accept");
+		const data = await r.json() as Record<string, unknown>;
+		expect(data.app).toMatchObject({ name: "page-json", display_name: "Page JSON", disabled_at: null });
+		expect(data.versions).toEqual([
+			{ version: "2.0.0", created_at: 1, channels: [{ channel: "stable", released_at: 1, supported_until: null }], builds: [] },
+		]);
+		expect(data.crashes).toEqual([
+			{ id: 7, title: "memory in tick", fault: "memory", message: null, frames: [{ module: "game", name: "tick" }], count: 2, first_seen: 5, last_seen: 6 },
+		]);
+		expect(data.tokens).toEqual([
+			{ id: expect.any(Number), label: "ci", created_at: 3, created_by: "bob", last_used_at: null, revoked_at: null },
+		]);
+	});
+	it("follows the Accept header's quality, then its order", async () => {
+		await addApp("page-any", "Page Any");
+		const type = async (accept: string) => {
+			const r = await worker.fetch(
+				new Request("https://dash.example/dashboard/apps/page-any", { headers: { Authorization: auth, Accept: accept } }), env
+			);
+			expect(r.headers.get("Vary")).toBe("Accept");
+			return r.headers.get("Content-Type")!.split(";")[0];
+		};
+		expect(await type("*/*")).toBe("text/html");
+		expect(await type("text/html, application/json")).toBe("text/html");
+		expect(await type("application/json, text/html")).toBe("application/json");
+		expect(await type("text/html;q=0.5, application/json")).toBe("application/json");
+		expect(await type("application/json;q=0.9, */*;q=0.8")).toBe("application/json");
+		expect(await type("text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")).toBe("text/html");
+	});
 	it("requires a login", async () => {
 		const r = await worker.fetch(new Request("https://dash.example/dashboard/apps/page-full"), env);
 		expect(r.status).toBe(401);

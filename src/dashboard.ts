@@ -1,5 +1,6 @@
 import pico from "@picocss/pico/css/pico.classless.min.css";
 import { type Context, Hono } from "hono";
+import { accepts } from "hono/accepts";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { csrf } from "hono/csrf";
 import { html } from "hono/html";
@@ -31,6 +32,37 @@ dashboard.get("/pico.css", (c) => {
 
 function day(unix: number): string {
 	return new Date(unix * 1000).toISOString().slice(0, 10);
+}
+
+/**
+ * Whether the client prefers JSON to a page. Every dashboard route answers
+ * both from the same data: a browser, or anything that accepts either,
+ * gets HTML; a script asking for `application/json` gets the object the
+ * page would have been rendered from. The reply is marked as varying by
+ * the header it was chosen on.
+ */
+function wantsJson(c: Context<App>): boolean {
+	c.header("Vary", "Accept");
+	const type = accepts(c, { header: "Accept", supports: ["text/html", "application/json"], default: "text/html" });
+	return type === "application/json";
+}
+
+/** The submitted fields, from a form or a JSON object, trimmed; anything that is not a string is absent. */
+async function fields(c: Context<App>): Promise<Record<string, string>> {
+	const type = c.req.header("Content-Type") ?? "";
+	const body: unknown = type.startsWith("application/json") ? await c.req.json() : await c.req.parseBody();
+	const out: Record<string, string> = {};
+	if (typeof body === "object" && body !== null) {
+		for (const [key, value] of Object.entries(body)) {
+			if (typeof value === "string") out[key] = value.trim();
+		}
+	}
+	return out;
+}
+
+/** The message for a name already in use, on the page and in JSON alike. */
+function duplicateName(name: string): AppError {
+	return { field: "name", message: `An app named '${name}' already exists.` };
 }
 
 /** A labelled input, marked invalid with its message when the error is its own. */
@@ -82,33 +114,52 @@ ${field("Display name", "display_name", form.display_name, html`required maxleng
 function formState(query: Record<string, string>, apps: AppRow[]): { form: AppInput; error: AppError | null } {
 	const form: AppInput = { name: query.name ?? "", display_name: query.display_name ?? "" };
 	if (!("name" in query) && !("display_name" in query)) return { form, error: null };
-	const error =
-		validateApp(form) ??
-		(apps.some((app) => app.name === form.name)
-			? { field: "name" as const, message: `An app named '${form.name}' already exists.` }
-			: null);
+	const error = validateApp(form) ?? (apps.some((app) => app.name === form.name) ? duplicateName(form.name) : null);
 	return { form, error };
 }
 
 dashboard.get("/", async (c) => {
 	const who = c.get("identity");
 	const apps = await listApps(c.get("db"));
+	if (wantsJson(c)) return c.json({ apps });
 	const { form, error } = formState(c.req.query(), apps);
 	return render(c, appsPage(who.email ?? who.sub, apps, form, error));
 });
 
-/** Every outcome redirects, so a refresh of the result never resubmits the form. */
+/**
+ * Every outcome of the form redirects, so a refresh of the result never
+ * resubmits it. A JSON client gets the row, or the error on the field at
+ * fault.
+ */
 dashboard.post("/apps", async (c) => {
-	const body = await c.req.parseBody();
-	const text = (key: string) => (typeof body[key] === "string" ? (body[key] as string).trim() : "");
-	const input: AppInput = { name: text("name"), display_name: text("display_name") };
-	const created = validateApp(input) === null && (await createApp(c.get("db"), input, c.get("identity")));
+	const body = await fields(c);
+	const input: AppInput = { name: body.name ?? "", display_name: body.display_name ?? "" };
+	const invalid = validateApp(input);
+	const created = invalid === null ? await createApp(c.get("db"), input, c.get("identity")) : null;
+	if (wantsJson(c)) {
+		if (created) return c.json({ app: created }, 201);
+		return c.json({ error: invalid ?? duplicateName(input.name) }, invalid ? 400 : 409);
+	}
 	if (!created) return c.redirect(`/dashboard?${new URLSearchParams({ ...input })}`, 303);
 	return c.redirect("/dashboard", 303);
 });
 
+/** A token as the page and JSON show it: everything but the hash. */
+interface TokenSummary {
+	id: number;
+	label: string;
+	created_at: number;
+	created_by: string;
+	last_used_at: number | null;
+	revoked_at: number | null;
+}
+
+function summarizeToken({ id, label, created_at, created_by, last_used_at, revoked_at }: TokenRow): TokenSummary {
+	return { id, label, created_at, created_by, last_used_at, revoked_at };
+}
+
 /** The upload tokens of an app, with the one just minted shown in clear. */
-function tokensSection(app: AppRow, tokens: TokenRow[], fresh: string | null): Page {
+function tokensSection(app: AppRow, tokens: TokenSummary[], fresh: string | null): Page {
 	const rows = tokens.map(
 		(t) => html`<tr>
 <td>${t.label}</td>
@@ -143,13 +194,31 @@ ${table}
 
 const skipList = compileSkipList(DEFAULT_SKIP_LIST);
 
+/** A group as the page and JSON show it, with the title the rule gives it. */
+interface CrashSummary {
+	id: number;
+	title: string;
+	fault: string;
+	message: string | null;
+	/** The raw frames the rule saw, before the skip list. */
+	frames: RawFrame[];
+	count: number;
+	first_seen: number;
+	last_seen: number;
+}
+
+function summarizeCrash(g: GroupSummary): CrashSummary {
+	const frames = JSON.parse(g.frames) as RawFrame[];
+	return { ...g, frames, title: groupTitle(g.fault, frames, g.message, skipList) };
+}
+
 /** The crashes of an app, most recently seen first, each named by its fault and frames. */
-function crashesSection(groups: GroupSummary[]): Page {
-	if (groups.length === 0) return html`<h2>Crashes</h2>
+function crashesSection(crashes: CrashSummary[]): Page {
+	if (crashes.length === 0) return html`<h2>Crashes</h2>
 <p>No crashes reported yet.</p>`;
-	const rows = groups.map(
+	const rows = crashes.map(
 		(g) => html`<tr>
-<td>${groupTitle(g.fault, JSON.parse(g.frames) as RawFrame[], g.message, skipList)}</td>
+<td>${g.title}</td>
 <td>${g.count}</td>
 <td>${day(g.first_seen)}</td>
 <td>${day(g.last_seen)}</td>
@@ -163,7 +232,7 @@ function crashesSection(groups: GroupSummary[]): Page {
 }
 
 function appPage(
-	who: string, app: AppRow, versions: VersionSummary[], groups: GroupSummary[], tokens: TokenRow[], fresh: string | null
+	who: string, app: AppRow, versions: VersionSummary[], crashes: CrashSummary[], tokens: TokenSummary[], fresh: string | null
 ): Page {
 	const rows = versions.map(
 		(v) => html`<tr>
@@ -190,7 +259,7 @@ function appPage(
 		app.display_name, who,
 		html`<h1>${app.display_name}</h1>
 <p><code>${app.name}</code> · ${app.disabled_at === null ? "active" : `disabled since ${day(app.disabled_at)}`} · created at ${day(app.created_at)} by ${app.created_by}</p>
-${crashesSection(groups)}
+${crashesSection(crashes)}
 <h2>Versions</h2>
 ${table}
 ${tokensSection(app, tokens, fresh)}`
@@ -214,22 +283,25 @@ dashboard.get("/apps/:name", async (c) => {
 	const who = c.get("identity");
 	const app = await getApp(c.get("db"), c.req.param("name"));
 	if (!app) return c.text("No such app", 404);
-	const fresh = getCookie(c, FRESH_TOKEN_COOKIE) ?? null;
-	if (fresh !== null) deleteCookie(c, FRESH_TOKEN_COOKIE, { path: appPath(app.name), secure: true });
 	const shard = c.env.SHARD.get(c.env.SHARD.idFromName(app.name));
 	const versions = await shard.listVersions();
-	const groups = await shard.listGroups();
-	const tokens = await listTokens(c.get("db"), app.id);
-	return render(c, appPage(who.email ?? who.sub, app, versions, groups, tokens, fresh));
+	const crashes = (await shard.listGroups()).map(summarizeCrash);
+	const tokens = (await listTokens(c.get("db"), app.id)).map(summarizeToken);
+	if (wantsJson(c)) return c.json({ app, versions, crashes, tokens });
+	const fresh = getCookie(c, FRESH_TOKEN_COOKIE) ?? null;
+	if (fresh !== null) deleteCookie(c, FRESH_TOKEN_COOKIE, { path: appPath(app.name), secure: true });
+	return render(c, appPage(who.email ?? who.sub, app, versions, crashes, tokens, fresh));
 });
 
+/** A browser sees the new token once on the app page; a JSON client gets it in the reply. */
 dashboard.post("/apps/:name/tokens", async (c) => {
 	const app = await getApp(c.get("db"), c.req.param("name"));
 	if (!app) return c.text("No such app", 404);
-	const body = await c.req.parseBody();
-	const label = validLabel(typeof body.label === "string" ? body.label : "");
+	const body = await fields(c);
+	const label = validLabel(body.label ?? "");
 	if (label === null) return c.text(`A label of 1 to ${MAX_LABEL} characters is required`, 400);
-	const { token } = await createToken(c.get("db"), app.id, label, c.get("identity"), Math.floor(Date.now() / 1000));
+	const { token, row } = await createToken(c.get("db"), app.id, label, c.get("identity"), Math.floor(Date.now() / 1000));
+	if (wantsJson(c)) return c.json({ token, ...summarizeToken(row) }, 201);
 	setCookie(c, FRESH_TOKEN_COOKIE, token, {
 		path: appPath(app.name), httpOnly: true, secure: true, sameSite: "Strict", maxAge: FRESH_TOKEN_SECONDS,
 	});
@@ -239,6 +311,7 @@ dashboard.post("/apps/:name/tokens", async (c) => {
 dashboard.post("/apps/:name/tokens/:id/revoke", async (c) => {
 	const app = await getApp(c.get("db"), c.req.param("name"));
 	if (!app) return c.text("No such app", 404);
-	await revokeToken(c.get("db"), app.id, Number(c.req.param("id")), Math.floor(Date.now() / 1000));
+	const revoked = await revokeToken(c.get("db"), app.id, Number(c.req.param("id")), Math.floor(Date.now() / 1000));
+	if (wantsJson(c)) return c.json({ revoked }, revoked ? 200 : 404);
 	return c.redirect(appPath(app.name), 303);
 });

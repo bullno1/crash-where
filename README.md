@@ -37,6 +37,20 @@ Scope the Access application to `<host>/dashboard` so that it guards the same pa
 The Worker verifies the JWT that Access attaches to each request, so a request that reaches the Worker by any other path is refused.
 Moving from the password to Access is setting those two secrets and deleting the password.
 
+### Scripting the dashboard
+
+Every dashboard route answers in JSON when the request prefers it, with the same login.
+Send `Accept: application/json`; a browser, or `curl` without the header, gets the page.
+A GET returns the object the page is rendered from: the app list, or for an app its row, versions, crashes with their titles, and tokens without their hashes.
+A POST takes a form body or a JSON object and answers with a status and the created row instead of a redirect; a new upload token comes back in the body.
+A form body still needs an `Origin` header matching the dashboard, as a browser sends; a JSON body does not.
+
+```sh
+curl -u "alice:$PASSWORD" -H 'Accept: application/json' https://crash.example.com/dashboard/apps/forest-quest
+curl -u "alice:$PASSWORD" -H 'Accept: application/json' -H 'Content-Type: application/json' \
+  -d '{"label":"GitHub Actions"}' https://crash.example.com/dashboard/apps/forest-quest/tokens
+```
+
 To view the dashboard under `wrangler dev`, run, with the dev server up:
 
 ```sh
@@ -54,10 +68,12 @@ npm install
 npm run dev    # Apply migrations locally and run a dev server
 npm run check  # Type check
 npm test       # Run tests
+npm run e2e    # Run the end-to-end tests against built binaries
 npm run deploy # Apply migrations remotely and deploy
 ```
 
 Tests run inside the Workers runtime  with the migrations applied to a fresh database before each test file.
+The end-to-end tests under `test/e2e/` run in Node itself, start a dev server in a temporary directory, and drive the native `cwsym` and `crashme` binaries from the directory `CW_BIN_DIR` names; `cmd/<toolchain>/e2e` at the repository root builds them and runs this.
 
 ### Database
 

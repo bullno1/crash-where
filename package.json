@@ -7,8 +7,9 @@
     "login": "sh scripts/login.sh",
     "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy",
     "db:types": "sh scripts/db-types.sh",
-    "check": "tsc --noEmit && eslint . && sh scripts/db-types.sh --verify",
-    "test": "vitest run"
+    "check": "tsc --noEmit && tsc -p test/e2e && eslint . && sh scripts/db-types.sh --verify",
+    "test": "vitest run",
+    "e2e": "node --test --test-concurrency=1 test/e2e/*.e2e.mts"
   },
   "dependencies": {
     "@picocss/pico": "^2.1.1",
@@ -20,6 +21,7 @@
   "devDependencies": {
     "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^5.0.0",
+    "@types/node": "^24.19.1",
     "better-sqlite3": "^12.11.1",
     "eslint": "^10.12.0",
     "kysely-codegen": "^0.20.0",

@@ -110,3 +110,29 @@ describe("upload tokens", () => {
 		expect((await post("/dashboard/apps/tok-guard/tokens", { Authorization: auth })).status).toBe(403);
 	});
 });
+
+describe("upload tokens as JSON", () => {
+	const json = { Authorization: auth, Origin: origin, Accept: "application/json" };
+	it("are returned in the reply and listed without their hash", async () => {
+		await addApp("json-mint");
+		const r = await post("/dashboard/apps/json-mint/tokens", json, { label: "agent" });
+		expect(r.status).toBe(201);
+		const made = await r.json() as { token: string; id: number; label: string };
+		expect(made.token).toMatch(/^cwu_/);
+		expect(made.label).toBe("agent");
+		expect(await authenticateToken(db, made.token, 2)).toMatchObject({ id: made.id, label: "agent" });
+		const listed = await worker.fetch(new Request(`${origin}/dashboard/apps/json-mint`, { headers: json }), env);
+		const data = await listed.json() as { tokens: Record<string, unknown>[] };
+		expect(data.tokens).toEqual([
+			{ id: made.id, label: "agent", created_at: expect.any(Number), created_by: "alice", last_used_at: 2, revoked_at: null },
+		]);
+	});
+	it("revoke with a status instead of a redirect", async () => {
+		await addApp("json-revoke");
+		const made = await (await post("/dashboard/apps/json-revoke/tokens", json)).json() as { id: number };
+		const r = await post(`/dashboard/apps/json-revoke/tokens/${made.id}/revoke`, json, {});
+		expect(r.status).toBe(200);
+		expect(await r.json()).toEqual({ revoked: true });
+		expect((await post(`/dashboard/apps/json-revoke/tokens/${made.id}/revoke`, json, {})).status).toBe(404);
+	});
+});

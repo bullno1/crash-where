@@ -19,5 +19,8 @@
     "test",
     "migrations/shard",
     "vitest.config.mts"
+  ],
+  "exclude": [
+    "test/e2e"
   ]
 }
