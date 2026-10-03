@@ -11,7 +11,7 @@ import { mkdir, readdir, readFile, writeFile } from "node:fs/promises";
 import path from "node:path";
 import { after, before, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
-import { type AppPage, binary, Collector, run, runLogging } from "./harness.mts";
+import { binary, Collector, type CrashesPage, run, runLogging } from "./harness.mts";
 
 // The slug, version and channel the sample is built with.
 const APP = "crashme";
@@ -79,7 +79,7 @@ it("leaves nothing pending and had both reports accepted", async () => {
 	assert.equal(accepted.length, 2);
 });
 it("lists both crashes by their frames and message", async () => {
-	const page = await collector.json<AppPage>(`/dashboard/apps/${APP}`, 200);
+	const page = await collector.json<CrashesPage>(`/dashboard/apps/${APP}`, 200);
 	const titles = page.crashes.map((g) => g.title).sort();
 	assert.deepEqual(titles, ["ASSERT in main: mode != assert", "memory in crashme:crash_here, from crashme:level_two"]);
 	const memory = page.crashes.find((g) => g.fault === "memory")!;

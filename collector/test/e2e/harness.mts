@@ -159,14 +159,9 @@ export class Collector {
 	}
 }
 
-/** What the app page returns as JSON; the fields the tests read. */
-export interface AppPage {
+/** What the pages of an app return as JSON; the fields the tests read. */
+export interface CrashesPage {
 	app: { name: string; display_name: string; disabled_at: number | null };
-	versions: {
-		version: string;
-		channels: { channel: string; supported_until: number | null }[];
-		builds: string[];
-	}[];
 	crashes: {
 		id: number;
 		title: string;
@@ -175,5 +170,16 @@ export interface AppPage {
 		frames: { module: string; name: string | null }[];
 		count: number;
 	}[];
+}
+
+export interface VersionsPage {
+	versions: {
+		version: string;
+		channels: { channel: string; supported_until: number | null }[];
+		builds: string[];
+	}[];
+}
+
+export interface TokensPage {
 	tokens: { id: number; label: string; last_used_at: number | null; revoked_at: number | null }[];
 }

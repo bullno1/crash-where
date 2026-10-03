@@ -41,7 +41,7 @@ Moving from the password to Access is setting those two secrets and deleting the
 
 Every dashboard route answers in JSON when the request prefers it, with the same login.
 Send `Accept: application/json`; a browser, or `curl` without the header, gets the page.
-A GET returns the object the page is rendered from: the app list, or for an app its row, versions, crashes with their titles, and tokens without their hashes.
+A GET returns the object the page is rendered from.
 A POST takes a form body or a JSON object and answers with a status and the created row instead of a redirect; a new upload token comes back in the body.
 A form body still needs an `Origin` header matching the dashboard, as a browser sends; a JSON body does not.
 
@@ -49,6 +49,7 @@ A form body still needs an `Origin` header matching the dashboard, as a browser 
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' https://crash.example.com/dashboard/apps/forest-quest
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' -H 'Content-Type: application/json' \
   -d '{"label":"GitHub Actions"}' https://crash.example.com/dashboard/apps/forest-quest/tokens
+curl -u "alice:$PASSWORD" -H 'Accept: application/json' https://crash.example.com/dashboard/apps/forest-quest/versions
 ```
 
 To view the dashboard under `wrangler dev`, run, with the dev server up:

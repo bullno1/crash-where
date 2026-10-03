@@ -7,7 +7,7 @@
 import assert from "node:assert/strict";
 import path from "node:path";
 import { after, before, test } from "node:test";
-import { type AppPage, binary, Collector, ROOT, run } from "./harness.mts";
+import { binary, Collector, ROOT, run, type TokensPage, type VersionsPage } from "./harness.mts";
 
 const FIXTURE = path.join(ROOT, "test/fixtures/synthetic.cwsym");
 const BUILD_ID = "0102030405060708090a0b0c0d0e0f1011121314";
@@ -60,14 +60,15 @@ it("refuses a bad token", () => {
 	upload("1.0.0", "cwu_not-a-token", 1, "HTTP 401: The upload token is not valid");
 	return Promise.resolve();
 });
-it("lists the release and the used token on the app page", async () => {
-	const page = await collector.json<AppPage>(`/dashboard/apps/${APP}`, 200);
+it("lists the release and the used token on the app's pages", async () => {
+	const page = await collector.json<VersionsPage>(`/dashboard/apps/${APP}/versions`, 200);
 	assert.equal(page.versions.length, 1);
 	const [v] = page.versions;
 	assert.equal(v!.version, "1.0.0");
 	assert.deepEqual(v!.builds, [BUILD_ID]);
 	assert.ok(v!.channels.some((c) => c.channel === "stable" && c.supported_until === null), "current on stable");
-	assert.equal(page.tokens.length, 1);
-	assert.equal(page.tokens[0]!.label, "e2e");
-	assert.notEqual(page.tokens[0]!.last_used_at, null, "the token records its use");
+	const { tokens } = await collector.json<TokensPage>(`/dashboard/apps/${APP}/tokens`, 200);
+	assert.equal(tokens.length, 1);
+	assert.equal(tokens[0]!.label, "e2e");
+	assert.notEqual(tokens[0]!.last_used_at, null, "the token records its use");
 });

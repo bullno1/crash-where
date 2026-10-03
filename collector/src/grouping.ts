@@ -171,14 +171,16 @@ export async function fingerprint(fault: string, tokens: string[], message: stri
 
 /**
  * The line a group is listed under, from its stored frames under the
- * current rule: the fault, the first kept frame and its caller, and the
- * message when the fault hashes one.
+ * current rule: the fault, the first kept frame and its caller, then the
+ * message when the fault hashes one. A `brief` title names the first frame
+ * only and ends in an ellipsis when there were more.
  */
-export function groupTitle(fault: string, frames: RawFrame[], message: string | null, skip: SkipList): string {
+export function groupTitle(fault: string, frames: RawFrame[], message: string | null, skip: SkipList, brief = false): string {
 	const tokens = selectFrames(frames, skip);
 	let title = fault;
 	if (tokens.length > 0) title += ` in ${tokens[0]}`;
-	if (tokens.length > 1) title += `, from ${tokens[1]}`;
+	if (tokens.length > 1 && !brief) title += `, from ${tokens[1]}`;
 	if (message !== null && message !== "") title += `: ${message}`;
+	if (tokens.length > 1 && brief) title += "…";
 	return title;
 }
