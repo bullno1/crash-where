@@ -1,0 +1,67 @@
+#!/bin/sh
+# Pulls the latest collector from upstream into this deployment's
+# repository and pushes it, which makes Workers Builds redeploy.
+#
+# Run it from a clone of the repository that "Deploy to Cloudflare"
+# created, with a clean working tree. A conflict in wrangler.toml keeps
+# this deployment's copy, which holds its resource IDs, and prints what
+# upstream changed there so a new binding can be added by hand. Any other
+# conflict aborts the merge and leaves the tree as it was.
+set -eu
+
+upstream=${CW_UPSTREAM:-https://github.com/bullno1/crash-where}
+branch=${CW_UPSTREAM_BRANCH:-collector}
+
+cd "$(dirname "$0")"
+
+if [ -n "$(git status --porcelain)" ]; then
+	echo "update: the working tree has changes; commit or stash them first" >&2
+	exit 1
+fi
+
+if ! git remote get-url upstream >/dev/null 2>&1; then
+	git remote add upstream "$upstream"
+fi
+git fetch --quiet upstream "$branch"
+
+if git merge-base --is-ancestor "upstream/$branch" HEAD; then
+	echo "update: already up to date"
+	exit 0
+fi
+
+# A deployment whose repository was created without upstream's history
+# has no merge base; the first merge then joins the two histories.
+base=$(git merge-base HEAD "upstream/$branch" 2>/dev/null || true)
+if [ -n "$base" ]; then
+	unrelated=
+else
+	unrelated=--allow-unrelated-histories
+fi
+
+if git merge --ff-only "upstream/$branch" >/dev/null 2>&1; then
+	:
+elif git merge --no-edit $unrelated "upstream/$branch" >/dev/null 2>&1; then
+	:
+else
+	conflicts=$(git diff --name-only --diff-filter=U)
+	if [ "$conflicts" = "wrangler.toml" ]; then
+		git checkout --quiet --ours wrangler.toml
+		git add wrangler.toml
+		git commit --quiet --no-edit
+		echo "update: kept this deployment's wrangler.toml; upstream's changes to it:" >&2
+		if [ -n "$base" ]; then
+			git diff "$base" "upstream/$branch" -- wrangler.toml >&2
+		else
+			git show "upstream/$branch:wrangler.toml" >&2
+		fi
+	else
+		git merge --abort
+		echo "update: conflicts in:" >&2
+		echo "$conflicts" | sed 's/^/  /' >&2
+		echo "update: resolve them with 'git merge upstream/$branch', then 'git push'" >&2
+		exit 1
+	fi
+fi
+
+git push --quiet
+echo "update: pushed; Workers Builds deploys it (or run 'npx wrangler deploy')"

@@ -1,0 +1,8 @@
+# Copy to .dev.vars for `wrangler dev`. On a deployed Worker, set each
+# with `wrangler secret put <NAME>`; the "Deploy to Cloudflare" form asks
+# for them. Both values are public; README.md says where to find them.
+
+# Zero Trust team domain: the full <team>.cloudflareaccess.com, no scheme.
+ACCESS_TEAM_DOMAIN=example.cloudflareaccess.com
+# AUD tag of the Access application that protects the dashboard hostname.
+ACCESS_AUD=
