@@ -1,5 +1,6 @@
 import pico from "@picocss/pico/css/pico.classless.min.css";
 import { Hono } from "hono";
+import { csrf } from "hono/csrf";
 import { html } from "hono/html";
 import { type AppError, type AppInput, type AppRow, createApp, listApps, validateApp } from "./apps";
 import { requireLogin } from "./auth";
@@ -7,9 +8,14 @@ import type { App } from "./env";
 import { layout } from "./layout";
 import { type Page, render } from "./page";
 
-/** The dashboard: a login is required before any of its routes runs. */
+/**
+ * The dashboard: a login is required before any of its routes runs, and a
+ * form submission must come from this origin, which refuses forged posts
+ * before the ambient credentials of either login mode can authorize them.
+ */
 export const dashboard = new Hono<App>();
 
+dashboard.use("*", csrf());
 dashboard.use("*", requireLogin);
 
 dashboard.get("/pico.css", (c) => {
@@ -63,25 +69,35 @@ ${field("Display name", "display_name", form.display_name, html`required maxleng
 	);
 }
 
+/**
+ * Rebuilds the create form from the query string, where a failed submission
+ * left its values, and works out what was wrong with them against the
+ * current apps. A query without form fields is a plain visit.
+ */
+function formState(query: Record<string, string>, apps: AppRow[]): { form: AppInput; error: AppError | null } {
+	const form: AppInput = { name: query.name ?? "", display_name: query.display_name ?? "" };
+	if (!("name" in query) && !("display_name" in query)) return { form, error: null };
+	const error =
+		validateApp(form) ??
+		(apps.some((app) => app.name === form.name)
+			? { field: "name" as const, message: `An app named '${form.name}' already exists.` }
+			: null);
+	return { form, error };
+}
+
 dashboard.get("/", async (c) => {
 	const who = c.get("identity");
 	const apps = await listApps(c.get("db"));
-	return render(c, appsPage(who.email ?? who.sub, apps, { name: "", display_name: "" }, null));
+	const { form, error } = formState(c.req.query(), apps);
+	return render(c, appsPage(who.email ?? who.sub, apps, form, error));
 });
 
+/** Every outcome redirects, so a refresh of the result never resubmits the form. */
 dashboard.post("/apps", async (c) => {
-	const who = c.get("identity");
 	const body = await c.req.parseBody();
 	const text = (key: string) => (typeof body[key] === "string" ? (body[key] as string).trim() : "");
 	const input: AppInput = { name: text("name"), display_name: text("display_name") };
-	const error = validateApp(input);
-	if (error) {
-		return render(c, appsPage(who.email ?? who.sub, await listApps(c.get("db")), input, error), 400);
-	}
-	const created = await createApp(c.get("db"), input, who);
-	if (!created) {
-		const taken: AppError = { field: "name", message: `An app named '${input.name}' already exists.` };
-		return render(c, appsPage(who.email ?? who.sub, await listApps(c.get("db")), input, taken), 409);
-	}
+	const created = validateApp(input) === null && (await createApp(c.get("db"), input, c.get("identity")));
+	if (!created) return c.redirect(`/dashboard?${new URLSearchParams({ ...input })}`, 303);
 	return c.redirect("/dashboard", 303);
 });
