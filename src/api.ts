@@ -1,11 +1,16 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { getApp } from "./apps";
 import { hex } from "./bytes";
 import { parseHeader } from "./cwsym";
 import type { App } from "./env";
+import { MAX_ENVELOPE_BYTES, parseEnvelope } from "./envelope";
+import {
+	classify, compileSkipList, DEFAULT_SKIP_LIST, fingerprint, MAX_MESSAGE, selectFrames, STORED_FRAMES,
+} from "./grouping";
 import {
 	CHANNEL_GRAMMAR, MAX_TABLE_BYTES, symbolKey, validChannel, validVersion, VERSION_GRAMMAR,
 } from "./releases";
+import { symbolicate } from "./symbols";
 import { authenticateToken } from "./tokens";
 
 /** The client API, outside the dashboard login. Replies are `key value` text lines. */
@@ -65,6 +70,99 @@ api.put("/:app/releases/:version", async (c) => {
 		...Object.entries(result.created).filter(([, yes]) => yes).map(([what]) => what),
 	];
 	return c.text(`build ${buildId}\ncreated ${created.length === 0 ? "none" : created.join(",")}\n`, created.length === 0 ? 200 : 201);
+});
+
+/** The skip list every app gets until the per-app one exists. */
+const skipList = compileSkipList(DEFAULT_SKIP_LIST);
+
+/**
+ * The body as sent, or inflated when it came gzipped, capped either way;
+ * a response says why it was refused.
+ */
+async function readBody(c: Context<App>): Promise<Uint8Array | Response> {
+	const tooLarge = () => c.text(`The envelope must be at most ${MAX_ENVELOPE_BYTES} bytes`, 413);
+	if (Number(c.req.header("Content-Length") ?? 0) > MAX_ENVELOPE_BYTES) return tooLarge();
+	const raw = new Uint8Array(await c.req.arrayBuffer());
+	if (raw.byteLength > MAX_ENVELOPE_BYTES) return tooLarge();
+	const encoding = c.req.header("Content-Encoding")?.trim().toLowerCase();
+	if (encoding === undefined || encoding === "" || encoding === "identity") return raw;
+	if (encoding !== "gzip") return c.text(`Content-Encoding ${encoding} is not supported; send gzip or nothing`, 415);
+	const chunks: Uint8Array[] = [];
+	let total = 0;
+	try {
+		const reader = new Blob([raw]).stream().pipeThrough(new DecompressionStream("gzip")).getReader();
+		for (;;) {
+			const { done, value } = await reader.read();
+			if (done) break;
+			total += value.byteLength;
+			if (total > MAX_ENVELOPE_BYTES) {
+				await reader.cancel();
+				return tooLarge();
+			}
+			chunks.push(value);
+		}
+	} catch {
+		return c.text("The body is not valid gzip", 400);
+	}
+	const out = new Uint8Array(total);
+	let at = 0;
+	for (const chunk of chunks) {
+		out.set(chunk, at);
+		at += chunk.byteLength;
+	}
+	return out;
+}
+
+/**
+ * Receives one crash envelope. The report is grouped from its frames and
+ * the app's symbol tables, then counted in the app's shard against its
+ * release. A token is not read yet: every report counts as unauthorized.
+ * The reply is `want_attachments 0`, since samples are not stored yet;
+ * a retried report id gets the same reply and is not counted again.
+ */
+api.post("/:app/report", async (c) => {
+	const app = await getApp(c.get("db"), c.req.param("app"));
+	if (!app) return c.text("No such app", 404);
+	if (app.disabled_at !== null) return c.text("The app is disabled", 403);
+
+	const body = await readBody(c);
+	if (body instanceof Response) return body;
+	let json: unknown;
+	try {
+		json = JSON.parse(new TextDecoder().decode(body));
+	} catch {
+		return c.text("The envelope is not valid JSON", 400);
+	}
+	const parsed = parseEnvelope(json);
+	if (!parsed.ok) return c.text(parsed.reason, 400);
+	const { envelope } = parsed;
+	if (envelope.app !== app.name) return c.text("The envelope names another app", 400);
+	const { fault, withMessage } = classify(envelope.type);
+	if (envelope.frames.length === 0 && fault !== "exit") return c.text("The envelope has no frames", 400);
+
+	const raw = await symbolicate(c.env.SYMBOLS, app.name, envelope.frames.slice(0, STORED_FRAMES));
+	const message = withMessage ? envelope.message.slice(0, MAX_MESSAGE) : null;
+	const tokens = selectFrames(raw, skipList);
+	const now = Math.floor(Date.now() / 1000);
+	const shard = c.env.SHARD.get(c.env.SHARD.idFromName(app.name));
+	const result = await shard.ingest({
+		reportId: envelope.reportId,
+		version: envelope.version,
+		channel: envelope.channel,
+		trust: 0,
+		now,
+		group: { fingerprint: await fingerprint(fault, tokens, message), fault, frames: JSON.stringify(raw), message },
+	});
+	switch (result.outcome) {
+		case "unknown":
+			return c.text(`Version ${envelope.version} is not released on channel ${envelope.channel}`, 410);
+		case "expired":
+			return c.text(`Version ${envelope.version} is no longer supported on channel ${envelope.channel}`, 410);
+		case "duplicate":
+			return c.text("want_attachments 0\n", 200);
+		case "counted":
+			return c.text("want_attachments 0\n", 201);
+	}
 });
 
 api.all("*", (c) => c.text("Not found", 404));

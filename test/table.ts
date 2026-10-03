@@ -8,13 +8,22 @@ export interface TableOptions {
 	version?: number;
 	rules?: number;
 	arch?: number;
-	/** Function rows. */
+	/** Function rows, every one named `main`; `functions` replaces them. */
 	count?: number;
+	/** The rows, in ascending start order. */
+	functions?: SymbolRow[];
 	/** The one display string; changing it changes the bytes but not the identity. */
 	display?: string;
 	/** False cuts the file after the hashed sections, as the Worker's prefix read would. */
 	complete?: boolean;
 	magic?: string;
+}
+
+/** One function of a synthetic table. */
+export interface SymbolRow {
+	start: number;
+	size: number;
+	name: string;
 }
 
 /** The build id most tests use: twenty bytes, as an ELF sha1 id. */
@@ -25,10 +34,20 @@ const align = (n: number) => (n + 7) & ~7;
 
 /** Builds a `cwsym` v1 table in memory with `count` functions and no line sections. */
 export function makeTable(opts: TableOptions = {}): Uint8Array {
-	const count = opts.count ?? 1;
+	const functions = opts.functions
+		?? Array.from({ length: opts.count ?? 1 }, (_, i) => ({ start: 0x1000 * (i + 1), size: 0x40, name: "main" }));
+	const count = functions.length;
 	const buildId = opts.buildId ?? BUILD_ID;
 	const complete = opts.complete ?? true;
-	const strings = new TextEncoder().encode("main\0");
+	const names = new Map<string, number>();
+	let stringBytes = "";
+	for (const f of functions) {
+		if (!names.has(f.name)) {
+			names.set(f.name, new TextEncoder().encode(stringBytes).length);
+			stringBytes += `${f.name}\0`;
+		}
+	}
+	const strings = new TextEncoder().encode(stringBytes);
 	const dstrings = new TextEncoder().encode(`${opts.display ?? "main(int)"}\0`);
 	const words = count * 4;
 	let off = HEADER_SIZE;
@@ -59,10 +78,10 @@ export function makeTable(opts: TableOptions = {}): Uint8Array {
 	view.setUint32(64, offDisp, true);
 	view.setUint32(116, complete ? offDstrings : 0, true);
 	view.setUint32(120, complete ? dstrings.length : 0, true);
-	for (let i = 0; i < count; ++i) {
-		view.setUint32(offStarts + i * 4, 0x1000 * (i + 1), true);
-		view.setUint32(offSizes + i * 4, 0x40, true);
-		view.setUint32(offNames + i * 4, 0, true);
+	for (const [i, f] of functions.entries()) {
+		view.setUint32(offStarts + i * 4, f.start, true);
+		view.setUint32(offSizes + i * 4, f.size, true);
+		view.setUint32(offNames + i * 4, names.get(f.name)!, true);
 		if (complete) view.setUint32(offDisp + i * 4, 0, true);
 	}
 	bytes.set(strings, offStrings);

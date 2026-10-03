@@ -25,7 +25,7 @@ describe("shard migrations", () => {
 				.toArray()
 				.map((r) => r.name)
 		);
-		expect(tables).toEqual(["builds", "releases", "shard_migrations", "versions"]);
+		expect(tables).toEqual(["builds", "crash_counts", "crash_groups", "releases", "reports", "shard_migrations", "versions"]);
 	});
 	it("record each migration once", async () => {
 		await shard("forest-quest").appliedMigrations();

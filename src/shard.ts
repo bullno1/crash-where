@@ -1,5 +1,5 @@
 import { DurableObject } from "cloudflare:workers";
-import { Kysely } from "kysely";
+import { Kysely, sql } from "kysely";
 import { shardMigrations } from "../migrations/shard";
 import type { Env } from "./env";
 import type { DB as ShardSchema } from "./shard.generated";
@@ -33,6 +33,33 @@ export interface ReleaseResult {
 	/** Which rows this call inserted; all false for a repeat of an earlier upload. */
 	created: { version: boolean; build: boolean; release: boolean };
 }
+
+/** A report after the Worker grouped it, ready to count. */
+export interface IngestRequest {
+	reportId: string;
+	version: string;
+	channel: string;
+	/** 0 until the auth route exists. */
+	trust: number;
+	/** Unix seconds. */
+	now: number;
+	group: {
+		fingerprint: string;
+		fault: string;
+		/** JSON of the raw frames the rule saw. */
+		frames: string;
+		message: string | null;
+	};
+}
+
+/**
+ * How a report was received. `unknown` and `expired` describe the
+ * release; `duplicate` is a retry of a counted report; `counted` names
+ * the group the report went to.
+ */
+export type IngestResult =
+	| { outcome: "unknown" | "expired" | "duplicate" }
+	| { outcome: "counted"; groupId: number };
 
 /** Seconds a release keeps accepting reports after the next one on its channel. */
 export const SUPPORT_WINDOW = 21 * 86400;
@@ -142,6 +169,62 @@ export class AppShard extends DurableObject<Env> {
 			created.release = true;
 		}
 		return { created };
+	}
+
+	/**
+	 * Counts a report: refuses one for a release that is unknown or past
+	 * its window, counts a retried report id once, finds or creates the
+	 * group, and adds one to the day's count. Atomic as `registerRelease`.
+	 */
+	async ingest(req: IngestRequest): Promise<IngestResult> {
+		const release = await this.db
+			.selectFrom("releases")
+			.select("supported_until")
+			.where("channel", "=", req.channel)
+			.where("version", "=", req.version)
+			.executeTakeFirst();
+		if (!release) return { outcome: "unknown" };
+		if (release.supported_until !== null && release.supported_until < req.now) return { outcome: "expired" };
+		const seen = await this.db
+			.selectFrom("reports")
+			.select("report_id")
+			.where("report_id", "=", req.reportId)
+			.executeTakeFirst();
+		if (seen) return { outcome: "duplicate" };
+		await this.db.insertInto("reports").values({ report_id: req.reportId, received_at: req.now }).execute();
+
+		const existing = await this.db
+			.selectFrom("crash_groups")
+			.select("id")
+			.where("fingerprint", "=", req.group.fingerprint)
+			.executeTakeFirst();
+		let groupId: number;
+		if (existing) {
+			groupId = existing.id;
+			await this.db.updateTable("crash_groups").set({ last_seen: req.now }).where("id", "=", groupId).execute();
+		} else {
+			const row = await this.db
+				.insertInto("crash_groups")
+				.values({ ...req.group, first_seen: req.now, last_seen: req.now })
+				.returning("id")
+				.executeTakeFirstOrThrow();
+			groupId = row.id;
+		}
+		await this.db
+			.insertInto("crash_counts")
+			.values({
+				group_id: groupId,
+				version: req.version,
+				channel: req.channel,
+				trust: req.trust,
+				day: Math.floor(req.now / 86400),
+				count: 1,
+			})
+			.onConflict((oc) =>
+				oc.columns(["group_id", "version", "channel", "trust", "day"]).doUpdateSet({ count: sql`count + 1` })
+			)
+			.execute();
+		return { outcome: "counted", groupId };
 	}
 
 	/** Names of the migrations this shard has applied, in order. */
