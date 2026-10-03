@@ -179,6 +179,9 @@ addToLibrary({
 		// `stub` where an instance can suspend. Other libraries add theirs.
 		// One marked `watcher` is replaced in the watcher alone.
 		suspending: [],
+		// Handlers for messages from the watcher that another library
+		// answers on the page, by the message's key.
+		page: {},
 
 		// Game.
 		watcher: null,
@@ -271,6 +274,10 @@ addToLibrary({
 				} else if (m['done']) {
 					cwWeb.pending--;
 					Module['cwOnDone']?.(m['done']);
+				} else {
+					for (const k of Object.keys(m)) {
+						cwWeb.page[k]?.(m[k]);
+					}
 				}
 			});
 			watcher.addEventListener('error', (e) => {

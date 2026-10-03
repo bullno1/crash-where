@@ -8,9 +8,10 @@
 #include <stdlib.h>
 #include <string.h>
 
-#include "cw.h"
-#include "cw_host.h"
-#include "cw_http.h"
+#include <cw.h>
+#include <cw_dialog.h>
+#include <cw_host.h>
+#include <cw_http.h>
 
 #if defined(_WIN32)
 #	include <process.h>
@@ -31,6 +32,30 @@ log_to_stderr(cw_log_level_t level, const char* msg) {
 	static const char* const names[] = { "error", "warn", "info", "debug" };
 	fprintf(stderr, "[cw %s] %s\n", names[level], msg);
 }
+
+/* Runs in the watcher, after the game is gone. */
+static cw_consent_t
+ask_player(void* user, const cw_consent_summary_t* summary) {
+	(void)user;
+	static const char* const what[] = { "crashed", "froze", "ended unexpectedly" };
+	char message[256];
+	snprintf(
+		message, sizeof(message),
+		"crashme %s.\nSend %d report%s to the developers?",
+		what[summary->newest_kind], summary->count, summary->count == 1 ? "" : "s"
+	);
+	return cw_dialog_show(&(cw_dialog_desc_t){
+		.title = "crashme",
+		.message = message,
+		.buttons = {
+			{ "Send", CW_CONSENT_ONCE },
+			{ "Always send", CW_CONSENT_ALWAYS },
+			{ "Don't send", CW_CONSENT_ASK },
+		},
+	});
+}
+
+static const cw_consent_dialog_t dialog = { .show = ask_player };
 
 NOINLINE static void
 crash_here(void) {
@@ -62,12 +87,11 @@ main(int argc, char** argv) {
 		.transport = &cw_transport_http,
 		.collect_at_init = &cw_collector_host,
 		.collect_at_report = &cw_collector_host,
+		.consent_dialog = &dialog,
 		.log = log_to_stderr,
 	};
 
 	cw_init(&cfg);
-	/* A real game should ask the player. */
-	cw_consent_set(CW_CONSENT_ALWAYS);
 
 	printf("crashme: game pid %d, mode %s\n", (int)getpid(), mode);
 	fflush(stdout);
