@@ -12,6 +12,12 @@ export interface AppInput {
 	display_name: string;
 }
 
+/** Why an input is unusable, attached to the field at fault. */
+export interface AppError {
+	field: keyof AppInput;
+	message: string;
+}
+
 /** The slug grammar the client enforces at `cw_init`; the table's CHECK repeats it. */
 export const NAME_PATTERN = /^[a-z0-9_-]{1,63}$/;
 
@@ -19,13 +25,15 @@ export const NAME_PATTERN = /^[a-z0-9_-]{1,63}$/;
 export const MAX_DISPLAY_NAME = 100;
 
 /** The reason an input is unusable, or null when it is fine. */
-export function validateApp(input: AppInput): string | null {
+export function validateApp(input: AppInput): AppError | null {
 	if (!NAME_PATTERN.test(input.name)) {
-		return "The name must be 1 to 63 lowercase letters, digits, '-' or '_'.";
+		return { field: "name", message: "The name must be 1 to 63 lowercase letters, digits, '-' or '_'." };
 	}
-	if (input.display_name.length === 0) return "The display name is required.";
+	if (input.display_name.length === 0) {
+		return { field: "display_name", message: "The display name is required." };
+	}
 	if (input.display_name.length > MAX_DISPLAY_NAME) {
-		return `The display name must be at most ${MAX_DISPLAY_NAME} characters.`;
+		return { field: "display_name", message: `The display name must be at most ${MAX_DISPLAY_NAME} characters.` };
 	}
 	return null;
 }
