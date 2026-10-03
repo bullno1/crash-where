@@ -7,8 +7,10 @@ const password = "correct horse battery staple";
 const env = { DB: bindings.DB, SHARD: bindings.SHARD, DASHBOARD_PASSWORD: password };
 const auth = `Basic ${btoa(`alice:${password}`)}`;
 
-async function page(name: string): Promise<Response> {
-	return worker.fetch(new Request(`https://dash.example/dashboard/apps/${name}`, { headers: { Authorization: auth } }), env);
+async function page(name: string, sub = "", accept?: string): Promise<Response> {
+	const headers: Record<string, string> = { Authorization: auth };
+	if (accept !== undefined) headers.Accept = accept;
+	return worker.fetch(new Request(`https://dash.example/dashboard/apps/${name}${sub}`, { headers }), env);
 }
 
 async function addApp(name: string, display: string, disabled: number | null = null): Promise<void> {
@@ -25,10 +27,10 @@ function inShard<T>(name: string, fn: (obj: AppShard) => T | Promise<T>): Promis
 }
 
 describe("app page", () => {
-	it("is 404 for an unknown app", async () => {
-		expect((await page("nobody")).status).toBe(404);
+	it("is 404 for an unknown app, on every page", async () => {
+		for (const sub of ["", "/versions", "/tokens"]) expect((await page("nobody", sub)).status).toBe(404);
 	});
-	it("shows the app's details and an empty versions list", async () => {
+	it("shows the app's details and links its pages, marking the current one", async () => {
 		await addApp("page-empty", "Page <Empty>", 1_750_000_000);
 		const r = await page("page-empty");
 		expect(r.status).toBe(200);
@@ -37,10 +39,18 @@ describe("app page", () => {
 		expect(html).toContain("<code>page-empty</code>");
 		expect(html).toContain("disabled since 2025-06-15");
 		expect(html).toContain("created at 2023-11-14 by bob");
-		expect(html).toContain("No versions yet");
+		expect(html).toContain('<a href="/dashboard/apps/page-empty" aria-current="page">Crashes</a>');
+		expect(html).toContain('<a href="/dashboard/apps/page-empty/versions">Versions</a>');
+		expect(html).toContain('<a href="/dashboard/apps/page-empty/tokens">Upload tokens</a>');
 		expect(html).toContain("No crashes reported yet");
+		expect(html).not.toContain("No versions yet");
+		const versions = await (await page("page-empty", "/versions")).text();
+		expect(versions).toContain("<h1>Page &lt;Empty&gt;</h1>");
+		expect(versions).toContain('<a href="/dashboard/apps/page-empty/versions" aria-current="page">Versions</a>');
+		expect(versions).toContain("No versions yet");
+		expect(versions).not.toContain("No crashes reported yet");
 	});
-	it("lists crashes most recently seen first, named by fault, frames and message", async () => {
+	it("lists crashes most recently seen first, named by fault, first frame and message", async () => {
 		await addApp("page-crashes", "Page Crashes");
 		await inShard("page-crashes", async (obj) => {
 			await obj.db.insertInto("versions").values({ version: "1.0.0", created_at: 1 }).execute();
@@ -69,7 +79,8 @@ describe("app page", () => {
 		});
 		const html = await (await page("page-crashes")).text();
 		expect(html).toContain("<td>abort in main: tex != NULL</td>");
-		expect(html).toContain("<td>memory in copy_mesh, from load_level</td>\n<td>7</td>");
+		expect(html).toContain("<td>memory in copy_mesh…</td>\n<td>7</td>");
+		expect(html).not.toContain("from load_level");
 		expect(html.indexOf("abort in main")).toBeLessThan(html.indexOf("memory in copy_mesh"));
 		expect(html).toContain("<td>2025-06-15</td>");
 	});
@@ -100,14 +111,14 @@ describe("app page", () => {
 				])
 				.execute();
 		});
-		const html = await (await page("page-full")).text();
+		const html = await (await page("page-full", "/versions")).text();
 		expect(html.indexOf("<code>1.1.0</code>")).toBeLessThan(html.indexOf("<code>1.0.0</code>"));
 		expect(html).toContain("beta <small>current</small>");
 		expect(html).toContain("stable <small>until 2025-06-15</small>");
 		expect(html).toContain("<code>lin2</code>");
 		expect(html.indexOf("<code>lin2</code>")).toBeLessThan(html.indexOf("<code>win2</code>"));
 	});
-	it("serves the same data as JSON when asked", async () => {
+	it("serves each page's data as JSON when asked", async () => {
 		await addApp("page-json", "Page JSON");
 		await inShard("page-json", async (obj) => {
 			await obj.db.insertInto("versions").values({ version: "2.0.0", created_at: 1 }).execute();
@@ -127,30 +138,37 @@ describe("app page", () => {
 		await bindings.DB.prepare(
 			"INSERT INTO upload_tokens (app_id, hash, label, created_at, created_by) SELECT id, 'h', 'ci', 3, 'bob' FROM apps WHERE name = 'page-json'"
 		).run();
-		const r = await worker.fetch(
-			new Request("https://dash.example/dashboard/apps/page-json", { headers: { Authorization: auth, Accept: "application/json" } }), env
-		);
-		expect(r.status).toBe(200);
-		expect(r.headers.get("Content-Type")).toMatch(/^application\/json/);
-		expect(r.headers.get("Vary")).toBe("Accept");
-		const data = await r.json() as Record<string, unknown>;
-		expect(data.app).toMatchObject({ name: "page-json", display_name: "Page JSON", disabled_at: null });
-		expect(data.versions).toEqual([
-			{ version: "2.0.0", created_at: 1, channels: [{ channel: "stable", released_at: 1, supported_until: null }], builds: [] },
-		]);
-		expect(data.crashes).toEqual([
-			{ id: 7, title: "memory in tick", fault: "memory", message: null, frames: [{ module: "game", name: "tick" }], count: 2, first_seen: 5, last_seen: 6 },
-		]);
-		expect(data.tokens).toEqual([
-			{ id: expect.any(Number), label: "ci", created_at: 3, created_by: "bob", last_used_at: null, revoked_at: null },
-		]);
+		const json = async (sub: string) => {
+			const r = await page("page-json", sub, "application/json");
+			expect(r.status).toBe(200);
+			expect(r.headers.get("Content-Type")).toMatch(/^application\/json/);
+			expect(r.headers.get("Vary")).toBe("Accept");
+			const data = await r.json() as Record<string, unknown>;
+			expect(data.app).toMatchObject({ name: "page-json", display_name: "Page JSON", disabled_at: null });
+			return data;
+		};
+		expect(await (await page("page-json")).text()).toContain("<td>memory in tick</td>");
+		expect(await json("")).toEqual({
+			app: expect.any(Object),
+			crashes: [
+				{ id: 7, title: "memory in tick", fault: "memory", message: null, frames: [{ module: "game", name: "tick" }], count: 2, first_seen: 5, last_seen: 6 },
+			],
+		});
+		expect(await json("/versions")).toEqual({
+			app: expect.any(Object),
+			versions: [
+				{ version: "2.0.0", created_at: 1, channels: [{ channel: "stable", released_at: 1, supported_until: null }], builds: [] },
+			],
+		});
+		expect(await json("/tokens")).toEqual({
+			app: expect.any(Object),
+			tokens: [{ id: expect.any(Number), label: "ci", created_at: 3, created_by: "bob", last_used_at: null, revoked_at: null }],
+		});
 	});
 	it("follows the Accept header's quality, then its order", async () => {
 		await addApp("page-any", "Page Any");
 		const type = async (accept: string) => {
-			const r = await worker.fetch(
-				new Request("https://dash.example/dashboard/apps/page-any", { headers: { Authorization: auth, Accept: accept } }), env
-			);
+			const r = await page("page-any", "", accept);
 			expect(r.headers.get("Vary")).toBe("Accept");
 			return r.headers.get("Content-Type")!.split(";")[0];
 		};

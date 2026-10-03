@@ -167,7 +167,7 @@ function tokensSection(app: AppRow, tokens: TokenSummary[], fresh: string | null
 <td>${t.created_by}</td>
 <td>${t.last_used_at === null ? html`<small>never</small>` : day(t.last_used_at)}</td>
 <td>${t.revoked_at === null
-	? html`<form method="post" action="/dashboard/apps/${app.name}/tokens/${t.id}/revoke"><button class="secondary">Revoke</button></form>`
+	? html`<form method="post" action="${tokensPath(app.name)}/${t.id}/revoke"><button class="secondary">Revoke</button></form>`
 	: html`<small>revoked ${day(t.revoked_at)}</small>`}</td>
 </tr>`
 	);
@@ -184,7 +184,7 @@ ${fresh === null
 	? ""
 	: html`<article><p>New token, shown only this once:</p><pre><code>${fresh}</code></pre></article>`}
 ${table}
-<form method="post" action="/dashboard/apps/${app.name}/tokens">
+<form method="post" action="${tokensPath(app.name)}">
 <label>Label
 <input name="label" required maxlength="${MAX_LABEL}" placeholder="GitHub Actions">
 </label>
@@ -212,13 +212,17 @@ function summarizeCrash(g: GroupSummary): CrashSummary {
 	return { ...g, frames, title: groupTitle(g.fault, frames, g.message, skipList) };
 }
 
-/** The crashes of an app, most recently seen first, each named by its fault and frames. */
+/**
+ * The crashes of an app, most recently seen first. The overview names each
+ * by its fault and first frame, with an ellipsis standing for the rest; the
+ * JSON title carries the caller too.
+ */
 function crashesSection(crashes: CrashSummary[]): Page {
 	if (crashes.length === 0) return html`<h2>Crashes</h2>
 <p>No crashes reported yet.</p>`;
 	const rows = crashes.map(
 		(g) => html`<tr>
-<td>${g.title}</td>
+<td>${groupTitle(g.fault, g.frames, g.message, skipList, true)}</td>
 <td>${g.count}</td>
 <td>${day(g.first_seen)}</td>
 <td>${day(g.last_seen)}</td>
@@ -231,9 +235,10 @@ function crashesSection(crashes: CrashSummary[]): Page {
 </table>`;
 }
 
-function appPage(
-	who: string, app: AppRow, versions: VersionSummary[], crashes: CrashSummary[], tokens: TokenSummary[], fresh: string | null
-): Page {
+/** The versions of an app, newest first, with the channels they are released on and their builds. */
+function versionsSection(versions: VersionSummary[]): Page {
+	if (versions.length === 0) return html`<h2>Versions</h2>
+<p>No versions yet. The first symbol upload for this app registers one.</p>`;
 	const rows = versions.map(
 		(v) => html`<tr>
 <td><code>${v.version}</code></td>
@@ -248,52 +253,86 @@ function appPage(
 <td>${day(v.created_at)}</td>
 </tr>`
 	);
-	const table =
-		versions.length === 0
-			? html`<p>No versions yet. The first symbol upload for this app registers one.</p>`
-			: html`<table>
+	return html`<h2>Versions</h2>
+<table>
 <thead><tr><th>Version</th><th>Channels</th><th>Builds</th><th>Created</th></tr></thead>
 <tbody>${rows}</tbody>
 </table>`;
-	return layout(
-		app.display_name, who,
-		html`<h1>${app.display_name}</h1>
-<p><code>${app.name}</code> · ${app.disabled_at === null ? "active" : `disabled since ${day(app.disabled_at)}`} · created at ${day(app.created_at)} by ${app.created_by}</p>
-${crashesSection(crashes)}
-<h2>Versions</h2>
-${table}
-${tokensSection(app, tokens, fresh)}`
-	);
 }
-
-/**
- * A token just minted reaches the page that shows it through this cookie,
- * scoped to the app's page and cleared on the first read, so that it enters
- * neither a URL nor the browsing history and the form post can redirect
- * like every other.
- */
-const FRESH_TOKEN_COOKIE = "cw_new_token";
-const FRESH_TOKEN_SECONDS = 60;
 
 function appPath(name: string): string {
 	return `/dashboard/apps/${name}`;
 }
 
+function tokensPath(name: string): string {
+	return `${appPath(name)}/tokens`;
+}
+
+/** The pages of an app, in the order the sub-navigation lists them. */
+const APP_PAGES = [
+	{ key: "crashes", label: "Crashes", path: appPath },
+	{ key: "versions", label: "Versions", path: (name: string) => `${appPath(name)}/versions` },
+	{ key: "tokens", label: "Upload tokens", path: tokensPath },
+] as const;
+
+type AppPageKey = (typeof APP_PAGES)[number]["key"];
+
+/** One page of an app: its heading and details, the links to its other pages with this one marked, then the section. */
+function appPage(who: string, app: AppRow, current: AppPageKey, section: Page): Page {
+	const links = APP_PAGES.map(
+		(p) => html`<li><a href="${p.path(app.name)}"${p.key === current ? html` aria-current="page"` : ""}>${p.label}</a></li>`
+	);
+	const label = APP_PAGES.find((p) => p.key === current)!.label;
+	return layout(
+		current === "crashes" ? app.display_name : `${label} · ${app.display_name}`, who,
+		html`<h1>${app.display_name}</h1>
+<p><code>${app.name}</code> · ${app.disabled_at === null ? "active" : `disabled since ${day(app.disabled_at)}`} · created at ${day(app.created_at)} by ${app.created_by}</p>
+<nav><ul>${links}</ul></nav>
+${section}`
+	);
+}
+
+/**
+ * A token just minted reaches the page that shows it through this cookie,
+ * scoped to the app's tokens page and cleared on the first read, so that it
+ * enters neither a URL nor the browsing history and the form post can
+ * redirect like every other.
+ */
+const FRESH_TOKEN_COOKIE = "cw_new_token";
+const FRESH_TOKEN_SECONDS = 60;
+
 dashboard.get("/apps/:name", async (c) => {
+	const app = await getApp(c.get("db"), c.req.param("name"));
+	if (!app) return c.text("No such app", 404);
+	const shard = c.env.SHARD.get(c.env.SHARD.idFromName(app.name));
+	const crashes = (await shard.listGroups()).map(summarizeCrash);
+	if (wantsJson(c)) return c.json({ app, crashes });
 	const who = c.get("identity");
+	return render(c, appPage(who.email ?? who.sub, app, "crashes", crashesSection(crashes)));
+});
+
+dashboard.get("/apps/:name/versions", async (c) => {
 	const app = await getApp(c.get("db"), c.req.param("name"));
 	if (!app) return c.text("No such app", 404);
 	const shard = c.env.SHARD.get(c.env.SHARD.idFromName(app.name));
 	const versions = await shard.listVersions();
-	const crashes = (await shard.listGroups()).map(summarizeCrash);
-	const tokens = (await listTokens(c.get("db"), app.id)).map(summarizeToken);
-	if (wantsJson(c)) return c.json({ app, versions, crashes, tokens });
-	const fresh = getCookie(c, FRESH_TOKEN_COOKIE) ?? null;
-	if (fresh !== null) deleteCookie(c, FRESH_TOKEN_COOKIE, { path: appPath(app.name), secure: true });
-	return render(c, appPage(who.email ?? who.sub, app, versions, crashes, tokens, fresh));
+	if (wantsJson(c)) return c.json({ app, versions });
+	const who = c.get("identity");
+	return render(c, appPage(who.email ?? who.sub, app, "versions", versionsSection(versions)));
 });
 
-/** A browser sees the new token once on the app page; a JSON client gets it in the reply. */
+dashboard.get("/apps/:name/tokens", async (c) => {
+	const app = await getApp(c.get("db"), c.req.param("name"));
+	if (!app) return c.text("No such app", 404);
+	const tokens = (await listTokens(c.get("db"), app.id)).map(summarizeToken);
+	if (wantsJson(c)) return c.json({ app, tokens });
+	const fresh = getCookie(c, FRESH_TOKEN_COOKIE) ?? null;
+	if (fresh !== null) deleteCookie(c, FRESH_TOKEN_COOKIE, { path: tokensPath(app.name), secure: true });
+	const who = c.get("identity");
+	return render(c, appPage(who.email ?? who.sub, app, "tokens", tokensSection(app, tokens, fresh)));
+});
+
+/** A browser sees the new token once on the tokens page; a JSON client gets it in the reply. */
 dashboard.post("/apps/:name/tokens", async (c) => {
 	const app = await getApp(c.get("db"), c.req.param("name"));
 	if (!app) return c.text("No such app", 404);
@@ -303,9 +342,9 @@ dashboard.post("/apps/:name/tokens", async (c) => {
 	const { token, row } = await createToken(c.get("db"), app.id, label, c.get("identity"), Math.floor(Date.now() / 1000));
 	if (wantsJson(c)) return c.json({ token, ...summarizeToken(row) }, 201);
 	setCookie(c, FRESH_TOKEN_COOKIE, token, {
-		path: appPath(app.name), httpOnly: true, secure: true, sameSite: "Strict", maxAge: FRESH_TOKEN_SECONDS,
+		path: tokensPath(app.name), httpOnly: true, secure: true, sameSite: "Strict", maxAge: FRESH_TOKEN_SECONDS,
 	});
-	return c.redirect(appPath(app.name), 303);
+	return c.redirect(tokensPath(app.name), 303);
 });
 
 dashboard.post("/apps/:name/tokens/:id/revoke", async (c) => {
@@ -313,5 +352,5 @@ dashboard.post("/apps/:name/tokens/:id/revoke", async (c) => {
 	if (!app) return c.text("No such app", 404);
 	const revoked = await revokeToken(c.get("db"), app.id, Number(c.req.param("id")), Math.floor(Date.now() / 1000));
 	if (wantsJson(c)) return c.json({ revoked }, revoked ? 200 : 404);
-	return c.redirect(appPath(app.name), 303);
+	return c.redirect(tokensPath(app.name), 303);
 });
