@@ -104,3 +104,23 @@ jobs:
       - name: Build and test
         shell: cmd
         run: cmd\msvc\test.bat
+
+  collector:
+    name: collector (check)
+    runs-on: ubuntu-24.04
+    defaults:
+      run:
+        working-directory: collector
+    env:
+      WRANGLER_SEND_METRICS: "false"
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+          cache: npm
+          cache-dependency-path: collector/package-lock.json
+      - run: npm ci
+      # Type check, lint, and verify that the generated database types
+      # match the migrations; the last step applies them to a local D1.
+      - run: npm run check
