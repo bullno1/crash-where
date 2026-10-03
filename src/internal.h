@@ -78,6 +78,20 @@ typedef struct {
 } cw_env_slot_t;
 
 /**
+ * What cw_abort() recorded before calling `abort()`.
+ *
+ * `state` is a cw_crash_state_t; the first caller owns the slot. The
+ * envelope writer applies it to the crash of thread `tid`, or to the
+ * abnormal exit of a game whose abort went unreported.
+ */
+typedef struct {
+	_Atomic uint32_t state;
+	uint32_t tid;
+	char type[32];             /**< Empty keeps the name of a plain abort. */
+	char msg[128];
+} cw_abort_t;
+
+/**
  * Cross-platform head of the shared region.
  */
 typedef struct {
@@ -90,6 +104,7 @@ typedef struct {
 	cw_crumb_t crumbs[CW_CRUMB_COUNT];
 	cw_state_slot_t state[CW_STATE_COUNT];
 	cw_env_slot_t env[CW_ENV_COUNT];
+	cw_abort_t abort;
 } cw_shared_t;
 
 /**

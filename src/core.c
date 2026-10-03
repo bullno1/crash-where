@@ -356,6 +356,23 @@ cw_append_log(const char* name, const void* rec, size_t len) {
 	cw_log(CW_LOG_WARN, "log ring '%s' (%zu bytes) ignored, not implemented", name, len);
 }
 
+CW_NORETURN void
+cw_abort(const char* type, const char* msg) {
+	/* What a developer sees where no report is written: under a debugger or CW_DISABLE. */
+	cw_log(CW_LOG_ERROR, "%s: %s", type != NULL ? type : "abort", msg != NULL ? msg : "");
+	if (cw_ctx.active) {
+		cw_abort_t* slot = &cw_ctx.shared->abort;
+		uint32_t expected = CW_CRASH_IDLE;
+		if (atomic_compare_exchange_strong(&slot->state, &expected, CW_CRASH_WRITING)) {
+			slot->tid = cw_platform_tid();
+			copy_str(slot->type, sizeof(slot->type), type);
+			copy_str(slot->msg, sizeof(slot->msg), msg);
+			atomic_store_explicit(&slot->state, CW_CRASH_DONE, memory_order_release);
+		}
+	}
+	abort();
+}
+
 void
 cw_shutdown(void) {
 	if (!cw_ctx.active) {

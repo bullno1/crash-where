@@ -30,6 +30,13 @@
 extern "C" {
 #endif
 
+/** Marks a function that never returns. */
+#ifdef __cplusplus
+#	define CW_NORETURN [[noreturn]]
+#else
+#	define CW_NORETURN _Noreturn
+#endif
+
 /**
  * Result of a transport call or an upload step.
  *
@@ -459,6 +466,22 @@ cw_set_snapshot(const char* name, const void* data, size_t len);
  */
 void
 cw_append_log(const char* name, const void* rec, size_t len);
+
+/**
+ * Report a fatal failure, such as a failed assertion, and end the process.
+ *
+ * Reported as a crash named `type` carrying `msg`.
+ * The stack identifies the caller, so `msg` needs no file or line.
+ *
+ * Safe from any thread.
+ *
+ * @param type  Short uppercase tag such as "ASSERT", truncated to 31
+ *              bytes. `NULL` keeps the name of a plain abort.
+ * @param msg   What went wrong, such as the failed expression, truncated
+ *              to 127 bytes. `NULL` means no message.
+ */
+CW_NORETURN void
+cw_abort(const char* type, const char* msg);
 
 /**
  * Report a clean shutdown.

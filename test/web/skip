@@ -16,6 +16,10 @@ crash/thread_null_write
 crash/exit_without_shutdown
 consent/summary_counts_waiting_reports
 
+# Expects an abort that no handler reported. On the web abort() traps
+# whatever signal() was told, so the crash is reported with frames.
+crash/cw_abort_unhandled
+
 # A page cannot be put under a debugger from inside, nor tell that it is
 # under one.
 crash/debugger

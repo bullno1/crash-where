@@ -122,6 +122,18 @@ CW_SCENARIO(abort) {
 	abort();
 }
 
+CW_SCENARIO(cw_abort) {
+	cw_set_state("mode", "cw_abort");
+	cw_abort("ASSERT", "tick > 0");
+}
+
+/* A displaced abort handler lets abort() end the process unreported. */
+CW_SCENARIO(cw_abort_unhandled) {
+	cw_set_state("mode", "cw_abort_unhandled");
+	signal(SIGABRT, SIG_DFL);
+	cw_abort("ASSERT", "tick > 0");
+}
+
 CW_SCENARIO(stack_overflow) {
 	cw_set_state("mode", "stack_overflow");
 	sink = recurse(0);
@@ -299,6 +311,34 @@ BTEST(crash, abort) {
 	yyjson_doc* ev = run->events[0];
 	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), TEST_EXC_ABORT) == 0);
 	BTEST_EXPECT_RELATION("%zu", yyjson_arr_size(test_json_get(ev, "/envelope/frames")), >=, 1);
+}
+
+BTEST(crash, cw_abort) {
+	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(cw_abort));
+	BTEST_ASSERT(run != NULL);
+	BTEST_EXPECT(run->exit.signaled);
+	BTEST_EXPECT_EQUAL("%d", run->exit.code, SIGABRT);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	yyjson_doc* ev = run->events[0];
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), "ASSERT") == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/message_raw"), "tick > 0") == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/message_norm"), "tick > <N>") == 0);
+	BTEST_EXPECT_RELATION("%zu", yyjson_arr_size(test_json_get(ev, "/envelope/frames")), >=, 1);
+}
+
+/**
+ * The message survives an abort no handler reported; it rides on the
+ * abnormal-exit report. How such an abort ends differs per C library,
+ * a signal or a plain exit, so only the report is checked.
+ */
+BTEST(crash, cw_abort_unhandled) {
+	const test_run_t* run = RUN_SCENARIO(SCENARIO_REF(cw_abort_unhandled));
+	BTEST_ASSERT(run != NULL);
+	BTEST_ASSERT_EQUAL("%d", run->num_events, 1);
+	yyjson_doc* ev = run->events[0];
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/type"), "ASSERT") == 0);
+	BTEST_EXPECT(strcmp(test_json_str(ev, "/envelope/exception/message_raw"), "tick > 0") == 0);
+	BTEST_EXPECT_EQUAL("%zu", yyjson_arr_size(test_json_get(ev, "/envelope/frames")), (size_t)0);
 }
 
 /** An error thrown by the host through C frames is a crash: named frame first, C caller below. */

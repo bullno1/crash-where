@@ -9,6 +9,7 @@
  */
 #include <ctype.h>
 #include <inttypes.h>
+#include <stdatomic.h>
 #include <stdbool.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -249,6 +250,20 @@ put_frames(FILE* f, const cw_crash_info_t* info) {
 	fputs("]", f);
 }
 
+/**
+ * Whether the report describes what cw_abort() recorded: the crash of
+ * the thread that called it, or the abnormal exit of a game whose
+ * abort no handler reported.
+ */
+static bool
+abort_applies(const cw_crash_info_t* info, const cw_abort_t* slot) {
+	if (atomic_load_explicit(&slot->state, memory_order_acquire) != CW_CRASH_DONE) {
+		return false;
+	}
+	return info->kind == CW_REPORT_ABNORMAL_EXIT
+		|| (info->kind == CW_REPORT_CRASH && info->tid == slot->tid);
+}
+
 bool
 cw_write_envelope(
 	const char* report_dir, const cw_crash_info_t* info,
@@ -293,11 +308,23 @@ cw_write_envelope(
 	fputs("},\"env\":", f);
 	put_env(f, shared);
 	fputs(",\"exception\":{\"type\":", f);
-	put_str(f, info->type, sizeof(info->type));
+	const char* type = info->type;
+	size_t type_cap = sizeof(info->type);
+	const char* message = info->message_raw;
+	size_t message_cap = sizeof(info->message_raw);
+	if (abort_applies(info, &shared->abort)) {
+		if (shared->abort.type[0] != '\0') {
+			type = shared->abort.type;
+			type_cap = sizeof(shared->abort.type);
+		}
+		message = shared->abort.msg;
+		message_cap = sizeof(shared->abort.msg);
+	}
+	put_str(f, type, type_cap);
 	fputs(",\"message_norm\":", f);
-	put_norm(f, info->message_raw, sizeof(info->message_raw));
+	put_norm(f, message, message_cap);
 	fputs(",\"message_raw\":", f);
-	put_str(f, info->message_raw, sizeof(info->message_raw));
+	put_str(f, message, message_cap);
 	fprintf(f, ",\"thread\":%" PRIu32 "},\"modules\":", info->tid);
 	put_modules(f, info);
 	fputs(",\"frames\":", f);
