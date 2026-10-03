@@ -1,8 +1,9 @@
+import { env as bindings } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import worker from "../src/index";
 
 const password = "correct horse battery staple";
-const env = { DASHBOARD_PASSWORD: password };
+const env = { DB: bindings.DB, DASHBOARD_PASSWORD: password };
 
 function withBasic(user: string, pass: string): Request {
 	const token = btoa(String.fromCharCode(...new TextEncoder().encode(`${user}:${pass}`)));
@@ -26,15 +27,15 @@ describe("password login", () => {
 	it("admits the right password and names the user", async () => {
 		const r = await worker.fetch(withBasic("alice", password), env);
 		expect(r.status).toBe(200);
-		expect(await r.text()).toBe("Hello alice");
+		expect(await r.text()).toContain("Signed in as alice");
 	});
 	it("calls an empty user admin", async () => {
-		expect(await (await worker.fetch(withBasic("", password), env)).text()).toBe("Hello admin");
+		expect(await (await worker.fetch(withBasic("", password), env)).text()).toContain("Signed in as admin");
 	});
 	it("handles a non-ASCII password", async () => {
 		const pw = "pässwörd mit Umlauten!";
-		expect((await worker.fetch(withBasic("a", pw), { DASHBOARD_PASSWORD: pw })).status).toBe(200);
-		expect((await worker.fetch(withBasic("a", pw.toUpperCase()), { DASHBOARD_PASSWORD: pw })).status).toBe(401);
+		expect((await worker.fetch(withBasic("a", pw), { ...env, DASHBOARD_PASSWORD: pw })).status).toBe(200);
+		expect((await worker.fetch(withBasic("a", pw.toUpperCase()), { ...env, DASHBOARD_PASSWORD: pw })).status).toBe(401);
 	});
 	it("rejects malformed credentials", async () => {
 		const r = await worker.fetch(

@@ -1,6 +1,17 @@
 name = "crash-where-collector"
 main = "src/index.ts"
-compatibility_date = "2026-10-01"
+# The newest date the test runtime in @cloudflare/vitest-pool-workers accepts;
+# raise it when that package catches up.
+compatibility_date = "2026-08-22"
 # Deploys leave values set in the Workers dashboard in place, so the Access
 # values survive whether they were entered as secrets or as plain vars.
 keep_vars = true
+
+# The index of apps and crash metadata. No database_id: `wrangler deploy`
+# provisions the database on first use, and the Deploy button writes the id
+# of the one it created. Migrations live in migrations/ and are applied by
+# `npm run deploy` and `npm run dev`.
+[[d1_databases]]
+binding = "DB"
+database_name = "crash-where"
+migrations_dir = "migrations"

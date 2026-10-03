@@ -3,25 +3,33 @@
   "version": "0.0.0",
   "private": true,
   "scripts": {
-    "dev": "wrangler dev",
+    "dev": "wrangler d1 migrations apply DB --local && wrangler dev",
     "login": "sh scripts/login.sh",
-    "deploy": "wrangler deploy",
-    "check": "tsc --noEmit",
+    "deploy": "wrangler d1 migrations apply DB --remote && wrangler deploy",
+    "db:types": "sh scripts/db-types.sh",
+    "check": "tsc --noEmit && sh scripts/db-types.sh --verify",
     "test": "vitest run"
   },
   "dependencies": {
     "hono": "^4.13.12",
-    "jose": "^6.0.0"
+    "jose": "^6.0.0",
+    "kysely": "^0.29.6",
+    "kysely-d1": "^0.4.0"
   },
   "devDependencies": {
+    "@cloudflare/vitest-pool-workers": "^0.22.0",
     "@cloudflare/workers-types": "^5.0.0",
+    "better-sqlite3": "^12.11.1",
+    "kysely-codegen": "^0.20.0",
     "typescript": "^5.6.0",
-    "vitest": "^3.0.0",
+    "vitest": "^4.1.11",
     "wrangler": "^4.0.0"
   },
   "allowScripts": {
+    "esbuild@0.28.1": true,
+    "workerd@1.20260815.1": true,
     "workerd@1.20261001.1": true,
-    "esbuild@0.28.1": true
+    "better-sqlite3@12.11.1": true
   },
   "cloudflare": {
     "bindings": {
