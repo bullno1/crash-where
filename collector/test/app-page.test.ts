@@ -38,6 +38,40 @@ describe("app page", () => {
 		expect(html).toContain("disabled since 2025-06-15");
 		expect(html).toContain("created at 2023-11-14 by bob");
 		expect(html).toContain("No versions yet");
+		expect(html).toContain("No crashes reported yet");
+	});
+	it("lists crashes most recently seen first, named by fault, frames and message", async () => {
+		await addApp("page-crashes", "Page Crashes");
+		await inShard("page-crashes", async (obj) => {
+			await obj.db.insertInto("versions").values({ version: "1.0.0", created_at: 1 }).execute();
+			await obj.db
+				.insertInto("crash_groups")
+				.values([
+					{
+						id: 1, fingerprint: "a".repeat(16), fault: "memory", message: null, first_seen: 1_700_000_000, last_seen: 1_700_000_000,
+						frames: JSON.stringify([
+							{ module: "libc.so.6", name: "memcpy" }, { module: "game", name: "copy_mesh" }, { module: "game", name: "load_level" },
+						]),
+					},
+					{
+						id: 2, fingerprint: "b".repeat(16), fault: "abort", message: "tex != NULL", first_seen: 1_700_000_000, last_seen: 1_750_000_000,
+						frames: JSON.stringify([{ module: "game", name: "cw_abort" }, { module: "game", name: "main" }]),
+					},
+				])
+				.execute();
+			await obj.db
+				.insertInto("crash_counts")
+				.values([
+					{ group_id: 1, version: "1.0.0", channel: "stable", trust: 0, day: 19_000, count: 3 },
+					{ group_id: 1, version: "1.0.0", channel: "beta", trust: 0, day: 19_001, count: 4 },
+				])
+				.execute();
+		});
+		const html = await (await page("page-crashes")).text();
+		expect(html).toContain("<td>abort in main: tex != NULL</td>");
+		expect(html).toContain("<td>memory in copy_mesh, from load_level</td>\n<td>7</td>");
+		expect(html.indexOf("abort in main")).toBeLessThan(html.indexOf("memory in copy_mesh"));
+		expect(html).toContain("<td>2025-06-15</td>");
 	});
 	it("lists versions newest first with their channels and builds", async () => {
 		await addApp("page-full", "Page Full");

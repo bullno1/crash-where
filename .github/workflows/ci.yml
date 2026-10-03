@@ -33,12 +33,17 @@ jobs:
           make-default: false
       - name: Build and test
         run: cmd/${{ matrix.toolchain }}/test
-      - name: Keep the symbol tool for the end-to-end job
+      - name: Keep the symbol tool and the sample game for the end-to-end job
         if: matrix.toolchain == 'gcc'
         uses: actions/upload-artifact@v4
         with:
           name: cwsym-gcc
-          path: bin/gcc/RelWithDebInfo/cwsym
+          # The sample's debug file travels with it: the tool reads the
+          # symbols through its debug link.
+          path: |
+            bin/gcc/RelWithDebInfo/cwsym
+            bin/gcc/RelWithDebInfo/crashme
+            bin/gcc/RelWithDebInfo/crashme.debug
           if-no-files-found: error
           # Only the e2e job of this run reads it; one day is the minimum.
           retention-days: 1
@@ -136,7 +141,7 @@ jobs:
       - run: npm test
 
   e2e:
-    name: cwsym upload (end to end)
+    name: upload and report (end to end)
     runs-on: ubuntu-24.04
     # Runs only once both halves passed on their own, so a failure here is
     # the seam between them. `linux` is the matrix job, so this waits for
@@ -164,5 +169,6 @@ jobs:
           name: cwsym-gcc
           path: bin/gcc/RelWithDebInfo
       # Artifacts do not keep permissions.
-      - run: chmod +x bin/gcc/RelWithDebInfo/cwsym
+      - run: chmod +x bin/gcc/RelWithDebInfo/cwsym bin/gcc/RelWithDebInfo/crashme
       - run: test/e2e/upload.sh bin/gcc/RelWithDebInfo/cwsym
+      - run: test/e2e/report.sh bin/gcc/RelWithDebInfo/crashme bin/gcc/RelWithDebInfo/cwsym

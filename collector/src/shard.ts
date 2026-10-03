@@ -61,6 +61,19 @@ export type IngestResult =
 	| { outcome: "unknown" | "expired" | "duplicate" }
 	| { outcome: "counted"; groupId: number };
 
+/** A group with its total, for the app page. */
+export interface GroupSummary {
+	id: number;
+	fault: string;
+	/** JSON of the raw frames, as stored. */
+	frames: string;
+	message: string | null;
+	first_seen: number;
+	last_seen: number;
+	/** Reports counted, over every version, channel, trust level and day. */
+	count: number;
+}
+
 /** Seconds a release keeps accepting reports after the next one on its channel. */
 export const SUPPORT_WINDOW = 21 * 86400;
 
@@ -225,6 +238,23 @@ export class AppShard extends DurableObject<Env> {
 			)
 			.execute();
 		return { outcome: "counted", groupId };
+	}
+
+	/** Every group, most recently seen first, with its total count. */
+	async listGroups(): Promise<GroupSummary[]> {
+		const rows = await this.db
+			.selectFrom("crash_groups")
+			.leftJoin("crash_counts", "crash_counts.group_id", "crash_groups.id")
+			.select([
+				"crash_groups.id", "crash_groups.fault", "crash_groups.frames", "crash_groups.message",
+				"crash_groups.first_seen", "crash_groups.last_seen",
+				(eb) => eb.fn.coalesce(eb.fn.sum<number>("crash_counts.count"), sql<number>`0`).as("count"),
+			])
+			.groupBy("crash_groups.id")
+			.orderBy("crash_groups.last_seen", "desc")
+			.orderBy("count", "desc")
+			.execute();
+		return rows.map((r) => ({ ...r, count: Number(r.count) }));
 	}
 
 	/** Names of the migrations this shard has applied, in order. */

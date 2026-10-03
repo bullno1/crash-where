@@ -67,8 +67,8 @@ export type SkipList = { module: RegExp; name: RegExp | null }[];
 
 /**
  * The frames every game shares as noise: the operating system and the
- * language runtimes, the allocator, the standard library and the crash
- * library's own handler.
+ * language runtimes, the program entry below `main`, the allocator, the
+ * standard library and the crash library's own handler.
  */
 export const DEFAULT_SKIP_LIST = `
 # Windows
@@ -99,6 +99,12 @@ libdyld.dylib
 libobjc.*.dylib
 libc++.*.dylib
 libc++abi.dylib
+# the program entry below main, in the executable itself
+*!_start
+*!__libc_start*
+*!*CRTStartup
+*!__scrt_common_main*
+*!invoke_main
 # the crash library, the C++ standard library and the allocator in any module
 *!cw_*
 *!std::*
@@ -161,4 +167,18 @@ export async function fingerprint(fault: string, tokens: string[], message: stri
 	const input = `g${GROUPING}\n${fault}\n${tokens.join("\n")}\n${message ?? ""}`;
 	const digest = await crypto.subtle.digest("SHA-256", new TextEncoder().encode(input));
 	return hex(new Uint8Array(digest)).slice(0, 16);
+}
+
+/**
+ * The line a group is listed under, from its stored frames under the
+ * current rule: the fault, the first kept frame and its caller, and the
+ * message when the fault hashes one.
+ */
+export function groupTitle(fault: string, frames: RawFrame[], message: string | null, skip: SkipList): string {
+	const tokens = selectFrames(frames, skip);
+	let title = fault;
+	if (tokens.length > 0) title += ` in ${tokens[0]}`;
+	if (tokens.length > 1) title += `, from ${tokens[1]}`;
+	if (message !== null && message !== "") title += `: ${message}`;
+	return title;
 }

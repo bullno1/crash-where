@@ -2,7 +2,7 @@
  * @file crashme.c
  * Test program: initialize the library, then crash on request.
  *
- * Usage: crashme [null|abort|assert|report|hang|none] [report_dir]
+ * Usage: crashme [null|abort|assert|report|hang|none] [report_dir] [endpoint]
  */
 #include <stdio.h>
 #include <stdlib.h>
@@ -90,7 +90,7 @@ main(int argc, char** argv) {
 		.app = "crashme",
 		.version = "0.0.1",
 		.channel = "dev",
-		.endpoint = "http://localhost:8080",
+		.endpoint = argc > 3 ? argv[3] : "http://localhost:8787",
 		.report_dir = argc > 2 ? argv[2] : NULL,
 		.transport = &cw_transport_http,
 		.collect_at_init = &cw_collector_host,

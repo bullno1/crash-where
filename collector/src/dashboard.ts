@@ -8,7 +8,9 @@ import { requireLogin } from "./auth";
 import type { App } from "./env";
 import { layout } from "./layout";
 import { type Page, render } from "./page";
-import type { VersionSummary } from "./shard";
+import { compileSkipList, DEFAULT_SKIP_LIST, groupTitle } from "./grouping";
+import type { GroupSummary, VersionSummary } from "./shard";
+import type { RawFrame } from "./symbols";
 import { createToken, listTokens, MAX_LABEL, revokeToken, type TokenRow, validLabel } from "./tokens";
 
 /**
@@ -139,7 +141,30 @@ ${table}
 </form>`;
 }
 
-function appPage(who: string, app: AppRow, versions: VersionSummary[], tokens: TokenRow[], fresh: string | null): Page {
+const skipList = compileSkipList(DEFAULT_SKIP_LIST);
+
+/** The crashes of an app, most recently seen first, each named by its fault and frames. */
+function crashesSection(groups: GroupSummary[]): Page {
+	if (groups.length === 0) return html`<h2>Crashes</h2>
+<p>No crashes reported yet.</p>`;
+	const rows = groups.map(
+		(g) => html`<tr>
+<td>${groupTitle(g.fault, JSON.parse(g.frames) as RawFrame[], g.message, skipList)}</td>
+<td>${g.count}</td>
+<td>${day(g.first_seen)}</td>
+<td>${day(g.last_seen)}</td>
+</tr>`
+	);
+	return html`<h2>Crashes</h2>
+<table>
+<thead><tr><th>Crash</th><th>Reports</th><th>First seen</th><th>Last seen</th></tr></thead>
+<tbody>${rows}</tbody>
+</table>`;
+}
+
+function appPage(
+	who: string, app: AppRow, versions: VersionSummary[], groups: GroupSummary[], tokens: TokenRow[], fresh: string | null
+): Page {
 	const rows = versions.map(
 		(v) => html`<tr>
 <td><code>${v.version}</code></td>
@@ -165,6 +190,7 @@ function appPage(who: string, app: AppRow, versions: VersionSummary[], tokens: T
 		app.display_name, who,
 		html`<h1>${app.display_name}</h1>
 <p><code>${app.name}</code> · ${app.disabled_at === null ? "active" : `disabled since ${day(app.disabled_at)}`} · created at ${day(app.created_at)} by ${app.created_by}</p>
+${crashesSection(groups)}
 <h2>Versions</h2>
 ${table}
 ${tokensSection(app, tokens, fresh)}`
@@ -192,8 +218,9 @@ dashboard.get("/apps/:name", async (c) => {
 	if (fresh !== null) deleteCookie(c, FRESH_TOKEN_COOKIE, { path: appPath(app.name), secure: true });
 	const shard = c.env.SHARD.get(c.env.SHARD.idFromName(app.name));
 	const versions = await shard.listVersions();
+	const groups = await shard.listGroups();
 	const tokens = await listTokens(c.get("db"), app.id);
-	return render(c, appPage(who.email ?? who.sub, app, versions, tokens, fresh));
+	return render(c, appPage(who.email ?? who.sub, app, versions, groups, tokens, fresh));
 });
 
 dashboard.post("/apps/:name/tokens", async (c) => {
