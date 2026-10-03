@@ -1,4 +1,4 @@
-# crash-where
+# crash-where [![CI](https://github.com/bullno1/crash-where/actions/workflows/ci.yml/badge.svg)](https://github.com/bullno1/crash-where/actions/workflows/ci.yml)
 
 A painless crash reporter.
 
