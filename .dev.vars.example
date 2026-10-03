@@ -1,8 +1,14 @@
 # Copy to .dev.vars for `wrangler dev`. On a deployed Worker, set each
 # with `wrangler secret put <NAME>`; the "Deploy to Cloudflare" form asks
-# for them. Both values are public; README.md says where to find them.
+# for them. README.md says where to find the values.
+#
+# Set either the two Access values or the password. Access wins when
+# both are set.
 
 # Zero Trust team domain: the full <team>.cloudflareaccess.com, no scheme.
-ACCESS_TEAM_DOMAIN=example.cloudflareaccess.com
+ACCESS_TEAM_DOMAIN=
 # AUD tag of the Access application that protects the dashboard hostname.
 ACCESS_AUD=
+# Shared dashboard password for a first run without Cloudflare Access.
+# Generate one (16 characters at least): openssl rand -base64 24
+DASHBOARD_PASSWORD=
