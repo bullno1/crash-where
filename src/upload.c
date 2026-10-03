@@ -108,15 +108,16 @@ cw_reply_get(const char* text, const char* key, char* out, size_t cap) {
 /**
  * One request through the transport.
  *
- * @param reply   Receives the NUL-terminated reply body on ::CW_OK.
- * @param status  Receives the HTTP status on ::CW_OK.
+ * @param reply     Receives the NUL-terminated reply body on ::CW_OK.
+ * @param status    Receives the HTTP status on ::CW_OK.
+ * @param sent_len  Receives the bytes handed to the transport, after compression; `NULL` when not wanted.
  * @return What the transport returned.
  */
 static cw_status_t
 send_request(
 	const char* route, const char* content_type, const char* token,
 	const void* body, size_t body_len,
-	char* reply, size_t reply_cap, int* status
+	char* reply, size_t reply_cap, int* status, size_t* sent_len
 ) {
 	const cw_transport_t* tr = cw_ctx.cfg.transport;
 	char url[CW_STR_CAP + 256];
@@ -137,6 +138,9 @@ send_request(
 	};
 	cw_response_t resp = { 0 };
 	cw_status_t st = tr->send(tr->user, &req, &resp);
+	if (sent_len != NULL) {
+		*sent_len = req.body_len;
+	}
 	free(zipped);
 	if (st == CW_OK) {
 		if (resp.reply_len > req.reply_cap) {
@@ -173,7 +177,7 @@ exchange_proof(cw_drain_t* d) {
 
 	char reply[CW_REPLY_CAP];
 	int http = 0;
-	cw_status_t status = send_request("auth", "application/json", NULL, body, body_len, reply, sizeof(reply), &http);
+	cw_status_t status = send_request("auth", "application/json", NULL, body, body_len, reply, sizeof(reply), &http, NULL);
 	char token[CW_TOKEN_CAP];
 	char expires[24];
 	if (status == CW_OK) {
@@ -246,14 +250,15 @@ upload_attachments(const cw_pending_t* p, const char* id, const char* token) {
 		snprintf(route, sizeof(route), "attach?report=%s&name=%s", id, name);
 		char reply[CW_REPLY_CAP];
 		int http = 0;
-		cw_status_t status = send_request(route, "application/octet-stream", token, data, len, reply, sizeof(reply), &http);
+		size_t sent = 0;
+		cw_status_t status = send_request(route, "application/octet-stream", token, data, len, reply, sizeof(reply), &http, &sent);
 		free(data);
 		if (status == CW_OK) {
 			status = map_status(http);
 		}
 		switch (status) {
 		case CW_OK:
-			cw_log(CW_LOG_INFO, "attachment %s uploaded", name);
+			cw_log(CW_LOG_INFO, "attachment %s uploaded: %zu KB, %zu KB sent", name, len >> 10, sent >> 10);
 			cw_platform_remove(path);
 			break;
 		case CW_RETRY:
@@ -325,7 +330,7 @@ upload_report(cw_drain_t* d, const cw_pending_t* p) {
 	char reply[CW_REPLY_CAP];
 	int http = 0;
 	const char* token = have_token ? d->token : NULL;
-	cw_status_t status = send_request("report", "application/json", token, json, len, reply, sizeof(reply), &http);
+	cw_status_t status = send_request("report", "application/json", token, json, len, reply, sizeof(reply), &http, NULL);
 	free(json);
 
 	bool want_attachments = false;
