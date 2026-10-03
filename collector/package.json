@@ -25,10 +25,13 @@
   "cloudflare": {
     "bindings": {
       "ACCESS_TEAM_DOMAIN": {
-        "description": "Your Zero Trust team domain. e.g: `<team>.cloudflareaccess.com`."
+        "description": "Your Zero Trust team domain. e.g: `bullno1.cloudflareaccess.com`. Leave empty to use a password instead."
       },
       "ACCESS_AUD": {
-        "description": "The Application Audience (AUD) Tag of the Access application that protects the dashboard hostname, from the application overview in Zero Trust."
+        "description": "The Application Audience (AUD) Tag of the Access application that protects the dashboard hostname, from the application overview in Zero Trust. Leave empty to use a password instead."
+      },
+      "DASHBOARD_PASSWORD": {
+        "description": "A shared password for the dashboard, used only when the two Access values are empty. Generate one of at least 16 characters, e.g. `openssl rand -base64 24`."
       }
     }
   }
