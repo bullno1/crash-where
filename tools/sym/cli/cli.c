@@ -45,19 +45,20 @@ cwsym_cli_main(const cwsym_cli_t* cli, int argc, const char* argv[]) {
 	barg_opt_t opts[] = {
 		{
 			.name = "dia", .value_name = "dll",
-			.summary = "Path of msdia140.dll; default: locate it through VSINSTALLDIR or vswhere",
+			.summary = "Path to msdia140.dll",
+			.description = "Default: located through VSINSTALLDIR or vswhere",
 			.parser = barg_str(&ctx.read.dia),
 		},
 		{
 			.name = "symbol-map", .value_name = "file",
-			.summary = "Emscripten --emit-symbol-map output for a Wasm module with a stripped name section; "
-				"default: <module>.symbols, <stem>.js.symbols or <stem>.html.symbols beside it",
+			.summary = "Path to emscripten's --emit-symbol-map output for a Wasm module with a stripped name section",
+			.description = "Default: <module>.symbols, <stem>.js.symbols or <stem>.html.symbols beside it",
 			.parser = barg_str(&ctx.read.symbol_map),
 		},
 		{
 			.name = "source-map", .value_name = "file",
-			.summary = "Emscripten -gsource-map output for a Wasm module without DWARF; "
-				"default: the file its sourceMappingURL section names, beside it",
+			.summary = "Path to emscripten's -gsource-map output for a Wasm module without DWARF; ",
+			.description = "Default: the file its sourceMappingURL section names, beside it",
 			.parser = barg_str(&ctx.read.source_map),
 		},
 		barg_opt_help(),
