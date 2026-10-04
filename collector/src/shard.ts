@@ -41,6 +41,8 @@ export interface IngestRequest {
 	channel: string;
 	/** 0 until the auth route exists. */
 	trust: number;
+	/** Who crashed, in the key space `trust` names: the install id for 0, the token's sub for 1. */
+	userKey: string;
 	/** Unix seconds. */
 	now: number;
 	group: {
@@ -187,7 +189,8 @@ export class AppShard extends DurableObject<Env> {
 	/**
 	 * Counts a report: refuses one for a release that is unknown or past
 	 * its window, counts a retried report id once, finds or creates the
-	 * group, and adds one to the day's count. Atomic as `registerRelease`.
+	 * group, records the report under it with its user key, and adds one
+	 * to the day's count. Atomic as `registerRelease`.
 	 */
 	async ingest(req: IngestRequest): Promise<IngestResult> {
 		const release = await this.db
@@ -204,7 +207,6 @@ export class AppShard extends DurableObject<Env> {
 			.where("report_id", "=", req.reportId)
 			.executeTakeFirst();
 		if (seen) return { outcome: "duplicate" };
-		await this.db.insertInto("reports").values({ report_id: req.reportId, received_at: req.now }).execute();
 
 		const existing = await this.db
 			.selectFrom("crash_groups")
@@ -223,6 +225,18 @@ export class AppShard extends DurableObject<Env> {
 				.executeTakeFirstOrThrow();
 			groupId = row.id;
 		}
+		await this.db
+			.insertInto("reports")
+			.values({
+				report_id: req.reportId,
+				group_id: groupId,
+				version: req.version,
+				channel: req.channel,
+				trust: req.trust,
+				user_key: req.userKey,
+				received_at: req.now,
+			})
+			.execute();
 		await this.db
 			.insertInto("crash_counts")
 			.values({

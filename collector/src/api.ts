@@ -116,8 +116,8 @@ async function readBody(c: Context<App>): Promise<Uint8Array | Response> {
 /**
  * Receives one crash envelope. The report is grouped from its frames and
  * the app's symbol tables, then counted in the app's shard against its
- * release. A token is not read yet: every report counts as unauthorized.
- * The reply is `want_attachments 0`, since samples are not stored yet;
+ * release. A token is not read yet: every report counts as unauthorized,
+ * with the envelope's install id as its user. The reply is `want_attachments 0`, since samples are not stored yet;
  * a retried report id gets the same reply and is not counted again.
  */
 api.post("/:app/report", async (c) => {
@@ -150,6 +150,7 @@ api.post("/:app/report", async (c) => {
 		version: envelope.version,
 		channel: envelope.channel,
 		trust: 0,
+		userKey: envelope.installId,
 		now,
 		group: { fingerprint: await fingerprint(fault, tokens, message), fault, frames: JSON.stringify(raw), message },
 	});
