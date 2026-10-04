@@ -1,10 +1,13 @@
 import { env as bindings, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import worker from "../src/index";
+import { symbolKey } from "../src/releases";
+import { ENVELOPE_OBJECT, sampleKey } from "../src/samples";
 import type { AppShard } from "../src/shard";
+import { BUILD_ID_HEX, makeTable } from "./table";
 
 const password = "correct horse battery staple";
-const env = { DB: bindings.DB, SHARD: bindings.SHARD, DASHBOARD_PASSWORD: password };
+const env = { DB: bindings.DB, SHARD: bindings.SHARD, BUCKET: bindings.BUCKET, DASHBOARD_PASSWORD: password };
 const auth = `Basic ${btoa(`alice:${password}`)}`;
 
 async function page(name: string, sub = "", accept?: string): Promise<Response> {
@@ -86,8 +89,8 @@ describe("app page", () => {
 				.execute();
 		});
 		const html = await (await page("page-crashes")).text();
-		expect(html).toContain("<td>abort in main: tex != NULL</td>\n<td>1</td>\n<td>2</td>\n<td>1</td>\n<td>0</td>");
-		expect(html).toContain("<td>memory in copy_mesh…</td>\n<td>3</td>\n<td>3</td>\n<td>3</td>\n<td>7</td>");
+		expect(html).toContain('<td><a href="/dashboard/apps/page-crashes/crashes/2">abort in main: tex != NULL</a></td>\n<td>1</td>\n<td>2</td>\n<td>1</td>\n<td>0</td>');
+		expect(html).toContain('<td><a href="/dashboard/apps/page-crashes/crashes/1">memory in copy_mesh…</a></td>\n<td>3</td>\n<td>3</td>\n<td>3</td>\n<td>7</td>');
 		expect(html).not.toContain("from load_level");
 		expect(html.indexOf("memory in copy_mesh"), "urgency outranks recency").toBeLessThan(html.indexOf("abort in main"));
 		expect(html).toContain("<td>2025-06-15</td>");
@@ -155,7 +158,7 @@ describe("app page", () => {
 			expect(data.app).toMatchObject({ name: "page-json", display_name: "Page JSON", disabled_at: null });
 			return data;
 		};
-		expect(await (await page("page-json")).text()).toContain("<td>memory in tick</td>");
+		expect(await (await page("page-json")).text()).toContain('<td><a href="/dashboard/apps/page-json/crashes/7">memory in tick</a></td>');
 		expect(await json("")).toEqual({
 			app: expect.any(Object),
 			crashes: [
@@ -193,5 +196,198 @@ describe("app page", () => {
 	it("requires a login", async () => {
 		const r = await worker.fetch(new Request("https://dash.example/dashboard/apps/page-full"), env);
 		expect(r.status).toBe(401);
+	});
+});
+
+/** An envelope as the client stores one, crashing in render_mesh under draw_scene with libc on top. */
+function envelope(app: string, reportId: string, over: Record<string, unknown> = {}): Record<string, unknown> {
+	return {
+		schema: 2,
+		report_id: reportId,
+		install_id: "11111111-1111-4111-8111-111111111111",
+		sent_at: 1_750_000_000,
+		app: { name: app, version: "1.0.0", build_id: BUILD_ID_HEX, channel: "stable" },
+		env: { os: "linux", gpu_vendor: "intel" },
+		exception: { type: "SIGSEGV", message_norm: "read from <ADDR>", message_raw: "read from 0x10", thread: 7 },
+		modules: [{ name: "game.exe", build_id: BUILD_ID_HEX, base: "0x400000", size: 4096 }],
+		frames: [
+			{ module: "libc.so.6", build_id: "ff", offset: 0x10, raw: "0x7f00" },
+			{ module: "game.exe", build_id: BUILD_ID_HEX, offset: 0x1010 },
+			{ module: "game.exe", build_id: BUILD_ID_HEX, offset: 0x2010 },
+			{ module: null, build_id: null, offset: 0x99 },
+		],
+		breadcrumbs: [{ t: 1000, th: 1, c: "level", m: "load forest_02" }, { t: 2500, th: 7, c: "render", m: "frame" }],
+		state: { level: "forest_02" },
+		attachments: { log_tail: true, minidump: true, snapshot: false },
+		...over,
+	};
+}
+
+/** An app with a group of two samples, `s-new` and `s-old`, and a group without any; returns the path of the first. */
+async function crashApp(app: string): Promise<string> {
+	await addApp(app, "Page Crash");
+	await bindings.BUCKET.put(
+		symbolKey(app, BUILD_ID_HEX),
+		makeTable({ functions: [{ start: 0x1000, size: 0x100, name: "render_mesh" }, { start: 0x2000, size: 0x100, name: "draw_scene" }] })
+	);
+	const frames = [
+		{ module: "libc.so.6", name: null, buildId: "ff", offset: 0x10 },
+		{ module: "game.exe", name: "render_mesh", buildId: BUILD_ID_HEX, offset: 0x1010 },
+		{ module: "game.exe", name: "draw_scene", buildId: BUILD_ID_HEX, offset: 0x2010 },
+	];
+	await inShard(app, async (obj) => {
+		await obj.db.insertInto("versions").values({ version: "1.0.0", created_at: 1 }).execute();
+		await obj.db
+			.insertInto("crash_groups")
+			.values([
+				{ id: 3, fingerprint: "d".repeat(16), fault: "memory", message: null, first_seen: 1_740_000_000, last_seen: 1_750_000_000, frames: JSON.stringify(frames) },
+				{ id: 4, fingerprint: "e".repeat(16), fault: "abort", message: "oops", first_seen: 1, last_seen: 2, frames: JSON.stringify(frames.slice(0, 2)) },
+			])
+			.execute();
+		await obj.db
+			.insertInto("crash_counts")
+			.values({ group_id: 3, version: "1.0.0", channel: "stable", trust: 0, day: 20_000, count: 5 })
+			.execute();
+		const row = (id: string, channel: string, received_at: number) =>
+			({ report_id: id, group_id: 3, version: "1.0.0", channel, trust: 0, user_key: "u1", received_at });
+		await obj.db.insertInto("reports").values([row("s-new", "stable", 1_750_000_000), row("s-old", "beta", 1_740_000_000)]).execute();
+		await obj.db
+			.insertInto("crash_samples")
+			.values([
+				{ report_id: "s-old", group_id: 3, version: "1.0.0", trust: 0, r2_key: sampleKey(app, "s-old"), received_at: 1_740_000_000 },
+				{ report_id: "s-new", group_id: 3, version: "1.0.0", trust: 0, r2_key: sampleKey(app, "s-new"), received_at: 1_750_000_000 },
+			])
+			.execute();
+	});
+	await bindings.BUCKET.put(sampleKey(app, "s-new") + ENVELOPE_OBJECT, JSON.stringify(envelope(app, "s-new")));
+	await bindings.BUCKET.put(sampleKey(app, "s-old") + ENVELOPE_OBJECT, JSON.stringify(envelope(app, "s-old", {
+		state: { level: "cave_01" },
+		exception: { type: "SIGSEGV", message_norm: "read <N> bytes", message_raw: "read 16 bytes at 0x10", thread: 7 },
+	})));
+	await bindings.BUCKET.put(sampleKey(app, "s-new") + "1_c_s-new.log", "log tail", {
+		httpMetadata: { contentType: "text/plain", contentEncoding: "gzip" },
+	});
+	return `/dashboard/apps/${app}/crashes/3`;
+}
+
+describe("crash page", () => {
+	it("is 404 for an unknown crash, a malformed id and an unknown sample", async () => {
+		const app = "crash-404";
+		const CRASH = await crashApp(app);
+		expect((await page("nobody", "/crashes/3")).status).toBe(404);
+		expect((await page(app, "/crashes/abc")).status).toBe(404);
+		expect((await page(app, "/crashes/99")).status).toBe(404);
+		expect((await page(app, "/crashes/3?sample=nope")).status).toBe(404);
+	});
+	it("shows the group's facts and its newest sample in full", async () => {
+		const app = "crash-newest";
+		const CRASH = await crashApp(app);
+		const r = await page(app, "/crashes/3");
+		expect(r.status).toBe(200);
+		const html = await r.text();
+		expect(html).toContain(`<a href="/dashboard/apps/${app}" aria-current="page">Crashes</a>`);
+		expect(html).toContain(`<link rel="canonical" href="https://dash.example${CRASH}?sample=s-new">`);
+		expect(html).toContain("<h2>memory in render_mesh, from draw_scene</h2>");
+		expect(html).toContain("<code>memory</code> · first seen 2025-02-19 21:20:00 UTC · last seen 2025-06-15 15:06:40 UTC");
+		expect(html).toContain("5 reports in total");
+		expect(html).toContain("<tr><td><code>1.0.0</code></td><td>stable</td><td>5</td></tr>");
+		expect(html).toContain("<code>SIGSEGV</code> on thread 7");
+		// The address the normalizer replaces is underlined in the raw message.
+		expect(html).toContain('<pre>read from <u title="&lt;ADDR&gt;">0x10</u></pre>');
+		expect(html).not.toContain("Normalized:");
+		const at = (s: string) => { const i = html.indexOf(s); expect(i, s).toBeGreaterThan(-1); return i; };
+		expect(at("<h2>memory in")).toBeLessThan(at("<h3>Versions</h3>"));
+		expect(at("<h3>Versions</h3>")).toBeLessThan(at("<h3>Exception</h3>"));
+		expect(at("<h3>Files</h3>")).toBeLessThan(at("<h3>Samples</h3>"));
+		// The stack is named from the table; libc is skipped and the two game frames are marked.
+		expect(html).toContain("<td>0</td>\n<td><small>unnamed</small></td>\n<td><code>libc.so.6</code></td>\n<td><code>0x10</code></td>\n<td><code>0x7f00</code></td>");
+		expect(html).toContain("<td>1</td>\n<td><mark>render_mesh</mark></td>\n<td><code>game.exe</code></td>\n<td><code>0x1010</code></td>\n<td></td>");
+		expect(html).toContain("<td>2</td>\n<td><mark>draw_scene</mark></td>");
+		// A frame in no module is not noise, so it enters the fingerprint too.
+		expect(html).toContain("<td>3</td>\n<td><mark><small>unnamed</small></mark></td>\n<td><code>?</code></td>\n<td><code>0x99</code></td>");
+		expect(html).toContain("<tr><td>-1.500 s</td><td>1</td><td>level</td><td>load forest_02</td></tr>");
+		expect(html).toContain("<tr><td>0.000 s</td><td><mark>7</mark></td><td>render</td><td>frame</td></tr>");
+		expect(html).toContain('<tr><th scope="row">level</th><td>forest_02</td></tr>');
+		expect(html).toContain('<tr><th scope="row">gpu_vendor</th><td>intel</td></tr>');
+		expect(html).toContain("<tr><td><code>game.exe</code></td><td><code>" + BUILD_ID_HEX + "</code></td><td><code>0x400000</code></td><td>4096</td></tr>");
+		expect(html).toContain(`<li><a href="${CRASH}/samples/s-new/envelope.json">envelope.json</a></li>`);
+		expect(html).toContain(`<li><a href="${CRASH}/samples/s-new/1_c_s-new.log">1_c_s-new.log</a> <small>8 bytes</small></li>`);
+		// The log arrived; the minidump the client declared did not.
+		expect(html).toContain('<li><s title="Not received">minidump</s></li>');
+		expect(html).not.toContain("<s title=\"Not received\">log_tail</s>");
+		// Every sample is listed, newest first; an arrow marks the current one, whose link is its permanent URL.
+		expect(html).toContain(`<td>→ <a href="${CRASH}?sample=s-new" aria-current="page"><code>s-new</code></a><br><small>install <code>u1</code></small></td>\n<td><code>1.0.0</code></td>\n<td>stable</td>\n<td>2025-06-15 15:06:40 UTC</td>`);
+		expect(html).toContain(`<td><a href="${CRASH}?sample=s-old"><code>s-old</code></a></td>`);
+		expect(html.indexOf("<small>current</small>")).toBeLessThan(html.indexOf("?sample=s-old"));
+	});
+	it("shows the sample the query names", async () => {
+		const app = "crash-query";
+		const CRASH = await crashApp(app);
+		const html = await (await page(app, "/crashes/3?sample=s-old")).text();
+		expect(html).toContain(`<link rel="canonical" href="https://dash.example${CRASH}?sample=s-old">`);
+		expect(html).toContain('<tr><th scope="row">level</th><td>cave_01</td></tr>');
+		// A normalized message the page cannot overlay on the raw one is shown beside it.
+		expect(html).toContain("<pre>read 16 bytes at 0x10</pre>");
+		expect(html).toContain("<p>Normalized: <code>read &lt;N&gt; bytes</code></p>");
+		expect(html).toContain(`<td>→ <a href="${CRASH}?sample=s-old" aria-current="page"><code>s-old</code></a><br><small>install <code>u1</code></small></td>`);
+		expect(html).toContain(`<td><a href="${CRASH}?sample=s-new"><code>s-new</code></a></td>`);
+		expect(html).toContain(`<td><a href="${CRASH}?sample=s-new"><code>s-new</code></a></td>`);
+	});
+	it("shows the stored frames of a group without samples", async () => {
+		const app = "crash-stored";
+		const CRASH = await crashApp(app);
+		const html = await (await page(app, "/crashes/4")).text();
+		expect(html).toContain("<h2>abort in render_mesh: oops</h2>");
+		expect(html).toContain(`<link rel="canonical" href="https://dash.example/dashboard/apps/${app}/crashes/4">`);
+		expect(html).toContain("<small>no reports counted</small>");
+		expect(html).toContain("No sample is held for this crash");
+		expect(html).toContain("<td>0</td>\n<td><small>unnamed</small></td>\n<td><code>libc.so.6</code></td>");
+		expect(html).toContain("<td>1</td>\n<td><mark>render_mesh</mark></td>");
+		expect(html).not.toContain("<h3>Samples</h3>");
+	});
+	it("says so when a sample's envelope is gone", async () => {
+		const app = "crash-gone";
+		const CRASH = await crashApp(app);
+		await bindings.BUCKET.delete(sampleKey(app, "s-new") + ENVELOPE_OBJECT);
+		const html = await (await page(app, "/crashes/3")).text();
+		expect(html).toContain("The envelope of this sample is no longer stored.");
+		expect(html).toContain(`<td><a href="${CRASH}?sample=s-old"><code>s-old</code></a></td>`);
+	});
+	it("serves the sample's files as stored, attachments as downloads", async () => {
+		const app = "crash-files";
+		const CRASH = await crashApp(app);
+		const envelopeFile = await page(app, "/crashes/3/samples/s-new/envelope.json");
+		expect(envelopeFile.status).toBe(200);
+		expect(envelopeFile.headers.get("Content-Disposition")).toBeNull();
+		expect(await envelopeFile.json()).toMatchObject({ report_id: "s-new" });
+		const log = await page(app, "/crashes/3/samples/s-new/1_c_s-new.log");
+		expect(log.status).toBe(200);
+		expect(log.headers.get("Content-Type")).toBe("text/plain");
+		expect(log.headers.get("Content-Encoding")).toBe("gzip");
+		expect(log.headers.get("Content-Disposition")).toBe('attachment; filename="1_c_s-new.log"');
+		expect((await page(app, "/crashes/3/samples/s-new/1_c_s-old.log")).status).toBe(404);
+		expect((await page(app, "/crashes/3/samples/s-new/evil.dmp")).status).toBe(404);
+		expect((await page(app, "/crashes/3/samples/nobody/envelope.json")).status).toBe(404);
+		expect((await page(app, "/crashes/4/samples/s-new/envelope.json")).status).toBe(404);
+	});
+	it("serves the crash as JSON when asked", async () => {
+		const app = "crash-json";
+		const CRASH = await crashApp(app);
+		const r = await page(app, "/crashes/3", "application/json");
+		expect(r.status).toBe(200);
+		const data = await r.json() as Record<string, unknown>;
+		expect(data.crash).toMatchObject({ id: 3, title: "memory in render_mesh, from draw_scene", count: 5 });
+		expect(data.permalink).toBe(`https://dash.example${CRASH}?sample=s-new`);
+		expect(data.releases).toEqual([{ version: "1.0.0", channel: "stable", count: 5 }]);
+		expect(data.problem).toBeNull();
+		expect(data.sample).toMatchObject({
+			report_id: "s-new", version: "1.0.0", channel: "stable", type: "SIGSEGV", thread: 7, message_raw: "read from 0x10",
+			user_key: "u1", sent_at: 1_750_000_000, message_norm: "read from <ADDR>",
+			hashed: [1, 2, 3], state: { level: "forest_02" }, attachments: [{ name: "1_c_s-new.log", size: 8 }],
+			declared: { log_tail: true, minidump: true, snapshot: false },
+			breadcrumbs: [{ t: 1000, th: 1, c: "level", m: "load forest_02" }, { t: 2500, th: 7, c: "render", m: "frame" }],
+		});
+		expect((data.sample as { frames: { name: string | null }[] }).frames.map((f) => f.name)).toEqual([null, "render_mesh", "draw_scene", null]);
+		expect(data.samples).toMatchObject([{ report_id: "s-new", user_key: "u1" }, { report_id: "s-old", user_key: "u1" }]);
 	});
 });

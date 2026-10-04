@@ -50,6 +50,7 @@ curl -u "alice:$PASSWORD" -H 'Accept: application/json' https://crash.example.co
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' -H 'Content-Type: application/json' \
   -d '{"label":"GitHub Actions"}' https://crash.example.com/dashboard/apps/forest-quest/tokens
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' https://crash.example.com/dashboard/apps/forest-quest/versions
+curl -u "alice:$PASSWORD" -H 'Accept: application/json' https://crash.example.com/dashboard/apps/forest-quest/crashes/3?sample=<report id>
 ```
 
 To view the dashboard under `wrangler dev`, run, with the dev server up:

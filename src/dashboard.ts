@@ -9,8 +9,10 @@ import { requireLogin } from "./auth";
 import type { App } from "./env";
 import { layout } from "./layout";
 import { type Page, render } from "./page";
-import { compileSkipList, DEFAULT_SKIP_LIST, groupTitle } from "./grouping";
-import type { GroupSummary, VersionSummary } from "./shard";
+import { compileSkipList, DEFAULT_SKIP_LIST, groupTitle, keptFrames } from "./grouping";
+import { loadSample, type SampleError, type SampleView } from "./sample";
+import { attachmentKind, ENVELOPE_OBJECT, sampleKey } from "./samples";
+import type { GroupRelease, GroupSummary, SampleSummary, VersionSummary } from "./shard";
 import type { RawFrame } from "./symbols";
 import { createToken, listTokens, MAX_LABEL, revokeToken, type TokenRow, validLabel } from "./tokens";
 
@@ -32,6 +34,11 @@ dashboard.get("/pico.css", (c) => {
 
 function day(unix: number): string {
 	return new Date(unix * 1000).toISOString().slice(0, 10);
+}
+
+/** A moment to the second, in UTC. */
+function when(unix: number): string {
+	return new Date(unix * 1000).toISOString().slice(0, 19).replace("T", " ") + " UTC";
 }
 
 /**
@@ -220,12 +227,12 @@ function summarizeCrash(g: GroupSummary): CrashSummary {
  * fault and first frame, with an ellipsis standing for the rest; the JSON
  * title carries the caller too.
  */
-function crashesSection(crashes: CrashSummary[]): Page {
+function crashesSection(app: AppRow, crashes: CrashSummary[]): Page {
 	if (crashes.length === 0) return html`<h2>Crashes</h2>
 <p>No crashes reported yet.</p>`;
 	const rows = crashes.map(
 		(g) => html`<tr>
-<td>${groupTitle(g.fault, g.frames, g.message, skipList, true)}</td>
+<td><a href="${crashPath(app.name, g.id)}">${groupTitle(g.fault, g.frames, g.message, skipList, true)}</a></td>
 <td>${g.urgency}</td>
 <td>${g.recent_count}</td>
 <td>${g.recent_users}</td>
@@ -275,6 +282,10 @@ function tokensPath(name: string): string {
 	return `${appPath(name)}/tokens`;
 }
 
+function crashPath(name: string, id: number): string {
+	return `${appPath(name)}/crashes/${id}`;
+}
+
 /** The pages of an app, in the order the sub-navigation lists them. */
 const APP_PAGES = [
 	{ key: "crashes", label: "Crashes", path: appPath },
@@ -284,8 +295,12 @@ const APP_PAGES = [
 
 type AppPageKey = (typeof APP_PAGES)[number]["key"];
 
-/** One page of an app: its heading and details, the links to its other pages with this one marked, then the section. */
-function appPage(who: string, app: AppRow, current: AppPageKey, section: Page): Page {
+/**
+ * One page of an app: its heading and details, the links to its other
+ * pages with this one marked, then the section. `canonical` is the page's
+ * permanent URL when the request's is not it.
+ */
+function appPage(who: string, app: AppRow, current: AppPageKey, section: Page, canonical: string | null = null): Page {
 	const links = APP_PAGES.map(
 		(p) => html`<li><a href="${p.path(app.name)}"${p.key === current ? html` aria-current="page"` : ""}>${p.label}</a></li>`
 	);
@@ -295,7 +310,8 @@ function appPage(who: string, app: AppRow, current: AppPageKey, section: Page): 
 		html`<h1>${app.display_name}</h1>
 <p><code>${app.name}</code> · ${app.disabled_at === null ? "active" : `disabled since ${day(app.disabled_at)}`} · created at ${day(app.created_at)} by ${app.created_by}</p>
 <nav><ul>${links}</ul></nav>
-${section}`
+${section}`,
+		canonical
 	);
 }
 
@@ -315,7 +331,7 @@ dashboard.get("/apps/:name", async (c) => {
 	const crashes = (await shard.listGroups(Math.floor(Date.now() / 1000))).map(summarizeCrash);
 	if (wantsJson(c)) return c.json({ app, crashes });
 	const who = c.get("identity");
-	return render(c, appPage(who.email ?? who.sub, app, "crashes", crashesSection(crashes)));
+	return render(c, appPage(who.email ?? who.sub, app, "crashes", crashesSection(app, crashes)));
 });
 
 dashboard.get("/apps/:name/versions", async (c) => {
@@ -360,4 +376,248 @@ dashboard.post("/apps/:name/tokens/:id/revoke", async (c) => {
 	const revoked = await revokeToken(c.get("db"), app.id, Number(c.req.param("id")), Math.floor(Date.now() / 1000));
 	if (wantsJson(c)) return c.json({ revoked }, revoked ? 200 : 404);
 	return c.redirect(tokensPath(app.name), 303);
+});
+
+/** Hex as a debugger prints it. */
+function hex(n: number): string {
+	return `0x${n.toString(16)}`;
+}
+
+/**
+ * A stack as a table, the frames the fingerprint took marked. `raw`
+ * carries each frame's absolute address when the client printed one.
+ */
+function stackTable(frames: RawFrame[], hashed: number[], raw: (string | null)[] = []): Page {
+	const marked = new Set(hashed);
+	const rows = frames.map((f, i) => {
+		const name = f.name === null ? html`<small>unnamed</small>` : f.name;
+		return html`<tr>
+<td>${i}</td>
+<td>${marked.has(i) ? html`<mark>${name}</mark>` : name}</td>
+<td><code>${f.module}</code></td>
+<td>${f.offset === undefined ? "" : html`<code>${hex(f.offset)}</code>`}</td>
+<td>${raw[i] === null || raw[i] === undefined ? "" : html`<code>${raw[i]}</code>`}</td>
+</tr>`;
+	});
+	return html`<table>
+<thead><tr><th>#</th><th>Function</th><th>Module</th><th>Offset</th><th>Address</th></tr></thead>
+<tbody>${rows}</tbody>
+</table>`;
+}
+
+/** Key-value pairs the game set, as a table, or a note that it set none. */
+function pairsTable(pairs: Record<string, string>): Page {
+	const entries = Object.entries(pairs);
+	if (entries.length === 0) return html`<p><small>none</small></p>`;
+	return html`<table>
+<tbody>${entries.map(([k, v]) => html`<tr><th scope="row">${k}</th><td>${v}</td></tr>`)}</tbody>
+</table>`;
+}
+
+/** A run of a raw message: text the normalizer keeps, or one it replaces by `placeholder`. */
+interface MessageSpan {
+	text: string;
+	placeholder: string | null;
+}
+
+/**
+ * Splits a raw message as the client's normalizer does: a hex address
+ * becomes `<ADDR>`, a run of digits `<N>`, and a control character a
+ * space, which `text` carries as written.
+ */
+function messageSpans(raw: string): MessageSpan[] {
+	const spans: MessageSpan[] = [];
+	for (const m of raw.matchAll(/0x[0-9a-fA-F]+|[0-9]+|[^0-9]+?(?=0x[0-9a-fA-F]|[0-9]|$)/g)) {
+		const text = m[0];
+		spans.push({ text, placeholder: text.startsWith("0x") ? "<ADDR>" : /^[0-9]/.test(text) ? "<N>" : null });
+	}
+	return spans;
+}
+
+/** What the normalizer makes of the spans; equal to the stored message when the page's reading of it is right. */
+function normalized(spans: MessageSpan[]): string {
+	return spans.map((s) => s.placeholder ?? s.text.replace(/[\u0000-\u001f]/g, " ")).join("");
+}
+
+/**
+ * The raw message with the parts the normalizer replaced underlined, so
+ * the reader sees both the specific values and what the group hashes.
+ * When the stored normalized message is not what this reading gives, the
+ * two are shown apart instead.
+ */
+function messageBlock(raw: string, norm: string): Page {
+	if (raw === "") return norm === "" ? html`` : html`<pre>${norm}</pre>`;
+	const spans = messageSpans(raw);
+	if (normalized(spans) !== norm) {
+		return html`<pre>${raw}</pre>
+${norm === "" ? "" : html`<p>Normalized: <code>${norm}</code></p>`}`;
+	}
+	const marked = spans.map((s) => (s.placeholder === null ? html`${s.text}` : html`<u title="${s.placeholder}">${s.text}</u>`));
+	return html`<pre>${marked}</pre>`;
+}
+
+/** The facts of a group that hold whichever sample is shown. */
+function crashHeader(g: CrashSummary): Page {
+	return html`<h2>${g.title}</h2>
+<p><code>${g.fault}</code> · first seen ${when(g.first_seen)} · last seen ${when(g.last_seen)}</p>
+<p>${g.count} reports in total · ${g.recent_count} reports from ${g.recent_users} users in the last seven days · urgency ${g.urgency}</p>`;
+}
+
+/** The releases the group was reported on, most reported first. */
+function versionsBlock(releases: GroupRelease[]): Page {
+	if (releases.length === 0) return html`<h3>Versions</h3>
+<p><small>no reports counted</small></p>`;
+	const rows = releases.map((r) => html`<tr><td><code>${r.version}</code></td><td>${r.channel}</td><td>${r.count}</td></tr>`);
+	return html`<h3>Versions</h3>
+<table>
+<thead><tr><th>Version</th><th>Channel</th><th>Reports</th></tr></thead>
+<tbody>${rows}</tbody>
+</table>`;
+}
+
+/**
+ * What a sample tells about the crash: the exception, the stack with the
+ * fingerprinted frames marked, then what the game recorded around it and
+ * the files that came with it.
+ */
+function sampleBody(path: string, s: SampleView): Page {
+	const last = s.breadcrumbs.at(-1)?.t ?? 0;
+	const thread = (th: number) => (th === s.thread ? html`<mark>${th}</mark>` : html`${th}`);
+	const crumbs = s.breadcrumbs.length === 0
+		? html`<p><small>none</small></p>`
+		: html`<p>Marked breadcrumbs are from the crashing thread.</p>
+<table>
+<thead><tr><th>Before last</th><th>Thread</th><th>Category</th><th>Message</th></tr></thead>
+<tbody>${s.breadcrumbs.map((c) => html`<tr><td>${((c.t - last) / 1000).toFixed(3)} s</td><td>${thread(c.th)}</td><td>${c.c}</td><td>${c.m}</td></tr>`)}</tbody>
+</table>`;
+	const modules = s.modules.length === 0
+		? html`<p><small>none</small></p>`
+		: html`<table>
+<thead><tr><th>Module</th><th>Build id</th><th>Base</th><th>Size</th></tr></thead>
+<tbody>${s.modules.map((m) => html`<tr><td><code>${m.name ?? "?"}</code></td><td>${m.build_id === null ? "" : html`<code>${m.build_id}</code>`}</td><td><code>${m.base}</code></td><td>${m.size}</td></tr>`)}</tbody>
+</table>`;
+	const file = (name: string) => `${path}/samples/${s.report_id}/${name}`;
+	const attachments = s.attachments.map((a) => html`<li><a href="${file(a.name)}">${a.name}</a> <small>${a.size} bytes</small></li>`);
+	// A kind the client declared and whose file never arrived: lost on the way, or still to come.
+	const awaited = Object.entries(s.declared)
+		.filter(([kind, yes]) => yes && !s.attachments.some((a) => a.name.endsWith(`.${ATTACHMENT_EXT[kind] ?? kind}`)))
+		.map(([kind]) => html`<li><s title="Not received">${kind}</s></li>`);
+	return html`<h3>Exception</h3>
+<p><code>${s.type}</code>${s.thread === null ? "" : html` on thread ${s.thread}`}</p>
+${messageBlock(s.message_raw, s.message_norm)}
+<h3>Stack</h3>
+<p>Marked frames entered the fingerprint.</p>
+${stackTable(s.frames, s.hashed, s.raw)}
+<h3>Breadcrumbs</h3>
+${crumbs}
+<h3>State</h3>
+${pairsTable(s.state)}
+<h3>Environment</h3>
+${pairsTable(s.env)}
+<h3>Modules</h3>
+${modules}
+<h3>Files</h3>
+<ul><li><a href="${file(ENVELOPE_OBJECT)}">${ENVELOPE_OBJECT}</a></li>${attachments}${awaited}</ul>`;
+}
+
+/** The sidecar extension of each attachment kind the envelope declares. */
+const ATTACHMENT_EXT: Record<string, string> = { log_tail: "log", minidump: "dmp", snapshot: "snap" };
+
+/** What the page shows in place of a sample it cannot load. */
+function sampleProblem(reason: SampleError): Page {
+	return reason === "missing"
+		? html`<p>The envelope of this sample is no longer stored.</p>`
+		: html`<p>The envelope of this sample is not one this collector reads.</p>`;
+}
+
+/** The frames the group stored, for a group that holds no sample. */
+function storedFrames(g: CrashSummary): Page {
+	return html`<h3>Stack</h3>
+<p>No sample is held for this crash; these are the frames of the report that opened it. Marked frames entered the fingerprint.</p>
+${stackTable(g.frames, keptFrames(g.frames, skipList))}`;
+}
+
+/**
+ * Every sample of the group, newest first, each a link. An arrow marks the
+ * current one, whose link is its permanent URL and which alone shows its
+ * install, the id not being worth a column.
+ */
+function samplesSection(path: string, samples: SampleSummary[], shown: string | null): Page {
+	if (samples.length === 0) return html``;
+	const rows = samples.map(
+		(s) => html`<tr>
+<td>${s.report_id === shown
+	? html`→ <a href="${path}?sample=${s.report_id}" aria-current="page"><code>${s.report_id}</code></a><br><small>install <code>${s.user_key}</code></small>`
+	: html`<a href="${path}?sample=${s.report_id}"><code>${s.report_id}</code></a>`}</td>
+<td><code>${s.version}</code></td>
+<td>${s.channel}</td>
+<td>${when(s.received_at)}</td>
+</tr>`
+	);
+	return html`<h3>Samples</h3>
+<table>
+<thead><tr><th>Report</th><th>Version</th><th>Channel</th><th>Received</th></tr></thead>
+<tbody>${rows}</tbody>
+</table>`;
+}
+
+/** The group of the request, or null when the id is not one or names no group. */
+async function crashOf(c: Context<App>, app: AppRow) {
+	const id = Number(c.req.param("id"));
+	if (!Number.isInteger(id) || id <= 0) return null;
+	const shard = c.env.SHARD.get(c.env.SHARD.idFromName(app.name));
+	return shard.getGroup(id, Math.floor(Date.now() / 1000));
+}
+
+/**
+ * One crash: its facts and the releases it was seen on, then what one of
+ * its samples shows, the newest unless the query names another, then the
+ * list of every sample the group holds, where the current one links to
+ * its permanent URL. A group without samples shows its stored frames
+ * instead. The permanent link names the sample, since the newest changes.
+ */
+dashboard.get("/apps/:name/crashes/:id", async (c) => {
+	const app = await getApp(c.get("db"), c.req.param("name"));
+	if (!app) return c.text("No such app", 404);
+	const found = await crashOf(c, app);
+	if (!found) return c.text("No such crash", 404);
+	const crash = summarizeCrash(found.group);
+	const wanted = c.req.query("sample");
+	const selected = wanted === undefined ? found.samples[0] ?? null : found.samples.find((s) => s.report_id === wanted) ?? null;
+	if (wanted !== undefined && selected === null) return c.text("No such sample", 404);
+	const loaded = selected === null ? null : await loadSample(c.env.BUCKET, app.name, selected, skipList);
+	const sample = loaded?.ok ? loaded.sample : null;
+	const problem = loaded !== null && !loaded.ok ? loaded.reason : null;
+	const path = crashPath(app.name, crash.id);
+	const permalink = new URL(c.req.url).origin + path + (selected === null ? "" : `?sample=${selected.report_id}`);
+	if (wantsJson(c)) return c.json({ app, crash, permalink, releases: found.releases, sample, problem, samples: found.samples });
+	const body = sample !== null ? sampleBody(path, sample) : problem !== null ? sampleProblem(problem) : storedFrames(crash);
+	const who = c.get("identity");
+	return render(c, appPage(who.email ?? who.sub, app, "crashes", html`${crashHeader(crash)}
+${versionsBlock(found.releases)}
+${body}
+${samplesSection(path, found.samples, selected?.report_id ?? null)}`, permalink));
+});
+
+/**
+ * One object of a sample, the envelope or an attachment, as stored: with
+ * its type and encoding, so a gzipped attachment inflates in the browser,
+ * and as a download when it is not the envelope.
+ */
+dashboard.get("/apps/:name/crashes/:id/samples/:report/:file", async (c) => {
+	const app = await getApp(c.get("db"), c.req.param("name"));
+	if (!app) return c.text("No such app", 404);
+	const found = await crashOf(c, app);
+	if (!found) return c.text("No such crash", 404);
+	const report = c.req.param("report");
+	if (!found.samples.some((s) => s.report_id === report)) return c.text("No such sample", 404);
+	const file = c.req.param("file");
+	if (file !== ENVELOPE_OBJECT && attachmentKind(file, report) === null) return c.text("No such file", 404);
+	const object = await c.env.BUCKET.get(sampleKey(app.name, report) + file);
+	if (object === null) return c.text("No such file", 404);
+	const headers = new Headers();
+	object.writeHttpMetadata(headers);
+	headers.set("Content-Length", String(object.size));
+	if (file !== ENVELOPE_OBJECT) headers.set("Content-Disposition", `attachment; filename="${file}"`);
+	return new Response(object.body, { headers, encodeBody: object.httpMetadata?.contentEncoding ? "manual" : "automatic" });
 });
