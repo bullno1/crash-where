@@ -4,6 +4,7 @@ import { createDb } from "../src/db";
 import worker from "../src/index";
 import { symbolKey } from "../src/releases";
 import { type AppShard, SUPPORT_WINDOW } from "../src/shard";
+import { symbolicate } from "../src/symbols";
 import { createToken } from "../src/tokens";
 import { BUILD_ID_HEX, makeTable } from "./table";
 
@@ -159,6 +160,14 @@ describe("upload", () => {
 			builds: [{ build_id: BUILD_ID_HEX, version: "1.0.0" }],
 			releases: [{ channel: "stable", version: "1.0.0", supported_until: null }],
 		});
+	});
+	it("makes the table known at once where the upload ran", async () => {
+		const token = await appWithToken("up-known");
+		const frame = [{ module: "game.exe", buildId: BUILD_ID_HEX, offset: 0x1010 }];
+		expect((await symbolicate(bindings.BUCKET, "up-known", frame))[0]!.name).toBeNull();
+		const body = makeTable({ functions: [{ start: 0x1000, size: 0x100, name: "render_mesh" }] });
+		expect((await put({ app: "up-known", token, body })).status).toBe(201);
+		expect((await symbolicate(bindings.BUCKET, "up-known", frame))[0]!.name).toBe("render_mesh");
 	});
 	it("is a no-op when run again", async () => {
 		const token = await appWithToken("up-again");

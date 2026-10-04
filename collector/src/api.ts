@@ -11,7 +11,7 @@ import {
 	CHANNEL_GRAMMAR, MAX_TABLE_BYTES, symbolKey, validChannel, validVersion, VERSION_GRAMMAR,
 } from "./releases";
 import { attachmentKind, deleteSample, ENVELOPE_OBJECT, sampleKey } from "./samples";
-import { symbolicate } from "./symbols";
+import { forgetTable, symbolicate } from "./symbols";
 import { authenticateToken } from "./tokens";
 
 /** The client API, outside the dashboard login. Replies are `key value` text lines. */
@@ -59,6 +59,7 @@ api.put("/:app/releases/:version", async (c) => {
 		if (stored.etag !== digest) return c.text(`Build ${buildId} is already stored with a different table`, 409);
 	} else {
 		await c.env.BUCKET.put(key, body, { httpMetadata: { contentType: "application/octet-stream" } });
+		forgetTable(app.name, buildId);
 	}
 
 	const shard = c.env.SHARD.get(c.env.SHARD.idFromName(app.name));
