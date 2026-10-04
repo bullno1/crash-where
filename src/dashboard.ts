@@ -203,6 +203,9 @@ interface CrashSummary {
 	/** The raw frames the rule saw, before the skip list. */
 	frames: RawFrame[];
 	count: number;
+	recent_count: number;
+	recent_users: number;
+	urgency: number;
 	first_seen: number;
 	last_seen: number;
 }
@@ -213,9 +216,9 @@ function summarizeCrash(g: GroupSummary): CrashSummary {
 }
 
 /**
- * The crashes of an app, most recently seen first. The overview names each
- * by its fault and first frame, with an ellipsis standing for the rest; the
- * JSON title carries the caller too.
+ * The crashes of an app, most urgent first. The overview names each by its
+ * fault and first frame, with an ellipsis standing for the rest; the JSON
+ * title carries the caller too.
  */
 function crashesSection(crashes: CrashSummary[]): Page {
 	if (crashes.length === 0) return html`<h2>Crashes</h2>
@@ -223,14 +226,18 @@ function crashesSection(crashes: CrashSummary[]): Page {
 	const rows = crashes.map(
 		(g) => html`<tr>
 <td>${groupTitle(g.fault, g.frames, g.message, skipList, true)}</td>
+<td>${g.urgency}</td>
+<td>${g.recent_count}</td>
+<td>${g.recent_users}</td>
 <td>${g.count}</td>
 <td>${day(g.first_seen)}</td>
 <td>${day(g.last_seen)}</td>
 </tr>`
 	);
 	return html`<h2>Crashes</h2>
+<p>Urgency is the square root of reports times users over the last seven days.</p>
 <table>
-<thead><tr><th>Crash</th><th>Reports</th><th>First seen</th><th>Last seen</th></tr></thead>
+<thead><tr><th>Crash</th><th>Urgency</th><th>Reports (7 days)</th><th>Users (7 days)</th><th>Total</th><th>First seen</th><th>Last seen</th></tr></thead>
 <tbody>${rows}</tbody>
 </table>`;
 }
@@ -305,7 +312,7 @@ dashboard.get("/apps/:name", async (c) => {
 	const app = await getApp(c.get("db"), c.req.param("name"));
 	if (!app) return c.text("No such app", 404);
 	const shard = c.env.SHARD.get(c.env.SHARD.idFromName(app.name));
-	const crashes = (await shard.listGroups()).map(summarizeCrash);
+	const crashes = (await shard.listGroups(Math.floor(Date.now() / 1000))).map(summarizeCrash);
 	if (wantsJson(c)) return c.json({ app, crashes });
 	const who = c.get("identity");
 	return render(c, appPage(who.email ?? who.sub, app, "crashes", crashesSection(crashes)));

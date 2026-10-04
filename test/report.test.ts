@@ -265,6 +265,8 @@ describe("report counting", () => {
 				.executeTakeFirstOrThrow()
 		);
 		expect(Number(users.users)).toBe(2);
+		const [listed] = await inShard("count-users", (obj) => obj.listGroups(Math.floor(Date.now() / 1000)));
+		expect(listed).toMatchObject({ count: 3, recent_count: 3, recent_users: 2, urgency: 2 });
 	});
 	it("keeps channels and versions apart in the counts", async () => {
 		await release("count-keys");

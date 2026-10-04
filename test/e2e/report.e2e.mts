@@ -84,6 +84,8 @@ it("lists both crashes by their frames and message", async () => {
 	assert.deepEqual(titles, ["ASSERT in main: mode != assert", "memory in crashme:crash_here, from crashme:level_two"]);
 	const memory = page.crashes.find((g) => g.fault === "memory")!;
 	assert.equal(memory.count, 1);
+	assert.equal(memory.recent_users, 1, "the install id reached the shard");
+	assert.equal(memory.urgency, 1);
 	assert.equal(memory.message, null);
 	const abort = page.crashes.find((g) => g.fault === "ASSERT")!;
 	assert.equal(abort.message, "mode != assert");

@@ -63,7 +63,7 @@ export type IngestResult =
 	| { outcome: "unknown" | "expired" | "duplicate" }
 	| { outcome: "counted"; groupId: number };
 
-/** A group with its total, for the app page. */
+/** A group with its totals and urgency, for the app page. */
 export interface GroupSummary {
 	id: number;
 	fault: string;
@@ -74,10 +74,22 @@ export interface GroupSummary {
 	last_seen: number;
 	/** Reports counted, over every version, channel, trust level and day. */
 	count: number;
+	/** Reports received within the urgency window. */
+	recent_count: number;
+	/** Distinct users those reports came from. */
+	recent_users: number;
+	/**
+	 * The square root of `recent_count` times `recent_users`, rounded: the
+	 * users affected, scaled by the square root of how often each is hit.
+	 */
+	urgency: number;
 }
 
 /** Seconds a release keeps accepting reports after the next one on its channel. */
 export const SUPPORT_WINDOW = 21 * 86400;
+
+/** Seconds of reports the urgency of a group is computed over. */
+export const URGENCY_WINDOW = 7 * 86400;
 
 /**
  * One app's crash index, named after the app's `name`.
@@ -254,8 +266,12 @@ export class AppShard extends DurableObject<Env> {
 		return { outcome: "counted", groupId };
 	}
 
-	/** Every group, most recently seen first, with its total count. */
-	async listGroups(): Promise<GroupSummary[]> {
+	/**
+	 * Every group, most urgent first, then most recently seen. Urgency is
+	 * taken over the reports of the `URGENCY_WINDOW` before `now`, so a
+	 * group nothing has hit lately sinks whatever its total.
+	 */
+	async listGroups(now: number): Promise<GroupSummary[]> {
 		const rows = await this.db
 			.selectFrom("crash_groups")
 			.leftJoin("crash_counts", "crash_counts.group_id", "crash_groups.id")
@@ -265,10 +281,27 @@ export class AppShard extends DurableObject<Env> {
 				(eb) => eb.fn.coalesce(eb.fn.sum<number>("crash_counts.count"), sql<number>`0`).as("count"),
 			])
 			.groupBy("crash_groups.id")
-			.orderBy("crash_groups.last_seen", "desc")
-			.orderBy("count", "desc")
 			.execute();
-		return rows.map((r) => ({ ...r, count: Number(r.count) }));
+		const recent = await this.db
+			.selectFrom("reports")
+			.select([
+				"group_id",
+				(eb) => eb.fn.countAll<number>().as("reports"),
+				(eb) => eb.fn.count<number>("user_key").distinct().as("users"),
+			])
+			.where("received_at", ">=", now - URGENCY_WINDOW)
+			.groupBy("group_id")
+			.execute();
+		const byGroup = new Map(recent.map((r) => [r.group_id, r]));
+		return rows
+			.map((r) => {
+				const w = byGroup.get(r.id);
+				const recent_count = Number(w?.reports ?? 0);
+				const recent_users = Number(w?.users ?? 0);
+				const urgency = Math.round(Math.sqrt(recent_count * recent_users));
+				return { ...r, count: Number(r.count), recent_count, recent_users, urgency };
+			})
+			.sort((a, b) => b.urgency - a.urgency || b.last_seen - a.last_seen || b.count - a.count);
 	}
 
 	/** Names of the migrations this shard has applied, in order. */

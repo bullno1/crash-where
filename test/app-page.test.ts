@@ -76,12 +76,20 @@ describe("app page", () => {
 					{ group_id: 1, version: "1.0.0", channel: "beta", trust: 0, day: 19_001, count: 4 },
 				])
 				.execute();
+			// This week: the memory crash hit three users once each, the abort one user twice.
+			const hour = Math.floor(Date.now() / 1000) - 3600;
+			const row = (id: string, group_id: number, user_key: string) =>
+				({ report_id: id, group_id, version: "1.0.0", channel: "stable", trust: 0, user_key, received_at: hour });
+			await obj.db
+				.insertInto("reports")
+				.values([row("r1", 1, "u1"), row("r2", 1, "u2"), row("r3", 1, "u3"), row("r4", 2, "u1"), row("r5", 2, "u1")])
+				.execute();
 		});
 		const html = await (await page("page-crashes")).text();
-		expect(html).toContain("<td>abort in main: tex != NULL</td>");
-		expect(html).toContain("<td>memory in copy_mesh…</td>\n<td>7</td>");
+		expect(html).toContain("<td>abort in main: tex != NULL</td>\n<td>1</td>\n<td>2</td>\n<td>1</td>\n<td>0</td>");
+		expect(html).toContain("<td>memory in copy_mesh…</td>\n<td>3</td>\n<td>3</td>\n<td>3</td>\n<td>7</td>");
 		expect(html).not.toContain("from load_level");
-		expect(html.indexOf("abort in main")).toBeLessThan(html.indexOf("memory in copy_mesh"));
+		expect(html.indexOf("memory in copy_mesh"), "urgency outranks recency").toBeLessThan(html.indexOf("abort in main"));
 		expect(html).toContain("<td>2025-06-15</td>");
 	});
 	it("lists versions newest first with their channels and builds", async () => {
@@ -151,7 +159,10 @@ describe("app page", () => {
 		expect(await json("")).toEqual({
 			app: expect.any(Object),
 			crashes: [
-				{ id: 7, title: "memory in tick", fault: "memory", message: null, frames: [{ module: "game", name: "tick" }], count: 2, first_seen: 5, last_seen: 6 },
+				{
+					id: 7, title: "memory in tick", fault: "memory", message: null, frames: [{ module: "game", name: "tick" }],
+					count: 2, recent_count: 0, recent_users: 0, urgency: 0, first_seen: 5, last_seen: 6,
+				},
 			],
 		});
 		expect(await json("/versions")).toEqual({
