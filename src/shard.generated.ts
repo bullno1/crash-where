@@ -42,8 +42,13 @@ export interface Releases {
 }
 
 export interface Reports {
+  channel: string;
+  group_id: number;
   received_at: number;
   report_id: string;
+  trust: number;
+  user_key: string;
+  version: string;
 }
 
 export interface Versions {

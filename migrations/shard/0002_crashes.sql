@@ -21,7 +21,13 @@ CREATE TABLE crash_counts (             -- the write on every report
   PRIMARY KEY (group_id, version, channel, trust, day)
 ) WITHOUT ROWID;
 
-CREATE TABLE reports (                  -- every accepted envelope, so a retry counts once
+CREATE TABLE reports (                  -- every accepted envelope: dedup, purge, and the user key
   report_id   TEXT    PRIMARY KEY NOT NULL,  -- client-minted UUID
-  received_at INTEGER NOT NULL               -- unix seconds
+  group_id    INTEGER NOT NULL REFERENCES crash_groups(id),
+  version     TEXT    NOT NULL REFERENCES versions(version),  -- so the version purge reaches it
+  channel     TEXT    NOT NULL,         -- as the envelope reported it
+  trust       INTEGER NOT NULL,         -- 0 = unauthorized, 1 = authorized; names the key space
+  user_key    TEXT    NOT NULL,         -- the token's sub when authorized, else the envelope's install_id
+  received_at INTEGER NOT NULL          -- unix seconds
 );
+CREATE INDEX reports_users ON reports(group_id, trust, user_key);

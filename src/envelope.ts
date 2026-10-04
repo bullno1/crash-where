@@ -4,6 +4,8 @@ import type { Frame } from "./symbols";
 /** What ingest reads from an envelope; the rest is carried to a sample later. */
 export interface Envelope {
 	reportId: string;
+	/** The install's random id; the user key of an unauthorized report. */
+	installId: string;
 	app: string;
 	version: string;
 	channel: string;
@@ -19,7 +21,8 @@ export type EnvelopeParse = { ok: true; envelope: Envelope } | { ok: false; reas
 export const MAX_ENVELOPE_BYTES = 512 * 1024;
 
 const SCHEMA = 2;
-const REPORT_ID = /^[A-Za-z0-9-]{1,64}$/;
+/** Shape of the ids the client mints: report and install. */
+const CLIENT_ID = /^[A-Za-z0-9-]{1,64}$/;
 const MAX_TYPE = 256;
 const MAX_FRAMES = 256;
 const MAX_MODULE = 256;
@@ -38,8 +41,10 @@ export function parseEnvelope(json: unknown): EnvelopeParse {
 	const bad = (reason: string): EnvelopeParse => ({ ok: false, reason });
 	if (!record(json)) return bad("the envelope is not an object");
 	if (json.schema !== SCHEMA) return bad(`envelope schema ${String(json.schema)}; this collector reads ${SCHEMA}`);
-	const reportId = typeof json.report_id === "string" && REPORT_ID.test(json.report_id) ? json.report_id : null;
+	const reportId = typeof json.report_id === "string" && CLIENT_ID.test(json.report_id) ? json.report_id : null;
 	if (reportId === null) return bad("report_id is missing or malformed");
+	const installId = typeof json.install_id === "string" && CLIENT_ID.test(json.install_id) ? json.install_id : null;
+	if (installId === null) return bad("install_id is missing or malformed");
 	if (!record(json.app)) return bad("app is missing");
 	const app = text(json.app.name, 63);
 	const version = typeof json.app.version === "string" && validVersion(json.app.version) ? json.app.version : null;
@@ -62,5 +67,5 @@ export function parseEnvelope(json: unknown): EnvelopeParse {
 		if (module === null || buildId === null) frames.push({ module: null, buildId: null, offset });
 		else frames.push({ module, buildId: buildId.toLowerCase(), offset });
 	}
-	return { ok: true, envelope: { reportId, app, version, channel, type, message, frames } };
+	return { ok: true, envelope: { reportId, installId, app, version, channel, type, message, frames } };
 }

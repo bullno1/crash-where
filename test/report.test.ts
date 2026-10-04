@@ -53,13 +53,14 @@ const frame = (offset: number, module: string | null = "game.exe", build_id: str
 const STACK = [frame(0x1010), frame(0x2010), frame(0x3010), frame(0x4010)];
 
 let nextId = 1;
+const INSTALL = "11111111-1111-4111-8111-111111111111";
 
 /** An envelope as the client writes one, with every field ingest reads overridable. */
 function envelope(over: Record<string, unknown> = {}, frames: FrameSpec[] = STACK): Record<string, unknown> {
 	return {
 		schema: 2,
 		report_id: `00000000-0000-4000-8000-${String(nextId++).padStart(12, "0")}`,
-		install_id: "11111111-1111-4111-8111-111111111111",
+		install_id: INSTALL,
 		sent_at: 1758100000,
 		app: { name: "forest-quest", version: "1.0.0", build_id: BUILD_ID_HEX, channel: "stable" },
 		env: { os: "linux" },
@@ -105,7 +106,7 @@ async function state(name: string) {
 	return inShard(name, async (obj) => ({
 		groups: await obj.db.selectFrom("crash_groups").selectAll().orderBy("id").execute(),
 		counts: await obj.db.selectFrom("crash_counts").selectAll().orderBy("group_id").orderBy("day").execute(),
-		reports: await obj.db.selectFrom("reports").select("report_id").execute(),
+		reports: await obj.db.selectFrom("reports").selectAll().orderBy("report_id").execute(),
 	}));
 }
 
@@ -133,6 +134,8 @@ describe("report routing", () => {
 		};
 		await bad({ schema: 1 }, /schema 1/);
 		await bad({ report_id: "has spaces" }, /report_id/);
+		await bad({ install_id: "has spaces" }, /install_id/);
+		await bad({ install_id: undefined }, /install_id/);
 		await bad({ exception: {} }, /exception\.type/);
 		await bad({ frames: "none" }, /frames/);
 		await bad({ frames: [{ module: "game.exe", build_id: BUILD_ID_HEX, offset: -1 }] }, /offset/);
@@ -195,13 +198,20 @@ describe("report body", () => {
 describe("report counting", () => {
 	it("counts a first report in a new group and asks for no attachments", async () => {
 		await release("count-first");
-		const r = await report("count-first");
+		const body = envelope();
+		body.app = { ...(body.app as object), name: "count-first" };
+		const r = await post("count-first", body);
 		expect(r.status).toBe(201);
 		expect(await r.text()).toBe("want_attachments 0\n");
 		const { groups, counts, reports } = await state("count-first");
-		expect(reports).toHaveLength(1);
 		expect(groups).toHaveLength(1);
 		const g = groups[0]!;
+		expect(reports).toEqual([
+			{
+				report_id: body.report_id, group_id: g.id, version: "1.0.0", channel: "stable",
+				trust: 0, user_key: INSTALL, received_at: g.first_seen,
+			},
+		]);
 		expect(g.fault).toBe("memory");
 		expect(g.message).toBeNull();
 		expect(g.fingerprint).toMatch(/^[0-9a-f]{16}$/);
@@ -236,6 +246,25 @@ describe("report counting", () => {
 		expect(groups).toHaveLength(1);
 		expect(counts).toHaveLength(1);
 		expect(counts[0]!.count).toBe(2);
+	});
+	it("records each report under its install, so one install crashing twice is one user", async () => {
+		await release("count-users");
+		expect((await report("count-users")).status).toBe(201);
+		expect((await report("count-users")).status).toBe(201);
+		expect((await report("count-users", { install_id: "22222222-2222-4222-8222-222222222222" })).status).toBe(201);
+		const { groups, counts, reports } = await state("count-users");
+		expect(groups).toHaveLength(1);
+		expect(counts[0]!.count).toBe(3);
+		expect(reports.map((r) => r.user_key).sort()).toEqual([INSTALL, INSTALL, "22222222-2222-4222-8222-222222222222"]);
+		const users = await inShard("count-users", (obj) =>
+			obj.db
+				.selectFrom("reports")
+				.select((eb) => eb.fn.count<number>("user_key").distinct().as("users"))
+				.where("group_id", "=", groups[0]!.id)
+				.where("trust", "=", 0)
+				.executeTakeFirstOrThrow()
+		);
+		expect(Number(users.users)).toBe(2);
 	});
 	it("keeps channels and versions apart in the counts", async () => {
 		await release("count-keys");
