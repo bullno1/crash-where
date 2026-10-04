@@ -112,6 +112,26 @@ export interface GroupSummary {
 	urgency: number;
 }
 
+/** Reports of a group on one release, over every trust level and day. */
+export interface GroupRelease {
+	version: string;
+	channel: string;
+	count: number;
+}
+
+/** A sample a group holds, with the release and the user its report came from. */
+export interface SampleSummary {
+	report_id: string;
+	version: string;
+	channel: string;
+	trust: number;
+	/** Who crashed, in the key space `trust` names: the install id for 0, the token's sub for 1. */
+	user_key: string;
+	received_at: number;
+	/** R2 prefix of the envelope and attachments. */
+	r2_key: string;
+}
+
 /** What one run of the purge removed. */
 export interface PurgeResult {
 	/** Releases past their window whose reports, counts and samples went. */
@@ -575,7 +595,46 @@ export class AppShard extends DurableObject<Env> {
 	 * group nothing has hit lately sinks whatever its total.
 	 */
 	async listGroups(now: number): Promise<GroupSummary[]> {
-		const rows = await this.db
+		return this.summarize(null, now);
+	}
+
+	/**
+	 * One group with its totals, the releases it was reported on, most
+	 * reported first, and the samples it holds, newest first; null when
+	 * there is no such group.
+	 */
+	async getGroup(
+		id: number, now: number
+	): Promise<{ group: GroupSummary; releases: GroupRelease[]; samples: SampleSummary[] } | null> {
+		const [group] = await this.summarize(id, now);
+		if (group === undefined) return null;
+		const releases = (
+			await this.db
+				.selectFrom("crash_counts")
+				.select(["version", "channel", (eb) => eb.fn.sum<number>("count").as("count")])
+				.where("group_id", "=", id)
+				.groupBy(["version", "channel"])
+				.execute()
+		)
+			.map((r) => ({ ...r, count: Number(r.count) }))
+			.sort((a, b) => b.count - a.count || b.version.localeCompare(a.version) || a.channel.localeCompare(b.channel));
+		const samples = await this.db
+			.selectFrom("crash_samples")
+			.innerJoin("reports", "reports.report_id", "crash_samples.report_id")
+			.select([
+				"crash_samples.report_id", "crash_samples.version", "reports.channel", "crash_samples.trust",
+				"reports.user_key", "crash_samples.received_at", "crash_samples.r2_key",
+			])
+			.where("crash_samples.group_id", "=", id)
+			.orderBy("crash_samples.received_at", "desc")
+			.orderBy("crash_samples.id", "desc")
+			.execute();
+		return { group, releases, samples };
+	}
+
+	/** The summaries of every group, or of the one named, in the order `listGroups` gives. */
+	private async summarize(id: number | null, now: number): Promise<GroupSummary[]> {
+		let groups = this.db
 			.selectFrom("crash_groups")
 			.leftJoin("crash_counts", "crash_counts.group_id", "crash_groups.id")
 			.select([
@@ -583,9 +642,8 @@ export class AppShard extends DurableObject<Env> {
 				"crash_groups.first_seen", "crash_groups.last_seen",
 				(eb) => eb.fn.coalesce(eb.fn.sum<number>("crash_counts.count"), sql<number>`0`).as("count"),
 			])
-			.groupBy("crash_groups.id")
-			.execute();
-		const recent = await this.db
+			.groupBy("crash_groups.id");
+		let recent = this.db
 			.selectFrom("reports")
 			.select([
 				"group_id",
@@ -593,10 +651,13 @@ export class AppShard extends DurableObject<Env> {
 				(eb) => eb.fn.count<number>("user_key").distinct().as("users"),
 			])
 			.where("received_at", ">=", now - URGENCY_WINDOW)
-			.groupBy("group_id")
-			.execute();
-		const byGroup = new Map(recent.map((r) => [r.group_id, r]));
-		return rows
+			.groupBy("group_id");
+		if (id !== null) {
+			groups = groups.where("crash_groups.id", "=", id);
+			recent = recent.where("group_id", "=", id);
+		}
+		const byGroup = new Map((await recent.execute()).map((r) => [r.group_id, r]));
+		return (await groups.execute())
 			.map((r) => {
 				const w = byGroup.get(r.id);
 				const recent_count = Number(w?.reports ?? 0);

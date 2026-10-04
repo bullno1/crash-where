@@ -146,20 +146,29 @@ function skipped(f: RawFrame, skip: SkipList): boolean {
 }
 
 /**
- * The tokens the hash takes: the names of the first frames that survive
- * the skip list, an unnamed frame contributing its module instead. When
- * every frame is noise the stack is all runtime or driver, and the module
- * names of the first raw frames stand in.
+ * The indices of the frames the hash takes: the first frames that survive
+ * the skip list. When every frame is noise the stack is all runtime or
+ * driver, and the first raw frames stand in.
  */
-export function selectFrames(frames: RawFrame[], skip: SkipList): string[] {
-	const kept: string[] = [];
-	for (const f of frames) {
+export function keptFrames(frames: RawFrame[], skip: SkipList): number[] {
+	const kept: number[] = [];
+	for (const [i, f] of frames.entries()) {
 		if (kept.length === HASHED_FRAMES) break;
-		if (skipped(f, skip)) continue;
-		kept.push(f.name ?? `${f.module}!${UNKNOWN}`);
+		if (!skipped(f, skip)) kept.push(i);
 	}
 	if (kept.length > 0 || frames.length === 0) return kept;
-	return frames.slice(0, HASHED_FRAMES).map((f) => f.module);
+	return frames.slice(0, HASHED_FRAMES).map((_, i) => i);
+}
+
+/**
+ * The tokens the hash takes: the names of the kept frames, an unnamed
+ * frame contributing its module instead. When the kept frames are the
+ * stand-ins for an all-noise stack, their module names alone.
+ */
+export function selectFrames(frames: RawFrame[], skip: SkipList): string[] {
+	const kept = keptFrames(frames, skip).map((i) => frames[i]!);
+	if (kept.length > 0 && skipped(kept[0]!, skip)) return kept.map((f) => f.module);
+	return kept.map((f) => f.name ?? `${f.module}!${UNKNOWN}`);
 }
 
 /** The group hash: hex16 of the fault, the selected frames and the message. */
