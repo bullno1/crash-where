@@ -5,7 +5,7 @@ import worker from "../src/index";
 import { authenticateToken, hashToken } from "../src/tokens";
 
 const password = "correct horse battery staple";
-const env = { DB: bindings.DB, SHARD: bindings.SHARD, SYMBOLS: bindings.SYMBOLS, DASHBOARD_PASSWORD: password };
+const env = { DB: bindings.DB, SHARD: bindings.SHARD, BUCKET: bindings.BUCKET, DASHBOARD_PASSWORD: password };
 const auth = `Basic ${btoa(`alice:${password}`)}`;
 const origin = "https://dash.example";
 const db = createDb(bindings.DB);

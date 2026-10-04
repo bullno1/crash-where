@@ -7,7 +7,7 @@ import { type AppShard, SUPPORT_WINDOW } from "../src/shard";
 import { createToken } from "../src/tokens";
 import { BUILD_ID_HEX, makeTable } from "./table";
 
-const env = { DB: bindings.DB, SHARD: bindings.SHARD, SYMBOLS: bindings.SYMBOLS };
+const env = { DB: bindings.DB, SHARD: bindings.SHARD, BUCKET: bindings.BUCKET };
 const db = createDb(bindings.DB);
 const who = { sub: "ci", email: "ci@example.com" };
 
@@ -95,7 +95,7 @@ describe("upload authorization", () => {
 		const r = await put({ app: "auth-disabled", token });
 		expect(r.status).toBe(403);
 		expect(await r.text()).toMatch(/disabled/);
-		expect(await bindings.SYMBOLS.head(symbolKey("auth-disabled", BUILD_ID_HEX))).toBeNull();
+		expect(await bindings.BUCKET.head(symbolKey("auth-disabled", BUILD_ID_HEX))).toBeNull();
 	});
 	it("is 404 for an unknown app", async () => {
 		const token = await appWithToken("auth-known");
@@ -140,7 +140,7 @@ describe("upload validation", () => {
 		const prefix = await put({ app: "val-table", token, body: makeTable({ complete: false }) });
 		expect(prefix.status).toBe(400);
 		expect(await prefix.text()).toMatch(/prefix/);
-		expect(await bindings.SYMBOLS.head(symbolKey("val-table", BUILD_ID_HEX))).toBeNull();
+		expect(await bindings.BUCKET.head(symbolKey("val-table", BUILD_ID_HEX))).toBeNull();
 		expect((await rows("val-table")).builds).toEqual([]);
 	});
 });
@@ -152,7 +152,7 @@ describe("upload", () => {
 		const r = await put({ app: "up-first", token, body: table });
 		expect(r.status).toBe(201);
 		expect(await r.text()).toBe(`build ${BUILD_ID_HEX}\ncreated table,version,build,release\n`);
-		const object = await bindings.SYMBOLS.get(symbolKey("up-first", BUILD_ID_HEX));
+		const object = await bindings.BUCKET.get(symbolKey("up-first", BUILD_ID_HEX));
 		expect(new Uint8Array(await object!.arrayBuffer())).toEqual(table);
 		expect(await rows("up-first")).toEqual({
 			versions: [{ version: "1.0.0" }],
@@ -218,12 +218,12 @@ describe("upload", () => {
 		const r = await put({ app: "up-bytes", token, body: makeTable({ display: "main(int, char**)" }) });
 		expect(r.status).toBe(409);
 		expect(await r.text()).toMatch(/different table/);
-		const object = await bindings.SYMBOLS.get(symbolKey("up-bytes", BUILD_ID_HEX));
+		const object = await bindings.BUCKET.get(symbolKey("up-bytes", BUILD_ID_HEX));
 		expect(new Uint8Array(await object!.arrayBuffer())).toEqual(first);
 	});
 	it("completes a rerun after the rows were not written", async () => {
 		const token = await appWithToken("up-orphan");
-		await bindings.SYMBOLS.put(symbolKey("up-orphan", BUILD_ID_HEX), makeTable());
+		await bindings.BUCKET.put(symbolKey("up-orphan", BUILD_ID_HEX), makeTable());
 		const r = await put({ app: "up-orphan", token });
 		expect(r.status).toBe(201);
 		expect(await r.text()).toBe(`build ${BUILD_ID_HEX}\ncreated version,build,release\n`);

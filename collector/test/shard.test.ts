@@ -117,3 +117,60 @@ describe("shard dialect", () => {
 		).rejects.toThrow(/transactionSync/);
 	});
 });
+
+describe("sampling", () => {
+	type Ingest = Parameters<AppShard["ingest"]>[0];
+	/** A report of the one crash, in version 1.0.0 on stable, with the draw and cap given. */
+	function report(n: number, draw: number, over: Partial<Ingest> = {}): Ingest {
+		return {
+			reportId: `r${n}`, version: "1.0.0", channel: "stable", trust: 0, userKey: `u${n}`, now: 100 + n,
+			group: { fingerprint: "f", fault: "memory", frames: "[]", message: null },
+			sampleCap: 2, sampleKey: `app/r${n}/`, draw,
+			...over,
+		};
+	}
+	async function released(name: string) {
+		await inShard(name, (obj) => obj.registerRelease({ version: "1.0.0", channel: "stable", buildId: "b", now: 1 }));
+		await inShard(name, (obj) => obj.registerRelease({ version: "2.0.0", channel: "stable", buildId: "c", now: 2 }));
+	}
+	const stored = (name: string) =>
+		inShard(name, (obj) => obj.db.selectFrom("crash_samples").select(["report_id", "r2_key"]).orderBy("id").execute());
+
+	it("keeps every report until the bucket is full, then one in k by the draw", async () => {
+		await released("reservoir");
+		const ingest = (n: number, draw: number) => inShard("reservoir", (obj) => obj.ingest(report(n, draw)));
+		expect(await ingest(1, 0.99)).toMatchObject({ outcome: "counted", sampled: true, evicted: null });
+		expect(await ingest(2, 0.99)).toMatchObject({ outcome: "counted", sampled: true, evicted: null });
+		// The third report: slot 2 of 3 is past the cap, so it is not kept.
+		expect(await ingest(3, 0.7)).toMatchObject({ outcome: "counted", sampled: false, evicted: null });
+		// The fourth: slot 1 of 4 is the second stored sample, which it replaces.
+		expect(await ingest(4, 0.3)).toMatchObject({ outcome: "counted", sampled: true, evicted: "app/r2/" });
+		expect(await stored("reservoir")).toEqual([{ report_id: "r1", r2_key: "app/r1/" }, { report_id: "r4", r2_key: "app/r4/" }]);
+	});
+	it("tells a retry whether its first delivery was sampled", async () => {
+		await released("retry");
+		await inShard("retry", (obj) => obj.ingest(report(1, 0.5)));
+		await inShard("retry", (obj) => obj.ingest(report(2, 0.5, { sampleCap: 0 })));
+		expect(await inShard("retry", (obj) => obj.ingest(report(1, 0.5)))).toEqual({ outcome: "duplicate", sampled: true });
+		expect(await inShard("retry", (obj) => obj.ingest(report(2, 0.5)))).toEqual({ outcome: "duplicate", sampled: false });
+	});
+	it("keeps nothing under a cap of zero and prefers the group's own cap", async () => {
+		await released("caps");
+		expect(await inShard("caps", (obj) => obj.ingest(report(1, 0.5, { sampleCap: 0 })))).toMatchObject({ sampled: false });
+		expect(await stored("caps")).toEqual([]);
+		await inShard("caps", (obj) => obj.db.updateTable("crash_groups").set({ sample_cap: 1 }).execute());
+		expect(await inShard("caps", (obj) => obj.ingest(report(2, 0.5, { sampleCap: 0 })))).toMatchObject({ sampled: true });
+		// Full at one: the third report's slot 2 of 3 misses, whatever the app allows.
+		expect(await inShard("caps", (obj) => obj.ingest(report(3, 0.9, { sampleCap: 5 })))).toMatchObject({ sampled: false });
+	});
+	it("fills a bucket per version and trust level", async () => {
+		await released("buckets");
+		const keep = (n: number, over: Partial<Ingest>) =>
+			inShard("buckets", (obj) => obj.ingest(report(n, 0.99, { sampleCap: 1, ...over })));
+		expect(await keep(1, {})).toMatchObject({ sampled: true });
+		expect(await keep(2, {})).toMatchObject({ sampled: false });
+		expect(await keep(3, { version: "2.0.0" })).toMatchObject({ sampled: true });
+		expect(await keep(4, { trust: 1 })).toMatchObject({ sampled: true });
+		expect((await stored("buckets")).map((s) => s.report_id)).toEqual(["r1", "r3", "r4"]);
+	});
+});

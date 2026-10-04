@@ -52,16 +52,26 @@ export interface IngestRequest {
 		frames: string;
 		message: string | null;
 	};
+	/** Samples the app keeps per bucket at this trust level; 0 keeps none. */
+	sampleCap: number;
+	/** R2 prefix of this report's objects, should it be sampled. */
+	sampleKey: string;
+	/** A uniform draw in [0, 1) that decides the sample once the bucket is full. */
+	draw: number;
 }
 
 /**
  * How a report was received. `unknown` and `expired` describe the
  * release; `duplicate` is a retry of a counted report; `counted` names
- * the group the report went to.
+ * the group the report went to. `sampled` says whether the report's
+ * objects belong in the bucket: for a retry, whether they were wanted
+ * the first time, so the client sends what is left. `evicted` is the
+ * prefix of the sample this one replaced, whose objects must go.
  */
 export type IngestResult =
-	| { outcome: "unknown" | "expired" | "duplicate" }
-	| { outcome: "counted"; groupId: number };
+	| { outcome: "unknown" | "expired" }
+	| { outcome: "duplicate"; sampled: boolean }
+	| { outcome: "counted"; groupId: number; sampled: boolean; evicted: string | null };
 
 /** A group with its totals and urgency, for the app page. */
 export interface GroupSummary {
@@ -201,8 +211,16 @@ export class AppShard extends DurableObject<Env> {
 	/**
 	 * Counts a report: refuses one for a release that is unknown or past
 	 * its window, counts a retried report id once, finds or creates the
-	 * group, records the report under it with its user key, and adds one
-	 * to the day's count. Atomic as `registerRelease`.
+	 * group, records the report under it with its user key, adds one to
+	 * the day's count, and decides whether to sample it. Atomic as
+	 * `registerRelease`.
+	 *
+	 * A bucket is a group, a version and a trust level, and keeps up to
+	 * the group's own cap or, without one, the app's for that trust. While
+	 * the bucket holds fewer samples than its cap every report is kept, so
+	 * a raised cap fills at once; after that the `k`th report of the bucket
+	 * is kept with probability `cap / k` and replaces the sample the draw
+	 * points at, so the bucket stays a uniform sample of its whole life.
 	 */
 	async ingest(req: IngestRequest): Promise<IngestResult> {
 		const release = await this.db
@@ -218,14 +236,22 @@ export class AppShard extends DurableObject<Env> {
 			.select("report_id")
 			.where("report_id", "=", req.reportId)
 			.executeTakeFirst();
-		if (seen) return { outcome: "duplicate" };
+		if (seen) {
+			const sample = await this.db
+				.selectFrom("crash_samples")
+				.select("id")
+				.where("report_id", "=", req.reportId)
+				.executeTakeFirst();
+			return { outcome: "duplicate", sampled: sample !== undefined };
+		}
 
 		const existing = await this.db
 			.selectFrom("crash_groups")
-			.select("id")
+			.select(["id", "sample_cap"])
 			.where("fingerprint", "=", req.group.fingerprint)
 			.executeTakeFirst();
 		let groupId: number;
+		const cap = existing?.sample_cap ?? req.sampleCap;
 		if (existing) {
 			groupId = existing.id;
 			await this.db.updateTable("crash_groups").set({ last_seen: req.now }).where("id", "=", groupId).execute();
@@ -263,7 +289,54 @@ export class AppShard extends DurableObject<Env> {
 				oc.columns(["group_id", "version", "channel", "trust", "day"]).doUpdateSet({ count: sql`count + 1` })
 			)
 			.execute();
-		return { outcome: "counted", groupId };
+
+		const bucket = await this.db
+			.selectFrom("crash_counts")
+			.select((eb) => eb.fn.coalesce(eb.fn.sum<number>("count"), sql<number>`0`).as("k"))
+			.where("group_id", "=", groupId)
+			.where("version", "=", req.version)
+			.where("trust", "=", req.trust)
+			.executeTakeFirstOrThrow();
+		const k = Number(bucket.k);
+		if (cap <= 0) return { outcome: "counted", groupId, sampled: false, evicted: null };
+		const held = await this.db
+			.selectFrom("crash_samples")
+			.select((eb) => eb.fn.countAll<number>().as("n"))
+			.where("group_id", "=", groupId)
+			.where("version", "=", req.version)
+			.where("trust", "=", req.trust)
+			.executeTakeFirstOrThrow();
+		let evicted: string | null = null;
+		if (Number(held.n) >= cap) {
+			const slot = Math.floor(req.draw * k);
+			if (slot >= cap) return { outcome: "counted", groupId, sampled: false, evicted: null };
+			const old = await this.db
+				.selectFrom("crash_samples")
+				.select(["id", "r2_key"])
+				.where("group_id", "=", groupId)
+				.where("version", "=", req.version)
+				.where("trust", "=", req.trust)
+				.orderBy("id")
+				.offset(slot)
+				.limit(1)
+				.executeTakeFirst();
+			if (old) {
+				await this.db.deleteFrom("crash_samples").where("id", "=", old.id).execute();
+				evicted = old.r2_key;
+			}
+		}
+		await this.db
+			.insertInto("crash_samples")
+			.values({
+				report_id: req.reportId,
+				group_id: groupId,
+				version: req.version,
+				trust: req.trust,
+				r2_key: req.sampleKey,
+				received_at: req.now,
+			})
+			.execute();
+		return { outcome: "counted", groupId, sampled: true, evicted };
 	}
 
 	/**

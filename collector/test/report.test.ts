@@ -1,12 +1,13 @@
 import { env as bindings, runInDurableObject } from "cloudflare:test";
-import { beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import worker from "../src/index";
 import { symbolKey } from "../src/releases";
+import { ENVELOPE_OBJECT, sampleKey } from "../src/samples";
 import type { AppShard } from "../src/shard";
 import { forgetTables } from "../src/symbols";
 import { BUILD_ID_HEX, makeTable, type SymbolRow } from "./table";
 
-const env = { DB: bindings.DB, SHARD: bindings.SHARD, SYMBOLS: bindings.SYMBOLS };
+const env = { DB: bindings.DB, SHARD: bindings.SHARD, BUCKET: bindings.BUCKET };
 
 /** The game's functions; frames point into them by offset. */
 const FUNCTIONS: SymbolRow[] = [
@@ -36,7 +37,7 @@ function inShard<T>(name: string, fn: (obj: AppShard) => T | Promise<T>): Promis
 /** An app with the game's table stored and a version released on `stable`. */
 async function release(name: string, version = "1.0.0", channel = "stable"): Promise<void> {
 	await addApp(name);
-	await bindings.SYMBOLS.put(symbolKey(name, BUILD_ID_HEX), makeTable({ functions: FUNCTIONS }));
+	await bindings.BUCKET.put(symbolKey(name, BUILD_ID_HEX), makeTable({ functions: FUNCTIONS }));
 	await inShard(name, (obj) => obj.registerRelease({ version, channel, buildId: BUILD_ID_HEX, now: 1 }));
 }
 
@@ -107,7 +108,18 @@ async function state(name: string) {
 		groups: await obj.db.selectFrom("crash_groups").selectAll().orderBy("id").execute(),
 		counts: await obj.db.selectFrom("crash_counts").selectAll().orderBy("group_id").orderBy("day").execute(),
 		reports: await obj.db.selectFrom("reports").selectAll().orderBy("report_id").execute(),
+		samples: await obj.db.selectFrom("crash_samples").selectAll().orderBy("id").execute(),
 	}));
+}
+
+/** The stored envelope of a report, parsed, or null when none is stored. */
+async function storedEnvelope(app: string, reportId: string): Promise<unknown> {
+	const object = await bindings.BUCKET.get(sampleKey(app, reportId) + ENVELOPE_OBJECT);
+	return object === null ? null : object.json();
+}
+
+async function setCap(app: string, cap: number): Promise<void> {
+	await bindings.DB.prepare("UPDATE apps SET sample_cap_untrusted = ?1 WHERE name = ?2").bind(cap, app).run();
 }
 
 const today = () => Math.floor(Date.now() / 1000 / 86400);
@@ -116,6 +128,7 @@ beforeEach(async () => {
 	await bindings.DB.exec("DELETE FROM apps");
 	forgetTables();
 });
+afterEach(() => vi.restoreAllMocks());
 
 describe("report routing", () => {
 	it("is 404 for an unknown app and 403 for a disabled one", async () => {
@@ -196,14 +209,16 @@ describe("report body", () => {
 });
 
 describe("report counting", () => {
-	it("counts a first report in a new group and asks for no attachments", async () => {
+	it("counts a first report in a new group and samples it", async () => {
 		await release("count-first");
 		const body = envelope();
 		body.app = { ...(body.app as object), name: "count-first" };
 		const r = await post("count-first", body);
 		expect(r.status).toBe(201);
-		expect(await r.text()).toBe("want_attachments 0\n");
-		const { groups, counts, reports } = await state("count-first");
+		expect(await r.text()).toBe("want_attachments 1\n");
+		expect(await storedEnvelope("count-first", body.report_id as string)).toEqual(body);
+		const { groups, counts, reports, samples } = await state("count-first");
+		expect(samples).toMatchObject([{ report_id: body.report_id, version: "1.0.0", trust: 0, r2_key: `samples/count-first/${body.report_id}/` }]);
 		expect(groups).toHaveLength(1);
 		const g = groups[0]!;
 		expect(reports).toEqual([
@@ -233,10 +248,11 @@ describe("report counting", () => {
 		expect((await post("count-retry", body)).status).toBe(201);
 		const again = await post("count-retry", body);
 		expect(again.status).toBe(200);
-		expect(await again.text()).toBe("want_attachments 0\n");
-		const { counts, reports } = await state("count-retry");
+		expect(await again.text()).toBe("want_attachments 1\n");
+		const { counts, reports, samples } = await state("count-retry");
 		expect(reports).toHaveLength(1);
 		expect(counts[0]!.count).toBe(1);
+		expect(samples).toHaveLength(1);
 	});
 	it("adds a second report of the same crash to the group's count", async () => {
 		await release("count-same");
@@ -276,6 +292,50 @@ describe("report counting", () => {
 		const { groups, counts } = await state("count-keys");
 		expect(groups).toHaveLength(1);
 		expect(counts.map((c) => [c.channel, c.count])).toEqual([["beta", 1], ["stable", 1]]);
+	});
+});
+
+describe("report sampling", () => {
+	it("stores nothing for an app that keeps no samples, on the retry too", async () => {
+		await release("sample-none");
+		await setCap("sample-none", 0);
+		const body = envelope();
+		body.app = { ...(body.app as object), name: "sample-none" };
+		const r = await post("sample-none", body);
+		expect(r.status).toBe(201);
+		expect(await r.text()).toBe("want_attachments 0\n");
+		expect(await (await post("sample-none", body)).text()).toBe("want_attachments 0\n");
+		expect(await storedEnvelope("sample-none", body.report_id as string)).toBeNull();
+		expect((await state("sample-none")).samples).toEqual([]);
+	});
+	it("replaces the sample the draw points at and deletes its objects", async () => {
+		await release("sample-evict");
+		await setCap("sample-evict", 1);
+		const first = envelope();
+		const second = envelope();
+		const third = envelope();
+		for (const b of [first, second, third]) b.app = { ...(b.app as object), name: "sample-evict" };
+		const id = (b: Record<string, unknown>) => b.report_id as string;
+		await post("sample-evict", first);
+		await bindings.BUCKET.put(sampleKey("sample-evict", id(first)) + "core.dmp", "dump");
+		vi.spyOn(Math, "random").mockReturnValue(0);
+		expect(await (await post("sample-evict", second)).text()).toBe("want_attachments 1\n");
+		expect(await storedEnvelope("sample-evict", id(first))).toBeNull();
+		expect(await bindings.BUCKET.get(sampleKey("sample-evict", id(first)) + "core.dmp")).toBeNull();
+		expect(await storedEnvelope("sample-evict", id(second))).toEqual(second);
+		vi.spyOn(Math, "random").mockReturnValue(0.9);
+		expect(await (await post("sample-evict", third)).text()).toBe("want_attachments 0\n");
+		expect(await storedEnvelope("sample-evict", id(second))).toEqual(second);
+		expect((await state("sample-evict")).samples.map((s) => s.report_id)).toEqual([id(second)]);
+	});
+	it("stores a gzipped envelope inflated", async () => {
+		await release("sample-gzip");
+		const body = envelope();
+		body.app = { ...(body.app as object), name: "sample-gzip" };
+		expect((await post("sample-gzip", body, { gzip: true })).status).toBe(201);
+		const object = await bindings.BUCKET.get(sampleKey("sample-gzip", body.report_id as string) + ENVELOPE_OBJECT);
+		expect(object?.httpMetadata?.contentType).toBe("application/json");
+		expect(await object?.json()).toEqual(body);
 	});
 });
 

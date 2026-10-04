@@ -32,8 +32,11 @@ type = "Text"
 globs = ["**/*.sql", "**/*.css"]
 fallthrough = true
 
-# Symbol tables uploaded by CI, one immutable object per build under
-# symbols/<app>/<build_id>.cwsym.
+# Everything the Worker stores whole: symbol tables uploaded by CI, one
+# immutable object per build under symbols/<app>/<build_id>.cwsym, and
+# sampled reports, the envelope and attachments of each under
+# samples/<app>/<report_id>/, deleted when a newer sample replaces them
+# or their version is purged.
 [[r2_buckets]]
-binding = "SYMBOLS"
+binding = "BUCKET"
 bucket_name = "crash-where-symbols"
