@@ -19,9 +19,17 @@ export interface RawFrame {
 	name: string | null;
 }
 
-/** Tables kept per isolate, most recently used last; a null marks a build without one. */
-const cache = new Map<string, CwsymTable | null>();
+/**
+ * Tables kept per isolate, most recently used last. A null marks a build
+ * without a table and is the one answer that can go stale, since a table
+ * is never replaced; it is trusted for `NEGATIVE_LIFETIME` and then
+ * fetched again, so every isolate learns of an upload within that time.
+ */
+const cache = new Map<string, { table: CwsymTable | null; at: number }>();
 const CACHE_SIZE = 32;
+
+/** Milliseconds a build without a table is remembered as such. */
+export const NEGATIVE_LIFETIME = 60_000;
 
 /** Prefix of a web frame's module, which names the JavaScript function itself. */
 const JAVASCRIPT = "javascript:";
@@ -33,11 +41,12 @@ const JAVASCRIPT = "javascript:";
  */
 async function table(bucket: R2Bucket, app: string, buildId: string): Promise<CwsymTable | null> {
 	const key = symbolKey(app, buildId);
-	if (cache.has(key)) {
-		const hit = cache.get(key)!;
+	const now = Date.now();
+	const hit = cache.get(key);
+	if (hit !== undefined && (hit.table !== null || now - hit.at < NEGATIVE_LIFETIME)) {
 		cache.delete(key);
 		cache.set(key, hit);
-		return hit;
+		return hit.table;
 	}
 	let parsed: CwsymTable | null = null;
 	const head = await bucket.get(key, { range: { offset: 0, length: HEADER_SIZE } });
@@ -46,9 +55,19 @@ async function table(bucket: R2Bucket, app: string, buildId: string): Promise<Cw
 		const prefix = length === null ? null : await bucket.get(key, { range: { offset: 0, length } });
 		if (prefix) parsed = CwsymTable.parse(new Uint8Array(await prefix.arrayBuffer()));
 	}
+	cache.delete(key);
 	if (cache.size >= CACHE_SIZE) cache.delete(cache.keys().next().value!);
-	cache.set(key, parsed);
+	cache.set(key, { table: parsed, at: now });
 	return parsed;
+}
+
+/**
+ * Forgets what this isolate knows of one build, for the upload route: the
+ * isolate that stored the table answers from it at once instead of after
+ * the lifetime of a null it may hold. Other isolates wait that long.
+ */
+export function forgetTable(app: string, buildId: string): void {
+	cache.delete(symbolKey(app, buildId));
 }
 
 /**
