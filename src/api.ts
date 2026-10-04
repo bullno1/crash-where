@@ -3,14 +3,14 @@ import { getApp } from "./apps";
 import { hex } from "./bytes";
 import { parseHeader } from "./cwsym";
 import type { App } from "./env";
-import { MAX_ENVELOPE_BYTES, parseEnvelope } from "./envelope";
+import { CLIENT_ID, MAX_ENVELOPE_BYTES, parseEnvelope } from "./envelope";
 import {
 	classify, compileSkipList, DEFAULT_SKIP_LIST, fingerprint, MAX_MESSAGE, selectFrames, STORED_FRAMES,
 } from "./grouping";
 import {
 	CHANNEL_GRAMMAR, MAX_TABLE_BYTES, symbolKey, validChannel, validVersion, VERSION_GRAMMAR,
 } from "./releases";
-import { deleteSample, ENVELOPE_OBJECT, sampleKey } from "./samples";
+import { attachmentKind, deleteSample, ENVELOPE_OBJECT, sampleKey } from "./samples";
 import { symbolicate } from "./symbols";
 import { authenticateToken } from "./tokens";
 
@@ -178,6 +178,38 @@ api.post("/:app/report", async (c) => {
 			}
 			return reply(result.sampled, 201);
 	}
+});
+
+/**
+ * Receives one attachment of a sampled report, under the name of the
+ * client's sidecar. The body is stored as sent, with its type and its
+ * encoding, so a download inflates in the browser. The sample's envelope
+ * object is the record that the report is sampled now: without it, or
+ * with a name that is not the report's own sidecar, the reply is final
+ * and the client deletes the file. A repeated name overwrites, so a
+ * retry after a partial failure is harmless.
+ */
+api.post("/:app/attach", async (c) => {
+	const app = await getApp(c.get("db"), c.req.param("app"));
+	if (!app) return c.text("No such app", 404);
+	if (app.disabled_at !== null) return c.text("The app is disabled", 403);
+	const reportId = c.req.query("report") ?? "";
+	if (!CLIENT_ID.test(reportId)) return c.text("report is missing or malformed", 400);
+	const name = c.req.query("name") ?? "";
+	const kind = attachmentKind(name, reportId);
+	if (kind === null) return c.text("name is not an attachment of the report", 400);
+	const encoding = c.req.header("Content-Encoding")?.trim().toLowerCase() ?? "";
+	const gzipped = encoding === "gzip";
+	if (!gzipped && encoding !== "" && encoding !== "identity") return c.text("Only gzip is accepted as a content encoding", 415);
+	const length = c.req.header("Content-Length");
+	if (length === undefined) return c.text("Content-Length is required", 411);
+	if (Number(length) > kind.maxBytes) return c.text(`${name} must be at most ${kind.maxBytes} bytes`, 413);
+	const prefix = sampleKey(app.name, reportId);
+	if ((await c.env.BUCKET.head(prefix + ENVELOPE_OBJECT)) === null) return c.text("The report is not sampled", 404);
+	await c.env.BUCKET.put(prefix + name, c.req.raw.body, {
+		httpMetadata: { contentType: kind.contentType, contentEncoding: gzipped ? "gzip" : undefined },
+	});
+	return c.body(null, 201);
 });
 
 api.all("*", (c) => c.text("Not found", 404));
