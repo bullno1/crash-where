@@ -1,9 +1,14 @@
 /** Name of the envelope object under a sample's prefix. */
 export const ENVELOPE_OBJECT = "envelope.json";
 
+/** The prefix under which every sample of the app lives. */
+export function samplesPrefix(app: string): string {
+	return `samples/${app}/`;
+}
+
 /** The prefix a sampled report's objects share. */
 export function sampleKey(app: string, reportId: string): string {
-	return `samples/${app}/${reportId}/`;
+	return `${samplesPrefix(app)}${reportId}/`;
 }
 
 /** Deletes every object of a sample, however many of its attachments arrived. */

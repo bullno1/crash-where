@@ -2,6 +2,7 @@ import { DurableObject } from "cloudflare:workers";
 import { Kysely, sql } from "kysely";
 import { shardMigrations } from "../migrations/shard";
 import type { Env } from "./env";
+import { deleteSample, samplesPrefix } from "./samples";
 import type { DB as ShardSchema } from "./shard.generated";
 import { ShardDialect } from "./shard-dialect";
 
@@ -111,8 +112,19 @@ export interface GroupSummary {
 	urgency: number;
 }
 
+/** What one run of the purge removed. */
+export interface PurgeResult {
+	/** Releases past their window whose reports, counts and samples went. */
+	releases: { channel: string; version: string }[];
+	/** Sample prefixes in the bucket that no row claimed. */
+	orphans: number;
+}
+
 /** Seconds a release keeps accepting reports after the next one on its channel. */
 export const SUPPORT_WINDOW = 21 * 86400;
+
+/** Seconds between sweeps of the app's sample prefix while the app holds samples. */
+export const SWEEP_INTERVAL = 86400;
 
 /** Seconds of reports the urgency of a group is computed over. */
 export const URGENCY_WINDOW = 7 * 86400;
@@ -131,7 +143,10 @@ export class AppShard extends DurableObject<Env> {
 	constructor(ctx: DurableObjectState, env: Env) {
 		super(ctx, env);
 		this.db = new Kysely<ShardSchema>({ dialect: new ShardDialect(ctx.storage.sql) });
-		ctx.blockConcurrencyWhile(async () => this.migrate());
+		ctx.blockConcurrencyWhile(async () => {
+			this.migrate();
+			await this.schedule(Math.floor(Date.now() / 1000));
+		});
 	}
 
 	/** Applies the migrations not yet recorded, each with its record in one transaction. */
@@ -220,6 +235,7 @@ export class AppShard extends DurableObject<Env> {
 				.values({ channel: req.channel, version: req.version, released_at: req.now, supported_until: null })
 				.execute();
 			created.release = true;
+			await this.schedule(req.now);
 		}
 		return { created };
 	}
@@ -306,6 +322,14 @@ export class AppShard extends DurableObject<Env> {
 			)
 			.execute();
 
+		const { sampled, evicted } = await this.sample(req, groupId, cap);
+		await this.schedule(req.now);
+		return { outcome: "counted", groupId, sampled, evicted };
+	}
+
+	/** The reservoir step of `ingest`: whether the report is kept in its bucket, and whose place it takes. */
+	private async sample(req: IngestRequest, groupId: number, cap: number): Promise<{ sampled: boolean; evicted: string | null }> {
+		if (cap <= 0) return { sampled: false, evicted: null };
 		const bucket = await this.db
 			.selectFrom("crash_counts")
 			.select((eb) => eb.fn.coalesce(eb.fn.sum<number>("count"), sql<number>`0`).as("k"))
@@ -314,7 +338,6 @@ export class AppShard extends DurableObject<Env> {
 			.where("trust", "=", req.trust)
 			.executeTakeFirstOrThrow();
 		const k = Number(bucket.k);
-		if (cap <= 0) return { outcome: "counted", groupId, sampled: false, evicted: null };
 		const held = await this.db
 			.selectFrom("crash_samples")
 			.select((eb) => eb.fn.countAll<number>().as("n"))
@@ -325,7 +348,7 @@ export class AppShard extends DurableObject<Env> {
 		let evicted: string | null = null;
 		if (Number(held.n) >= cap) {
 			const slot = Math.floor(req.draw * k);
-			if (slot >= cap) return { outcome: "counted", groupId, sampled: false, evicted: null };
+			if (slot >= cap) return { sampled: false, evicted: null };
 			const old = await this.db
 				.selectFrom("crash_samples")
 				.select(["id", "r2_key"])
@@ -352,7 +375,125 @@ export class AppShard extends DurableObject<Env> {
 				received_at: req.now,
 			})
 			.execute();
-		return { outcome: "counted", groupId, sampled: true, evicted };
+		return { sampled: true, evicted };
+	}
+
+	/**
+	 * Deletes what the app no longer keeps: every release past its window
+	 * loses its reports, counts and samples, the objects of each sample
+	 * before its row, and the sweep then removes the objects under the
+	 * app's sample prefix that no sample row claims. Safe to repeat: a
+	 * release with no reports left is done, and a run that fails midway
+	 * leaves rows that the next run reaches again.
+	 */
+	async purge(now: number): Promise<PurgeResult> {
+		const releases = await this.db
+			.selectFrom("releases")
+			.select(["channel", "version"])
+			.where("supported_until", "<", now)
+			.where((eb) =>
+				eb.exists(
+					eb.selectFrom("reports")
+						.select("report_id")
+						.whereRef("reports.version", "=", "releases.version")
+						.whereRef("reports.channel", "=", "releases.channel")
+				)
+			)
+			.orderBy("supported_until")
+			.execute();
+		for (const release of releases) await this.purgeRelease(release);
+		return { releases, orphans: await this.sweep() };
+	}
+
+	private async purgeRelease(release: { channel: string; version: string }): Promise<void> {
+		const samples = await this.db
+			.selectFrom("crash_samples")
+			.innerJoin("reports", "reports.report_id", "crash_samples.report_id")
+			.select("crash_samples.r2_key")
+			.where("reports.version", "=", release.version)
+			.where("reports.channel", "=", release.channel)
+			.execute();
+		for (const sample of samples) await deleteSample(this.env.BUCKET, sample.r2_key);
+		this.ctx.storage.transactionSync(() => {
+			const sql = this.ctx.storage.sql;
+			sql.exec(
+				"DELETE FROM crash_samples WHERE report_id IN (SELECT report_id FROM reports WHERE version = ? AND channel = ?)",
+				release.version, release.channel
+			);
+			sql.exec("DELETE FROM reports WHERE version = ? AND channel = ?", release.version, release.channel);
+			sql.exec("DELETE FROM crash_counts WHERE version = ? AND channel = ?", release.version, release.channel);
+		});
+	}
+
+	/**
+	 * Deletes the objects under the app's sample prefix whose report has no
+	 * sample row. A row is written before its first object and deleted
+	 * before its objects, so such objects are always leftovers: an eviction
+	 * or purge that failed after its row went, or an attachment that landed
+	 * after one. Returns how many prefixes went.
+	 */
+	private async sweep(): Promise<number> {
+		const app = this.ctx.id.name;
+		if (app === undefined) return 0;
+		const prefix = samplesPrefix(app);
+		let removed = 0;
+		let cursor: string | undefined;
+		do {
+			const page = await this.env.BUCKET.list({ prefix, cursor });
+			const objects = new Map<string, string[]>();
+			for (const object of page.objects) {
+				const reportId = object.key.slice(prefix.length).split("/")[0]!;
+				objects.set(reportId, [...(objects.get(reportId) ?? []), object.key]);
+			}
+			if (objects.size > 0) {
+				const rows = await this.db
+					.selectFrom("crash_samples")
+					.select("report_id")
+					.where("report_id", "in", [...objects.keys()])
+					.execute();
+				for (const row of rows) objects.delete(row.report_id);
+				if (objects.size > 0) await this.env.BUCKET.delete([...objects.values()].flat());
+				removed += objects.size;
+			}
+			cursor = page.truncated ? page.cursor : undefined;
+		} while (cursor !== undefined);
+		return removed;
+	}
+
+	/**
+	 * Arms the alarm for the next time the purge has work: the first second
+	 * after the earliest window to close on a release that still has
+	 * reports, and a sweep every `SWEEP_INTERVAL` while the app holds
+	 * samples. Clears it when neither applies, so an idle app never wakes.
+	 */
+	private async schedule(now: number): Promise<void> {
+		const expiry = await this.db
+			.selectFrom("releases")
+			.select((eb) => eb.fn.min("supported_until").as("at"))
+			.where((eb) =>
+				eb.exists(
+					eb.selectFrom("reports")
+						.select("report_id")
+						.whereRef("reports.version", "=", "releases.version")
+						.whereRef("reports.channel", "=", "releases.channel")
+				)
+			)
+			.executeTakeFirstOrThrow();
+		const sample = await this.db.selectFrom("crash_samples").select("id").limit(1).executeTakeFirst();
+		const due = [
+			...(expiry.at === null ? [] : [Math.max(Number(expiry.at) + 1, now)]),
+			...(sample === undefined ? [] : [now + SWEEP_INTERVAL]),
+		];
+		if (due.length === 0) await this.ctx.storage.deleteAlarm();
+		else await this.ctx.storage.setAlarm(Math.min(...due) * 1000);
+	}
+
+	/** Runs the purge. A failure is retried by the platform; the sweep interval is armed first in case it is not. */
+	async alarm(): Promise<void> {
+		const now = Math.floor(Date.now() / 1000);
+		await this.ctx.storage.setAlarm((now + SWEEP_INTERVAL) * 1000);
+		await this.purge(now);
+		await this.schedule(now);
 	}
 
 	/** Every group's stored row, oldest first. */

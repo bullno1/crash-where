@@ -126,7 +126,8 @@ async function readBody(c: Context<App>): Promise<Uint8Array | Response> {
  * the report is sampled; a sampled envelope is stored as parsed, plain
  * JSON, under its prefix, and the reply asks for the attachments to join
  * it. A retried report id is not counted again and gets the answer its
- * first delivery got, so the client sends what it still holds.
+ * first delivery got, so the client sends what it still holds; a sampled
+ * retry whose envelope object is missing stores it again.
  */
 api.post("/:app/report", async (c) => {
 	const app = await getApp(c.get("db"), c.req.param("app"));
@@ -174,6 +175,9 @@ api.post("/:app/report", async (c) => {
 		case "expired":
 			return c.text(`Version ${envelope.version} is no longer supported on channel ${envelope.channel}`, 410);
 		case "duplicate":
+			if (result.sampled && (await c.env.BUCKET.head(prefix + ENVELOPE_OBJECT)) === null) {
+				await c.env.BUCKET.put(prefix + ENVELOPE_OBJECT, body, { httpMetadata: { contentType: "application/json" } });
+			}
 			return reply(result.sampled, 200);
 		case "counted":
 			if (result.evicted !== null) await deleteSample(c.env.BUCKET, result.evicted);

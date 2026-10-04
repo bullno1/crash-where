@@ -1,7 +1,13 @@
-import { env, runInDurableObject } from "cloudflare:test";
+import { env, runDurableObjectAlarm, runInDurableObject } from "cloudflare:test";
 import { describe, expect, it } from "vitest";
 import { shardMigrations } from "../migrations/shard";
+import { sampleKey, samplesPrefix } from "../src/samples";
 import type { AppShard } from "../src/shard";
+
+const DAY = 86400;
+// Fixtures that close a release's window are dated from the clock, so the
+// alarm that the shard arms for the purge lands in the future and not mid-test.
+const T0 = Math.floor(Date.now() / 1000);
 
 function shard(name: string) {
 	return env.SHARD.get(env.SHARD.idFromName(name));
@@ -123,15 +129,15 @@ describe("sampling", () => {
 	/** A report of the one crash, in version 1.0.0 on stable, with the draw and cap given. */
 	function report(n: number, draw: number, over: Partial<Ingest> = {}): Ingest {
 		return {
-			reportId: `r${n}`, version: "1.0.0", channel: "stable", trust: 0, userKey: `u${n}`, now: 100 + n,
+			reportId: `r${n}`, version: "1.0.0", channel: "stable", trust: 0, userKey: `u${n}`, now: T0 + n,
 			group: { fingerprint: "f", fault: "memory", frames: "[]", message: null },
 			sampleCap: 2, sampleKey: `app/r${n}/`, draw,
 			...over,
 		};
 	}
 	async function released(name: string) {
-		await inShard(name, (obj) => obj.registerRelease({ version: "1.0.0", channel: "stable", buildId: "b", now: 1 }));
-		await inShard(name, (obj) => obj.registerRelease({ version: "2.0.0", channel: "stable", buildId: "c", now: 2 }));
+		await inShard(name, (obj) => obj.registerRelease({ version: "1.0.0", channel: "stable", buildId: "b", now: T0 - 2 }));
+		await inShard(name, (obj) => obj.registerRelease({ version: "2.0.0", channel: "stable", buildId: "c", now: T0 - 1 }));
 	}
 	const stored = (name: string) =>
 		inShard(name, (obj) => obj.db.selectFrom("crash_samples").select(["report_id", "r2_key"]).orderBy("id").execute());
@@ -235,5 +241,94 @@ describe("remap", () => {
 		expect(groups[0]).toMatchObject({ id: a!.id, frames: '["b2"]', fingerprint: "b", first_seen: 101, last_seen: 86400 * 3 + 2 });
 		expect(b!.id).not.toBe(a!.id);
 		expect(counts.map((c) => [c.day, c.count])).toEqual([[0, 1], [3, 3]]);
+	});
+});
+
+describe("purge", () => {
+	type Ingest = Parameters<AppShard["ingest"]>[0];
+	function report(name: string, n: number, over: Partial<Ingest> = {}): Ingest {
+		return {
+			reportId: `r${n}`, version: "1.0.0", channel: "stable", trust: 0, userKey: `u${n}`, now: T0 + n,
+			group: { fingerprint: "f", fault: "memory", frames: "[]", message: null },
+			sampleCap: 5, sampleKey: sampleKey(name, `r${n}`), draw: 0.5,
+			...over,
+		};
+	}
+	/** 1.0.0 on stable and beta, then 2.0.0 on stable, which closes stable 1.0.0's window at T0 + 21 days. */
+	async function released(name: string) {
+		await inShard(name, (obj) => obj.registerRelease({ version: "1.0.0", channel: "stable", buildId: "b", now: T0 - 2 }));
+		await inShard(name, (obj) => obj.registerRelease({ version: "1.0.0", channel: "beta", buildId: "b", now: T0 - 2 }));
+		await inShard(name, (obj) => obj.registerRelease({ version: "2.0.0", channel: "stable", buildId: "c", now: T0 }));
+	}
+	const ingest = (name: string, n: number, over: Partial<Ingest> = {}) =>
+		inShard(name, (obj) => obj.ingest(report(name, n, over)));
+	const purge = (name: string, now: number) => inShard(name, (obj) => obj.purge(now));
+	const alarm = (name: string) => inShard(name, (_obj, state) => state.storage.getAlarm());
+	const objects = (id: string) => [`envelope.json`, `1_c_${id}.dmp`];
+	async function putSample(name: string, id: string) {
+		for (const o of objects(id)) await env.BUCKET.put(sampleKey(name, id) + o, o);
+	}
+	const keysOf = (name: string, ...ids: string[]) =>
+		ids.flatMap((id) => objects(id).map((o) => sampleKey(name, id) + o)).sort();
+	const keys = async (name: string) =>
+		(await env.BUCKET.list({ prefix: samplesPrefix(name) })).objects.map((o) => o.key).sort();
+
+	it("deletes an expired release's rows and objects and keeps the other channel's", async () => {
+		const name = "purge-release";
+		await released(name);
+		await ingest(name, 1);
+		await ingest(name, 2, { channel: "beta" });
+		await ingest(name, 3, { version: "2.0.0" });
+		for (const id of ["r1", "r2", "r3"]) await putSample(name, id);
+		expect(await purge(name, T0 + 20 * DAY)).toEqual({ releases: [], orphans: 0 });
+		expect(await purge(name, T0 + 22 * DAY)).toEqual({ releases: [{ channel: "stable", version: "1.0.0" }], orphans: 0 });
+		const left = await inShard(name, async (obj) => ({
+			reports: (await obj.db.selectFrom("reports").select("report_id").orderBy("report_id").execute()).map((r) => r.report_id),
+			samples: (await obj.db.selectFrom("crash_samples").select("report_id").orderBy("id").execute()).map((r) => r.report_id),
+			counts: await obj.db.selectFrom("crash_counts").select(["channel", "version"]).orderBy("channel").execute(),
+			groups: (await obj.db.selectFrom("crash_groups").select("id").execute()).length,
+			releases: (await obj.db.selectFrom("releases").select("version").execute()).length,
+		}));
+		expect(left).toEqual({
+			reports: ["r2", "r3"],
+			samples: ["r2", "r3"],
+			counts: [{ channel: "beta", version: "1.0.0" }, { channel: "stable", version: "2.0.0" }],
+			groups: 1,
+			releases: 3,
+		});
+		expect(await keys(name)).toEqual(keysOf(name, "r2", "r3"));
+		// A release with no reports left is done, so a repeat finds nothing.
+		expect(await purge(name, T0 + 22 * DAY)).toEqual({ releases: [], orphans: 0 });
+	});
+	it("sweeps the objects no sample row claims", async () => {
+		const name = "purge-sweep";
+		await released(name);
+		await ingest(name, 1);
+		await putSample(name, "r1");
+		// An eviction whose delete failed, and an attachment that landed after one.
+		await putSample(name, "gone");
+		await env.BUCKET.put(sampleKey(name, "late") + "1_c_late.dmp", "dump");
+		expect(await purge(name, T0 + 1)).toEqual({ releases: [], orphans: 2 });
+		expect(await keys(name)).toEqual(keysOf(name, "r1"));
+	});
+	it("arms the alarm for the second after the next window closes, or a day out while samples are held", async () => {
+		const name = "purge-alarm";
+		await released(name);
+		expect(await alarm(name)).toBeNull();
+		await ingest(name, 1, { sampleCap: 0 });
+		expect(await alarm(name)).toBe((T0 + 21 * DAY + 1) * 1000);
+		await ingest(name, 2, { version: "2.0.0" });
+		expect(await alarm(name)).toBe((T0 + 2 + DAY) * 1000);
+	});
+	it("purges from the alarm and clears it when nothing is left to do", async () => {
+		const name = "purge-fires";
+		await released(name);
+		await ingest(name, 1, { sampleCap: 0 });
+		await inShard(name, (obj) =>
+			obj.db.updateTable("releases").set({ supported_until: T0 - 1 }).where("channel", "=", "stable").where("version", "=", "1.0.0").execute()
+		);
+		expect(await runDurableObjectAlarm(shard(name))).toBe(true);
+		expect(await inShard(name, (obj) => obj.db.selectFrom("reports").selectAll().execute())).toEqual([]);
+		expect(await alarm(name)).toBeNull();
 	});
 });

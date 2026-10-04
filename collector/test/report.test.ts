@@ -373,6 +373,16 @@ describe("report sampling", () => {
 		expect(await storedEnvelope("sample-evict", id(second))).toEqual(second);
 		expect((await state("sample-evict")).samples.map((s) => s.report_id)).toEqual([id(second)]);
 	});
+	it("stores the envelope again when a sampled retry finds it missing", async () => {
+		await release("sample-restore");
+		const body = envelope();
+		body.app = { ...(body.app as object), name: "sample-restore" };
+		const id = body.report_id as string;
+		expect(await (await post("sample-restore", body)).text()).toBe("want_attachments 1\n");
+		await bindings.BUCKET.delete(sampleKey("sample-restore", id) + ENVELOPE_OBJECT);
+		expect(await (await post("sample-restore", body)).text()).toBe("want_attachments 1\n");
+		expect(await storedEnvelope("sample-restore", id)).toEqual(body);
+	});
 	it("stores a gzipped envelope inflated", async () => {
 		await release("sample-gzip");
 		const body = envelope();
