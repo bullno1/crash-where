@@ -1,5 +1,6 @@
 import releases from "./0001_releases.sql";
 import crashes from "./0002_crashes.sql";
+import samples from "./0003_samples.sql";
 
 /** A shard migration: the file's name without extension and its SQL. */
 export interface ShardMigration {
@@ -14,4 +15,5 @@ export interface ShardMigration {
 export const shardMigrations: ShardMigration[] = [
 	{ name: "0001_releases", sql: releases },
 	{ name: "0002_crashes", sql: crashes },
+	{ name: "0003_samples", sql: samples },
 ];

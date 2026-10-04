@@ -32,6 +32,17 @@ export interface CrashGroups {
   id: Generated<number>;
   last_seen: number;
   message: string | null;
+  sample_cap: number | null;
+}
+
+export interface CrashSamples {
+  group_id: number;
+  id: Generated<number>;
+  r2_key: string;
+  received_at: number;
+  report_id: string;
+  trust: number;
+  version: string;
 }
 
 export interface Releases {
@@ -60,6 +71,7 @@ export interface DB {
   builds: Builds;
   crash_counts: CrashCounts;
   crash_groups: CrashGroups;
+  crash_samples: CrashSamples;
   releases: Releases;
   reports: Reports;
   versions: Versions;

@@ -16,6 +16,8 @@ export interface Apps {
   display_name: string;
   id: Generated<number>;
   name: string;
+  sample_cap_trusted: Generated<number>;
+  sample_cap_untrusted: Generated<number>;
 }
 
 export interface UploadTokens {
