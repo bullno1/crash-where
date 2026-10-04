@@ -22,7 +22,7 @@ export const MAX_ENVELOPE_BYTES = 512 * 1024;
 
 const SCHEMA = 2;
 /** Shape of the ids the client mints: report and install. */
-const CLIENT_ID = /^[A-Za-z0-9-]{1,64}$/;
+export const CLIENT_ID = /^[A-Za-z0-9-]{1,64}$/;
 const MAX_TYPE = 256;
 const MAX_FRAMES = 256;
 const MAX_MODULE = 256;

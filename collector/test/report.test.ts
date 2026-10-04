@@ -118,6 +118,28 @@ async function storedEnvelope(app: string, reportId: string): Promise<unknown> {
 	return object === null ? null : object.json();
 }
 
+/** Posts a sidecar for the report, with its length declared as the client's transports do. */
+function attach(app: string, reportId: string, name: string, body: Uint8Array | ReadableStream, headers: Record<string, string> = {}) {
+	const sent: Record<string, string> = { "Content-Type": "application/octet-stream" };
+	if (body instanceof Uint8Array) sent["Content-Length"] = String(body.byteLength);
+	return worker.fetch(
+		new Request(`https://api.example/v1/${app}/attach?report=${reportId}&name=${name}`, {
+			method: "POST", headers: { ...sent, ...headers }, body,
+		}),
+		env
+	);
+}
+
+/** A sampled report for the app, returning its id. */
+async function sampled(app: string): Promise<string> {
+	const body = envelope();
+	body.app = { ...(body.app as object), name: app };
+	expect(await (await post(app, body)).text()).toBe("want_attachments 1\n");
+	return body.report_id as string;
+}
+
+const bytes = (s: string) => new TextEncoder().encode(s);
+
 async function setCap(app: string, cap: number): Promise<void> {
 	await bindings.DB.prepare("UPDATE apps SET sample_cap_untrusted = ?1 WHERE name = ?2").bind(cap, app).run();
 }
@@ -336,6 +358,66 @@ describe("report sampling", () => {
 		const object = await bindings.BUCKET.get(sampleKey("sample-gzip", body.report_id as string) + ENVELOPE_OBJECT);
 		expect(object?.httpMetadata?.contentType).toBe("application/json");
 		expect(await object?.json()).toEqual(body);
+	});
+});
+
+describe("attachments", () => {
+	it("is 404 for an unknown app and 403 for a disabled one", async () => {
+		expect((await attach("at-unknown", "r", "1_c_r.dmp", bytes("x"))).status).toBe(404);
+		await addApp("at-disabled", 2);
+		expect((await attach("at-disabled", "r", "1_c_r.dmp", bytes("x"))).status).toBe(403);
+	});
+	it("refuses a name that is not the report's own sidecar", async () => {
+		await release("at-name");
+		const id = await sampled("at-name");
+		for (const name of ["", "core.dmp", `1_c_${id}`, `1_c_${id}.exe`, `1_c_${id}.dmp.gz`, "1_c_other.dmp", `x_c_${id}.dmp`]) {
+			const r = await attach("at-name", id, name, bytes("x"));
+			expect(r.status, name).toBe(400);
+		}
+		expect((await attach("at-name", "", `1_c_${id}.dmp`, bytes("x"))).status).toBe(400);
+		expect((await attach("at-name", "a b", "1_c_a b.dmp", bytes("x"))).status).toBe(400);
+	});
+	it("refuses a report that is not sampled, or whose sample was replaced", async () => {
+		await release("at-unsampled");
+		await setCap("at-unsampled", 1);
+		const first = envelope();
+		first.app = { ...(first.app as object), name: "at-unsampled" };
+		await post("at-unsampled", first);
+		const unknown = await attach("at-unsampled", "nobody", "1_c_nobody.dmp", bytes("x"));
+		expect(unknown.status).toBe(404);
+		expect(await unknown.text()).toMatch(/not sampled/);
+		vi.spyOn(Math, "random").mockReturnValue(0);
+		await sampled("at-unsampled");
+		const id = first.report_id as string;
+		expect((await attach("at-unsampled", id, `1_c_${id}.dmp`, bytes("x"))).status).toBe(404);
+		expect(await bindings.BUCKET.head(sampleKey("at-unsampled", id) + `1_c_${id}.dmp`)).toBeNull();
+	});
+	it("stores a sidecar as sent, with its type and encoding, and overwrites on a retry", async () => {
+		await release("at-store");
+		const id = await sampled("at-store");
+		const dump = await gzip(bytes("core"));
+		const r = await attach("at-store", id, `1_c_${id}.dmp`, dump, { "Content-Encoding": "gzip" });
+		expect(r.status).toBe(201);
+		let object = await bindings.BUCKET.get(sampleKey("at-store", id) + `1_c_${id}.dmp`);
+		expect(new Uint8Array(await object!.arrayBuffer())).toEqual(dump);
+		expect(object!.httpMetadata).toEqual({ contentType: "application/octet-stream", contentEncoding: "gzip" });
+		expect((await attach("at-store", id, `1_c_${id}.dmp`, bytes("again"))).status).toBe(201);
+		object = await bindings.BUCKET.get(sampleKey("at-store", id) + `1_c_${id}.dmp`);
+		expect(await object!.text()).toBe("again");
+		expect(object!.httpMetadata).toEqual({ contentType: "application/octet-stream" });
+		expect((await attach("at-store", id, `1_c_${id}.log`, bytes("tail"))).status).toBe(201);
+		object = await bindings.BUCKET.get(sampleKey("at-store", id) + `1_c_${id}.log`);
+		expect(object!.httpMetadata).toEqual({ contentType: "text/plain" });
+	});
+	it("refuses an undeclared, oversize or otherwise encoded body before reading it", async () => {
+		await release("at-size");
+		const id = await sampled("at-size");
+		const name = `1_c_${id}.log`;
+		const stream = new ReadableStream({ start: (c) => { c.enqueue(bytes("x")); c.close(); } });
+		expect((await attach("at-size", id, name, stream)).status).toBe(411);
+		expect((await attach("at-size", id, name, bytes("x"), { "Content-Length": String(1024 * 1024 + 1) })).status).toBe(413);
+		expect((await attach("at-size", id, name, bytes("x"), { "Content-Encoding": "br" })).status).toBe(415);
+		expect(await bindings.BUCKET.head(sampleKey("at-size", id) + name)).toBeNull();
 	});
 });
 

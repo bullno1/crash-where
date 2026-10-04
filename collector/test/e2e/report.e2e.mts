@@ -66,8 +66,9 @@ it("uploads the sample's symbols", async () => {
 	], { CWSYM_TOKEN: token });
 	assert.equal(r.status, 0, r.output);
 });
-it("uploads a null dereference", async () => {
-	await crash("null");
+it("uploads a null dereference with its core", async () => {
+	const log = await crash("null");
+	assert.match(log, /attachment \S+\.dmp uploaded/);
 });
 it("uploads an abort", async () => {
 	await crash("assert");
@@ -75,8 +76,11 @@ it("uploads an abort", async () => {
 it("leaves nothing pending and had both reports accepted", async () => {
 	const pending = await readdir(path.join(reportDir, "pending")).catch(() => [] as string[]);
 	assert.deepEqual(pending.filter((f) => f.endsWith(".json")), []);
-	const accepted = (await collector.log()).match(new RegExp(`POST /v1/${APP}/report 201`, "g")) ?? [];
+	const served = await collector.log();
+	const accepted = served.match(new RegExp(`POST /v1/${APP}/report 201`, "g")) ?? [];
 	assert.equal(accepted.length, 2);
+	const stored = served.match(new RegExp(`POST /v1/${APP}/attach 201`, "g")) ?? [];
+	assert.equal(stored.length, 2, "both cores were stored");
 });
 it("lists both crashes by their frames and message", async () => {
 	const page = await collector.json<CrashesPage>(`/dashboard/apps/${APP}`, 200);
