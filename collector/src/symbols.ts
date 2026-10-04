@@ -11,12 +11,20 @@ export interface Frame {
 	offset: number;
 }
 
-/** A frame with the function the symbol table names at its offset. */
+/**
+ * A frame with the function the symbol table names at its offset, as a
+ * group stores it. The build id and offset let a table that arrives
+ * later name the frame; groups stored before they were kept lack them.
+ */
 export interface RawFrame {
 	/** The module's file name, `?` when unknown. */
 	module: string;
 	/** Normalized function name, or null when no table covers the offset. */
 	name: string | null;
+	/** Hex build id of the module, or null with the module. */
+	buildId?: string | null;
+	/** Module-relative offset. */
+	offset?: number;
 }
 
 /**
@@ -71,25 +79,41 @@ export function forgetTable(app: string, buildId: string): void {
 }
 
 /**
- * Names every frame from the app's symbol tables. Frames past the first
- * hold return addresses, so they are looked up one byte back, inside the
- * call instruction, which keeps a call at the end of a function from
- * naming the function after it.
+ * The name at frame `i`'s offset. Frames past the first hold return
+ * addresses, so they are looked up one byte back, inside the call
+ * instruction, which keeps a call at the end of a function from naming
+ * the function after it.
  */
+function nameAt(t: CwsymTable | null, i: number, offset: number): string | null {
+	return t?.lookup(i === 0 ? offset : Math.max(0, offset - 1)) ?? null;
+}
+
+/** Names every frame from the app's symbol tables. */
 export async function symbolicate(bucket: R2Bucket, app: string, frames: Frame[]): Promise<RawFrame[]> {
 	const out: RawFrame[] = [];
 	for (const [i, f] of frames.entries()) {
 		if (f.module === null || f.buildId === null) {
-			out.push({ module: "?", name: null });
+			out.push({ module: "?", name: null, buildId: null, offset: f.offset });
 		} else if (f.module.startsWith(JAVASCRIPT)) {
-			out.push({ module: "javascript", name: f.module.slice(JAVASCRIPT.length) });
+			out.push({ module: "javascript", name: f.module.slice(JAVASCRIPT.length), buildId: null, offset: f.offset });
 		} else {
-			const t = await table(bucket, app, f.buildId);
-			const offset = i === 0 ? f.offset : Math.max(0, f.offset - 1);
-			out.push({ module: f.module, name: t?.lookup(offset) ?? null });
+			out.push({ module: f.module, name: nameAt(await table(bucket, app, f.buildId), i, f.offset), buildId: f.buildId, offset: f.offset });
 		}
 	}
 	return out;
+}
+
+/**
+ * Names again the frames of one build from its table, leaving the rest
+ * as they are. Null when no frame is of that build, or none carries an
+ * offset to look up.
+ */
+export async function resymbolicate(bucket: R2Bucket, app: string, buildId: string, frames: RawFrame[]): Promise<RawFrame[] | null> {
+	if (!frames.some((f) => f.buildId === buildId && f.offset !== undefined)) return null;
+	const t = await table(bucket, app, buildId);
+	return frames.map((f, i) =>
+		f.buildId === buildId && f.offset !== undefined ? { ...f, name: nameAt(t, i, f.offset) } : f
+	);
 }
 
 /** Forgets every cached table; for tests that replace an object. */

@@ -10,6 +10,7 @@ import {
 import {
 	CHANNEL_GRAMMAR, MAX_TABLE_BYTES, symbolKey, validChannel, validVersion, VERSION_GRAMMAR,
 } from "./releases";
+import { remapForBuild } from "./remap";
 import { attachmentKind, deleteSample, ENVELOPE_OBJECT, sampleKey } from "./samples";
 import { forgetTable, symbolicate } from "./symbols";
 import { authenticateToken } from "./tokens";
@@ -23,7 +24,8 @@ export const api = new Hono<App>();
  * between the two leaves an object the rerun finds and skips. A rerun of an
  * upload already recorded changes nothing and still succeeds; a build id
  * that already belongs to another version, or to a table with other bytes,
- * is refused.
+ * is refused. A new table names the frames of its build in the groups that
+ * stored them unnamed, which may rename or merge those groups.
  */
 api.put("/:app/releases/:version", async (c) => {
 	const auth = c.req.header("Authorization") ?? "";
@@ -67,6 +69,7 @@ api.put("/:app/releases/:version", async (c) => {
 	if (result.conflict !== undefined) {
 		return c.text(`Build ${buildId} is already registered under version ${result.conflict}`, 409);
 	}
+	if (!stored) await remapForBuild(c.env.BUCKET, shard, app.name, buildId, skipList);
 	const created = [
 		...(stored ? [] : ["table"]),
 		...Object.entries(result.created).filter(([, yes]) => yes).map(([what]) => what),

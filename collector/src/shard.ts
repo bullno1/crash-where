@@ -73,6 +73,22 @@ export type IngestResult =
 	| { outcome: "duplicate"; sampled: boolean }
 	| { outcome: "counted"; groupId: number; sampled: boolean; evicted: string | null };
 
+/** What a remap changes on one group: its frames as named now and the hash they give. */
+export interface GroupChange {
+	id: number;
+	frames: string;
+	fingerprint: string;
+}
+
+/** A group as stored, for a remap to name again. */
+export interface StoredGroup {
+	id: number;
+	fingerprint: string;
+	fault: string;
+	frames: string;
+	message: string | null;
+}
+
 /** A group with its totals and urgency, for the app page. */
 export interface GroupSummary {
 	id: number;
@@ -337,6 +353,79 @@ export class AppShard extends DurableObject<Env> {
 			})
 			.execute();
 		return { outcome: "counted", groupId, sampled: true, evicted };
+	}
+
+	/** Every group's stored row, oldest first. */
+	async listStoredGroups(): Promise<StoredGroup[]> {
+		return this.db
+			.selectFrom("crash_groups")
+			.select(["id", "fingerprint", "fault", "frames", "message"])
+			.orderBy("id")
+			.execute();
+	}
+
+	/**
+	 * Applies new frames and hashes to groups, after a rule change or a
+	 * table that names frames a group stored unnamed. A group whose new
+	 * hash is still its own is updated in place and keeps its id. One
+	 * whose hash now belongs to another group is merged with it: the
+	 * older id survives, so links to it hold, with the earliest first
+	 * seen, the latest last seen, the counts of both summed where they
+	 * share a key, and the reports and samples of both. Atomic as
+	 * `registerRelease`.
+	 */
+	async remap(changes: GroupChange[]): Promise<{ updated: number; merged: number }> {
+		let updated = 0;
+		let merged = 0;
+		for (const change of changes) {
+			const other = await this.db
+				.selectFrom("crash_groups")
+				.select("id")
+				.where("fingerprint", "=", change.fingerprint)
+				.where("id", "!=", change.id)
+				.executeTakeFirst();
+			if (other) {
+				const survivor = Math.min(other.id, change.id);
+				await this.merge(Math.max(other.id, change.id), survivor);
+				merged += 1;
+				if (survivor !== change.id) continue;
+			}
+			await this.db
+				.updateTable("crash_groups")
+				.set({ frames: change.frames, fingerprint: change.fingerprint })
+				.where("id", "=", change.id)
+				.execute();
+			updated += 1;
+		}
+		return { updated, merged };
+	}
+
+	/** Moves everything of group `gone` into group `into` and deletes it. */
+	private async merge(gone: number, into: number): Promise<void> {
+		const counts = await this.db.selectFrom("crash_counts").selectAll().where("group_id", "=", gone).execute();
+		for (const row of counts) {
+			await this.db
+				.insertInto("crash_counts")
+				.values({ ...row, group_id: into })
+				.onConflict((oc) =>
+					oc.columns(["group_id", "version", "channel", "trust", "day"]).doUpdateSet({ count: sql`count + excluded.count` })
+				)
+				.execute();
+		}
+		await this.db.deleteFrom("crash_counts").where("group_id", "=", gone).execute();
+		await this.db.updateTable("reports").set({ group_id: into }).where("group_id", "=", gone).execute();
+		await this.db.updateTable("crash_samples").set({ group_id: into }).where("group_id", "=", gone).execute();
+		const span = await this.db
+			.selectFrom("crash_groups")
+			.select((eb) => [eb.fn.min("first_seen").as("first"), eb.fn.max("last_seen").as("last")])
+			.where("id", "in", [gone, into])
+			.executeTakeFirstOrThrow();
+		await this.db.deleteFrom("crash_groups").where("id", "=", gone).execute();
+		await this.db
+			.updateTable("crash_groups")
+			.set({ first_seen: Number(span.first), last_seen: Number(span.last) })
+			.where("id", "=", into)
+			.execute();
 	}
 
 	/**
