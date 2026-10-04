@@ -1,11 +1,17 @@
 import { env as bindings, runInDurableObject } from "cloudflare:test";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { createDb } from "../src/db";
 import worker from "../src/index";
 import { symbolKey } from "../src/releases";
 import { ENVELOPE_OBJECT, sampleKey } from "../src/samples";
 import type { AppShard } from "../src/shard";
 import { forgetTables } from "../src/symbols";
+import { createToken } from "../src/tokens";
 import { BUILD_ID_HEX, makeTable, type SymbolRow } from "./table";
+
+/** A second build the app has no table for until a test uploads one. */
+const OTHER_BUILD = Uint8Array.from({ length: 20 }, (_, i) => 0x21 + i);
+const OTHER_BUILD_HEX = Array.from(OTHER_BUILD, (b) => b.toString(16).padStart(2, "0")).join("");
 
 const env = { DB: bindings.DB, SHARD: bindings.SHARD, BUCKET: bindings.BUCKET };
 
@@ -21,12 +27,28 @@ const FUNCTIONS: SymbolRow[] = [
 	{ start: 0x8000, size: 0x100, name: "load_level" },
 ];
 
-async function addApp(name: string, disabled: number | null = null): Promise<void> {
-	await bindings.DB.prepare(
+async function addApp(name: string, disabled: number | null = null): Promise<number> {
+	const result = await bindings.DB.prepare(
 		"INSERT INTO apps (name, display_name, created_at, created_by, disabled_at) VALUES (?1, ?1, 1, 'bob', ?2)"
 	)
 		.bind(name, disabled)
 		.run();
+	return result.meta.last_row_id;
+}
+
+/** Uploads a table through the route, as the symbol tool does, with a token minted for the app. */
+async function uploadTable(app: string, table: Uint8Array): Promise<Response> {
+	const db = createDb(bindings.DB);
+	const row = await db.selectFrom("apps").select("id").where("name", "=", app).executeTakeFirstOrThrow();
+	const { token } = await createToken(db, row.id, "ci", { sub: "ci" }, 1);
+	return worker.fetch(
+		new Request(`https://api.example/v1/${app}/releases/1.0.0?channel=stable`, {
+			method: "PUT",
+			headers: { "Content-Type": "application/octet-stream", Authorization: `Bearer ${token}` },
+			body: table,
+		}),
+		env
+	);
 }
 
 function inShard<T>(name: string, fn: (obj: AppShard) => T | Promise<T>): Promise<T> {
@@ -147,6 +169,7 @@ async function setCap(app: string, cap: number): Promise<void> {
 const today = () => Math.floor(Date.now() / 1000 / 86400);
 
 beforeEach(async () => {
+	await bindings.DB.exec("DELETE FROM upload_tokens");
 	await bindings.DB.exec("DELETE FROM apps");
 	forgetTables();
 });
@@ -253,10 +276,10 @@ describe("report counting", () => {
 		expect(g.message).toBeNull();
 		expect(g.fingerprint).toMatch(/^[0-9a-f]{16}$/);
 		expect(JSON.parse(g.frames)).toEqual([
-			{ module: "game.exe", name: "render_mesh" },
-			{ module: "game.exe", name: "draw_scene" },
-			{ module: "game.exe", name: "tick" },
-			{ module: "game.exe", name: "run" },
+			{ module: "game.exe", name: "render_mesh", buildId: BUILD_ID_HEX, offset: 0x1010 },
+			{ module: "game.exe", name: "draw_scene", buildId: BUILD_ID_HEX, offset: 0x2010 },
+			{ module: "game.exe", name: "tick", buildId: BUILD_ID_HEX, offset: 0x3010 },
+			{ module: "game.exe", name: "run", buildId: BUILD_ID_HEX, offset: 0x4010 },
 		]);
 		expect(g.first_seen).toBe(g.last_seen);
 		expect(counts).toEqual([
@@ -471,15 +494,55 @@ describe("report grouping", () => {
 		await report("group-unknown", {}, [frame(0x20, null, null), frame(0x1010)]);
 		const { groups } = await state("group-unknown");
 		expect(groups).toHaveLength(2);
-		expect(JSON.parse(groups[0]!.frames)[0]).toEqual({ module: "nvoglv64.dll", name: null });
-		expect(JSON.parse(groups[1]!.frames)[0]).toEqual({ module: "?", name: null });
+		expect(JSON.parse(groups[0]!.frames)[0]).toMatchObject({ module: "nvoglv64.dll", name: null });
+		expect(JSON.parse(groups[1]!.frames)[0]).toEqual({ module: "?", name: null, buildId: null, offset: 0x20 });
 	});
 	it("looks a return address up inside the call", async () => {
 		await release("group-return");
 		// 0x1100 is the byte after render_mesh; as a return address it belongs to render_mesh's last call.
 		await report("group-return", {}, [frame(0x1010), frame(0x1100)]);
-		expect(JSON.parse((await state("group-return")).groups[0]!.frames)).toEqual([
+		expect(JSON.parse((await state("group-return")).groups[0]!.frames)).toMatchObject([
 			{ module: "game.exe", name: "render_mesh" }, { module: "game.exe", name: "render_mesh" },
 		]);
+	});
+});
+
+describe("late symbols", () => {
+	const unnamed = (build: string) => STACK.map((f) => ({ ...f, build_id: build }));
+	it("names a group's frames in place when its build's table arrives", async () => {
+		await release("late-name");
+		await report("late-name", {}, unnamed(OTHER_BUILD_HEX));
+		const before = (await state("late-name")).groups[0]!;
+		expect(JSON.parse(before.frames)).toMatchObject([{ name: null, buildId: OTHER_BUILD_HEX, offset: 0x1010 }, {}, {}, {}]);
+		const table = makeTable({ buildId: OTHER_BUILD, functions: [{ start: 0x1000, size: 0x100, name: "boot" }] });
+		expect((await uploadTable("late-name", table)).status).toBe(201);
+		const { groups, counts } = await state("late-name");
+		expect(groups).toHaveLength(1);
+		expect(groups[0]!.id).toBe(before.id);
+		expect(groups[0]!.fingerprint).not.toBe(before.fingerprint);
+		expect(JSON.parse(groups[0]!.frames)).toMatchObject([{ name: "boot" }, { name: null }, { name: null }, { name: null }]);
+		expect(counts[0]!.count).toBe(1);
+		// The same crash now hashes with the names: it joins the group instead of opening another.
+		await report("late-name", {}, unnamed(OTHER_BUILD_HEX));
+		expect((await state("late-name")).groups).toHaveLength(1);
+	});
+	it("merges a group into the older one its names now match", async () => {
+		await release("late-merge");
+		const old = envelope({}, unnamed(OTHER_BUILD_HEX));
+		old.app = { ...(old.app as object), name: "late-merge" };
+		await post("late-merge", old);
+		await report("late-merge");
+		const before = await state("late-merge");
+		expect(before.groups).toHaveLength(2);
+		const [unknown, named] = before.groups;
+		expect((await uploadTable("late-merge", makeTable({ buildId: OTHER_BUILD, functions: FUNCTIONS }))).status).toBe(201);
+		const { groups, counts, reports, samples } = await state("late-merge");
+		expect(groups).toHaveLength(1);
+		expect(groups[0]!.id).toBe(unknown!.id);
+		expect(groups[0]!.fingerprint).toBe(named!.fingerprint);
+		expect(JSON.parse(groups[0]!.frames)).toMatchObject([{ name: "render_mesh", buildId: OTHER_BUILD_HEX }, {}, {}, {}]);
+		expect(counts).toEqual([{ group_id: unknown!.id, version: "1.0.0", channel: "stable", trust: 0, day: today(), count: 2 }]);
+		expect(reports.map((r) => r.group_id)).toEqual([unknown!.id, unknown!.id]);
+		expect(samples.map((s) => s.group_id)).toEqual([unknown!.id, unknown!.id]);
 	});
 });

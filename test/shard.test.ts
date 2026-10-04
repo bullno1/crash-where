@@ -174,3 +174,66 @@ describe("sampling", () => {
 		expect((await stored("buckets")).map((s) => s.report_id)).toEqual(["r1", "r3", "r4"]);
 	});
 });
+
+describe("remap", () => {
+	type Ingest = Parameters<AppShard["ingest"]>[0];
+	function report(n: number, fp: string, over: Partial<Ingest> = {}): Ingest {
+		return {
+			reportId: `r${n}`, version: "1.0.0", channel: "stable", trust: 0, userKey: `u${n}`, now: 100 + n,
+			group: { fingerprint: fp, fault: "memory", frames: `["${fp}"]`, message: null },
+			sampleCap: 5, sampleKey: `app/r${n}/`, draw: 0.5,
+			...over,
+		};
+	}
+	async function groupsOf(name: string) {
+		return inShard(name, async (obj) => ({
+			groups: await obj.db.selectFrom("crash_groups").selectAll().orderBy("id").execute(),
+			counts: await obj.db.selectFrom("crash_counts").selectAll().orderBy("group_id").orderBy("day").execute(),
+			reports: await obj.db.selectFrom("reports").select(["report_id", "group_id"]).orderBy("report_id").execute(),
+			samples: await obj.db.selectFrom("crash_samples").select(["report_id", "group_id"]).orderBy("id").execute(),
+		}));
+	}
+	async function seed(name: string) {
+		await inShard(name, (obj) => obj.registerRelease({ version: "1.0.0", channel: "stable", buildId: "b", now: 1 }));
+		await inShard(name, (obj) => obj.ingest(report(1, "a")));
+		await inShard(name, (obj) => obj.ingest(report(2, "b", { now: 86400 * 3 })));
+		await inShard(name, (obj) => obj.ingest(report(3, "b", { now: 86400 * 3 + 1 })));
+	}
+	it("updates a group in place when its new hash is its own", async () => {
+		await seed("remap-place");
+		const [a] = (await groupsOf("remap-place")).groups;
+		expect(await inShard("remap-place", (obj) => obj.remap([{ id: a!.id, frames: '["x"]', fingerprint: "x" }])))
+			.toEqual({ updated: 1, merged: 0 });
+		const { groups } = await groupsOf("remap-place");
+		expect(groups).toHaveLength(2);
+		expect(groups[0]).toMatchObject({ id: a!.id, frames: '["x"]', fingerprint: "x", first_seen: 101, last_seen: 101 });
+	});
+	it("merges a group into the older one that holds its new hash", async () => {
+		await seed("remap-older");
+		const [a, b] = (await groupsOf("remap-older")).groups;
+		expect(await inShard("remap-older", (obj) => obj.remap([{ id: b!.id, frames: '["a2"]', fingerprint: "a" }])))
+			.toEqual({ updated: 0, merged: 1 });
+		const { groups, counts, reports, samples } = await groupsOf("remap-older");
+		expect(groups).toHaveLength(1);
+		// The older group keeps its id, frames and hash, and spans both.
+		expect(groups[0]).toMatchObject({ id: a!.id, frames: '["a"]', fingerprint: "a", first_seen: 101, last_seen: 86400 * 3 + 1 });
+		expect(counts).toEqual([
+			{ group_id: a!.id, version: "1.0.0", channel: "stable", trust: 0, day: 0, count: 1 },
+			{ group_id: a!.id, version: "1.0.0", channel: "stable", trust: 0, day: 3, count: 2 },
+		]);
+		expect(reports.map((r) => r.group_id)).toEqual([a!.id, a!.id, a!.id]);
+		expect(samples.map((s) => s.group_id)).toEqual([a!.id, a!.id, a!.id]);
+	});
+	it("merges the newer group into an older one that takes its hash, summing a shared day", async () => {
+		await seed("remap-newer");
+		await inShard("remap-newer", (obj) => obj.ingest(report(4, "a", { now: 86400 * 3 + 2 })));
+		const [a, b] = (await groupsOf("remap-newer")).groups;
+		expect(await inShard("remap-newer", (obj) => obj.remap([{ id: a!.id, frames: '["b2"]', fingerprint: "b" }])))
+			.toEqual({ updated: 1, merged: 1 });
+		const { groups, counts } = await groupsOf("remap-newer");
+		expect(groups).toHaveLength(1);
+		expect(groups[0]).toMatchObject({ id: a!.id, frames: '["b2"]', fingerprint: "b", first_seen: 101, last_seen: 86400 * 3 + 2 });
+		expect(b!.id).not.toBe(a!.id);
+		expect(counts.map((c) => [c.day, c.count])).toEqual([[0, 1], [3, 3]]);
+	});
+});
