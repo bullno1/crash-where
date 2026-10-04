@@ -86,5 +86,5 @@ After adding one, run `npm run db:types` and commit its output.
 `wrangler.toml` names the database but carries no id.
 The Deploy button creates the database and writes the id into the clone it deploys from.
 A deployment made by hand needs the database created once, with `npx wrangler d1 create crash-where`, before the first `npm run deploy`.
-The same goes for the symbol bucket, with `npx wrangler r2 bucket create crash-where-symbols`.
+The same goes for the bucket, with `npx wrangler r2 bucket create crash-where-symbols`.
 Workers Builds runs `npx wrangler deploy` by default, which skips the migrations; set its deploy command to `npm run deploy`.

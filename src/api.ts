@@ -10,6 +10,7 @@ import {
 import {
 	CHANNEL_GRAMMAR, MAX_TABLE_BYTES, symbolKey, validChannel, validVersion, VERSION_GRAMMAR,
 } from "./releases";
+import { deleteSample, ENVELOPE_OBJECT, sampleKey } from "./samples";
 import { symbolicate } from "./symbols";
 import { authenticateToken } from "./tokens";
 
@@ -52,12 +53,12 @@ api.put("/:app/releases/:version", async (c) => {
 
 	// The etag of an object written in one put is the MD5 of its bytes.
 	const key = symbolKey(app.name, buildId);
-	const stored = await c.env.SYMBOLS.head(key);
+	const stored = await c.env.BUCKET.head(key);
 	if (stored) {
 		const digest = hex(new Uint8Array(await crypto.subtle.digest("MD5", body)));
 		if (stored.etag !== digest) return c.text(`Build ${buildId} is already stored with a different table`, 409);
 	} else {
-		await c.env.SYMBOLS.put(key, body, { httpMetadata: { contentType: "application/octet-stream" } });
+		await c.env.BUCKET.put(key, body, { httpMetadata: { contentType: "application/octet-stream" } });
 	}
 
 	const shard = c.env.SHARD.get(c.env.SHARD.idFromName(app.name));
@@ -117,8 +118,11 @@ async function readBody(c: Context<App>): Promise<Uint8Array | Response> {
  * Receives one crash envelope. The report is grouped from its frames and
  * the app's symbol tables, then counted in the app's shard against its
  * release. A token is not read yet: every report counts as unauthorized,
- * with the envelope's install id as its user. The reply is `want_attachments 0`, since samples are not stored yet;
- * a retried report id gets the same reply and is not counted again.
+ * with the envelope's install id as its user. The shard decides whether
+ * the report is sampled; a sampled envelope is stored as parsed, plain
+ * JSON, under its prefix, and the reply asks for the attachments to join
+ * it. A retried report id is not counted again and gets the answer its
+ * first delivery got, so the client sends what it still holds.
  */
 api.post("/:app/report", async (c) => {
 	const app = await getApp(c.get("db"), c.req.param("app"));
@@ -140,29 +144,39 @@ api.post("/:app/report", async (c) => {
 	const { fault, withMessage } = classify(envelope.type);
 	if (envelope.frames.length === 0 && fault !== "exit") return c.text("The envelope has no frames", 400);
 
-	const raw = await symbolicate(c.env.SYMBOLS, app.name, envelope.frames.slice(0, STORED_FRAMES));
+	const raw = await symbolicate(c.env.BUCKET, app.name, envelope.frames.slice(0, STORED_FRAMES));
 	const message = withMessage ? envelope.message.slice(0, MAX_MESSAGE) : null;
 	const tokens = selectFrames(raw, skipList);
 	const now = Math.floor(Date.now() / 1000);
 	const shard = c.env.SHARD.get(c.env.SHARD.idFromName(app.name));
+	const trust: number = 0;
+	const prefix = sampleKey(app.name, envelope.reportId);
 	const result = await shard.ingest({
 		reportId: envelope.reportId,
 		version: envelope.version,
 		channel: envelope.channel,
-		trust: 0,
+		trust,
 		userKey: envelope.installId,
 		now,
 		group: { fingerprint: await fingerprint(fault, tokens, message), fault, frames: JSON.stringify(raw), message },
+		sampleCap: trust === 1 ? app.sample_cap_trusted : app.sample_cap_untrusted,
+		sampleKey: prefix,
+		draw: Math.random(),
 	});
+	const reply = (sampled: boolean, status: 200 | 201) => c.text(`want_attachments ${sampled ? 1 : 0}\n`, status);
 	switch (result.outcome) {
 		case "unknown":
 			return c.text(`Version ${envelope.version} is not released on channel ${envelope.channel}`, 410);
 		case "expired":
 			return c.text(`Version ${envelope.version} is no longer supported on channel ${envelope.channel}`, 410);
 		case "duplicate":
-			return c.text("want_attachments 0\n", 200);
+			return reply(result.sampled, 200);
 		case "counted":
-			return c.text("want_attachments 0\n", 201);
+			if (result.evicted !== null) await deleteSample(c.env.BUCKET, result.evicted);
+			if (result.sampled) {
+				await c.env.BUCKET.put(prefix + ENVELOPE_OBJECT, body, { httpMetadata: { contentType: "application/json" } });
+			}
+			return reply(result.sampled, 201);
 	}
 });
 
