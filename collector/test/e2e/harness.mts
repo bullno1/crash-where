@@ -169,6 +169,8 @@ export interface CrashesPage {
 		message: string | null;
 		frames: { module: string; name: string | null }[];
 		count: number;
+		recent_users: number;
+		urgency: number;
 	}[];
 }
 
