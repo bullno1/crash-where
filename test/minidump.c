@@ -343,14 +343,12 @@ static btest_suite_t minidump = {
  */
 static void
 dump_path(const test_run_t* run, yyjson_doc* ev, char kind, char* out, size_t cap) {
-	const char* fp = test_json_str(ev, "/envelope/client_fp");
 	const char* id = test_json_str(ev, "/envelope/report_id");
 	snprintf(
-		out, cap, "%s/report/pending/%" PRIu64 "_%c_%s_%s.dmp",
+		out, cap, "%s/report/pending/%" PRIu64 "_%c_%s.dmp",
 		run->dir,
 		yyjson_get_uint(test_json_get(ev, "/envelope/sent_at")),
 		kind,
-		fp != NULL ? fp : "",
 		id != NULL ? id : ""
 	);
 }
@@ -436,10 +434,9 @@ BTEST(minidump, uploaded_when_wanted) {
 	char url[512];
 	snprintf(
 		url, sizeof(url),
-		"http://127.0.0.1:9/v1/cw-test/attach?report=%s&name=%" PRIu64 "_c_%s_%s.dmp",
+		"http://127.0.0.1:9/v1/cw-test/attach?report=%s&name=%" PRIu64 "_c_%s.dmp",
 		test_json_str(ev, "/envelope/report_id"),
 		yyjson_get_uint(test_json_get(ev, "/envelope/sent_at")),
-		test_json_str(ev, "/envelope/client_fp"),
 		test_json_str(ev, "/envelope/report_id")
 	);
 	BTEST_EXPECT_EX(strcmp(test_json_str(attach, "/url"), url) == 0, "attach url is %s", test_json_str(attach, "/url"));

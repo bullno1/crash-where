@@ -17,7 +17,6 @@
 #include <time.h>
 
 #include "internal.h"
-#include "vendor/chibihash64-stream.h"
 
 /**
  * Emit a JSON string literal from at most `cap` bytes of `s`.
@@ -102,29 +101,6 @@ put_norm(FILE* f, const char* s, size_t cap) {
 		}
 	}
 	fputc('"', f);
-}
-
-/**
- * Placeholder fingerprint over the exception type and the
- * (build id, offset) list.
- *
- * The design's SHA-256 `fp` is recomputed by the server and is
- * authoritative; this value only names the file and lets a later local
- * dedup step compare reports from the same build.
- */
-static uint64_t
-fingerprint(const cw_crash_info_t* info) {
-	ChibiHash64Ctx ctx = chibihash64_init(0);
-	chibihash64_append(&ctx, (void*)info->type, (ptrdiff_t)strnlen(info->type, sizeof(info->type)));
-	for (int i = 0; i < info->frame_count; ++i) {
-		const cw_frame_t* fr = &info->frames[i];
-		if (fr->module >= 0) {
-			const cw_module_t* m = &info->modules[fr->module];
-			chibihash64_append(&ctx, (void*)m->build_id, (ptrdiff_t)strnlen(m->build_id, sizeof(m->build_id)));
-		}
-		chibihash64_append(&ctx, (void*)&fr->offset, (ptrdiff_t)sizeof(fr->offset));
-	}
-	return chibihash64_finish(&ctx);
 }
 
 static int
@@ -282,15 +258,14 @@ cw_write_envelope(
 	}
 
 	const char* exe_build_id = info->main_module >= 0 ? info->modules[info->main_module].build_id : "";
-	uint64_t fp = fingerprint(info);
 	long long now = (long long)time(NULL);
 	char uuid[CW_UUID_CAP];
 	cw_make_uuid(uuid);
 	char install_id[CW_UUID_CAP];
 	cw_install_id_load(install_id);
 	snprintf(
-		out_path, cap, "%s/pending/%lld_%c_%016" PRIx64 "_%s.json",
-		report_dir, now, cw_report_kind_letter(info->kind), fp, uuid
+		out_path, cap, "%s/pending/%lld_%c_%s.json",
+		report_dir, now, cw_report_kind_letter(info->kind), uuid
 	);
 	char tmp_path[CW_STR_CAP + 64];
 	snprintf(tmp_path, sizeof(tmp_path), "%s.tmp", out_path);
@@ -352,7 +327,7 @@ cw_write_envelope(
 	put_modules(f, info);
 	fputs(",\"frames\":", f);
 	put_frames(f, info);
-	fprintf(f, ",\"client_fp\":\"%016" PRIx64 "\",\"breadcrumbs\":", fp);
+	fputs(",\"breadcrumbs\":", f);
 	put_crumbs(f, shared);
 	fputs(",\"state\":", f);
 	put_state(f, shared);

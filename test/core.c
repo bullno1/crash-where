@@ -114,10 +114,9 @@ BTEST(core, unwinds_with_libdwfl) {
 
 	char path[512];
 	snprintf(
-		path, sizeof(path), "%s/report/pending/%" PRIu64 "_c_%s_%s.dmp",
+		path, sizeof(path), "%s/report/pending/%" PRIu64 "_c_%s.dmp",
 		run->dir,
 		yyjson_get_uint(test_json_get(ev, "/envelope/sent_at")),
-		test_json_str(ev, "/envelope/client_fp"),
 		test_json_str(ev, "/envelope/report_id")
 	);
 	char exe[512];

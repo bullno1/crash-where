@@ -461,7 +461,7 @@ typedef struct {
 } cw_pending_t;
 
 /**
- * Describe an envelope from its file name, `<ts>_<kind>_<fp>_<id>.json`.
+ * Describe an envelope from its file name, `<ts>_<kind>_<id>.json`.
  *
  * @return `false` when `name` is not an envelope.
  */

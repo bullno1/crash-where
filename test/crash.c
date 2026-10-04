@@ -231,10 +231,9 @@ check_frames(yyjson_doc* ev) {
 static void
 pending_path(const test_run_t* run, yyjson_doc* ev, char* out, size_t cap) {
 	snprintf(
-		out, cap, "%s/report/pending/%" PRIu64 "_c_%s_%s.json",
+		out, cap, "%s/report/pending/%" PRIu64 "_c_%s.json",
 		run->dir,
 		yyjson_get_uint(test_json_get(ev, "/envelope/sent_at")),
-		test_json_str(ev, "/envelope/client_fp"),
 		test_json_str(ev, "/envelope/report_id")
 	);
 }

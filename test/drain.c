@@ -63,7 +63,7 @@ BTEST(drain, stale_report_is_deleted) {
 	BTEST_ASSERT(run != NULL);
 	/* An envelope written at the epoch, long past the retention limit. */
 	char path[512];
-	snprintf(path, sizeof(path), "%s/report/pending/1_c_0000000000000000_00000000-0000-4000-8000-000000000000.json", run->dir);
+	snprintf(path, sizeof(path), "%s/report/pending/1_c_00000000-0000-4000-8000-000000000000.json", run->dir);
 	FILE* f = fopen(path, "wb");
 	BTEST_ASSERT(f != NULL);
 	fputs("{}\n", f);
