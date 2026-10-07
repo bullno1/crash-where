@@ -250,19 +250,22 @@ function crashesSection(app: AppRow, crashes: CrashSummary[]): Page {
 </table>`;
 }
 
-/** The versions of an app, newest first, with the channels they are released on and their builds. */
-function versionsSection(versions: VersionSummary[]): Page {
+/**
+ * The versions of an app, newest first, with the channels they are
+ * released on and their builds. A channel alone is the version's live
+ * release there; one superseded says until when it is supported. An
+ * arrow marks `shown`, the version a link to this page named.
+ */
+function versionsSection(versions: VersionSummary[], shown: string | null): Page {
 	if (versions.length === 0) return html`<h2>Versions</h2>
 <p>No versions yet. The first symbol upload for this app registers one.</p>`;
 	const rows = versions.map(
 		(v) => html`<tr>
-<td><code>${v.version}</code></td>
+<td>${v.version === shown ? "→ " : ""}<code>${v.version}</code></td>
 <td>${v.channels.length === 0
 	? html`<small>none</small>`
 	: v.channels.map(
-			(r) => html`<div>${r.channel} ${r.supported_until === null
-				? html`<small>current</small>`
-				: html`<small>until ${day(r.supported_until)}</small>`}</div>`
+			(r) => html`<div>${r.channel}${r.supported_until === null ? "" : html` <small>until ${day(r.supported_until)}</small>`}</div>`
 		)}</td>
 <td>${v.builds.length === 0 ? html`<small>none</small>` : v.builds.map((b) => html`<div><code>${b}</code></div>`)}</td>
 <td>${day(v.created_at)}</td>
@@ -283,6 +286,10 @@ function tokensPath(name: string): string {
 	return `${appPath(name)}/tokens`;
 }
 
+function versionsPath(name: string): string {
+	return `${appPath(name)}/versions`;
+}
+
 function crashPath(name: string, id: number): string {
 	return `${appPath(name)}/crashes/${id}`;
 }
@@ -290,7 +297,7 @@ function crashPath(name: string, id: number): string {
 /** The pages of an app, in the order the sub-navigation lists them. */
 const APP_PAGES = [
 	{ key: "crashes", label: "Crashes", path: appPath },
-	{ key: "versions", label: "Versions", path: (name: string) => `${appPath(name)}/versions` },
+	{ key: "versions", label: "Versions", path: versionsPath },
 	{ key: "tokens", label: "Upload tokens", path: tokensPath },
 ] as const;
 
@@ -342,7 +349,7 @@ dashboard.get("/apps/:name/versions", async (c) => {
 	const versions = await shard.listVersions();
 	if (wantsJson(c)) return c.json({ app, versions });
 	const who = c.get("identity");
-	return render(c, appPage(who.email ?? who.sub, app, "versions", versionsSection(versions)));
+	return render(c, appPage(who.email ?? who.sub, app, "versions", versionsSection(versions, c.req.query("version") ?? null)));
 });
 
 dashboard.get("/apps/:name/tokens", async (c) => {
@@ -498,11 +505,13 @@ function crashHeader(g: CrashSummary): Page {
 <p>${g.count} reports in total · ${g.recent_count} reports from ${g.recent_users} users in the last seven days · urgency ${g.urgency}</p>`;
 }
 
-/** The releases the group was reported on, most reported first. */
-function versionsBlock(releases: GroupRelease[]): Page {
+/** The releases the group was reported on, most reported first, each version linking to its row of the versions page. */
+function versionsBlock(app: AppRow, releases: GroupRelease[]): Page {
 	if (releases.length === 0) return html`<h3>Versions</h3>
 <p><small>no reports counted</small></p>`;
-	const rows = releases.map((r) => html`<tr><td><code>${r.version}</code></td><td>${r.channel}</td><td>${r.count}</td></tr>`);
+	const rows = releases.map(
+		(r) => html`<tr><td><a href="${versionsPath(app.name)}?version=${encodeURIComponent(r.version)}">${r.version}</a></td><td>${r.channel}</td><td>${r.count}</td></tr>`
+	);
 	return html`<h3>Versions</h3>
 <table>
 <thead><tr><th>Version</th><th>Channel</th><th>Reports</th></tr></thead>
@@ -669,7 +678,7 @@ dashboard.get("/apps/:name/crashes/:id", async (c) => {
 	const body = sample !== null ? sampleBody(path, sample, shared) : problem !== null ? sampleProblem(problem) : storedFrames(crash);
 	const who = c.get("identity");
 	return render(c, appPage(who.email ?? who.sub, app, "crashes", html`${crashHeader(crash)}
-${versionsBlock(found.releases)}
+${versionsBlock(app, found.releases)}
 ${usersBlock(path, found.users, found.samples)}
 ${body}
 ${samplesSection(path, found.samples, selected?.report_id ?? null)}`, permalink));
