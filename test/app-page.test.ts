@@ -211,10 +211,11 @@ function envelope(app: string, reportId: string, over: Record<string, unknown> =
 		exception: { type: "SIGSEGV", message_norm: "read from <ADDR>", message_raw: "read from 0x10", thread: 7 },
 		modules: [{ name: "game.exe", build_id: BUILD_ID_HEX, base: "0x400000", size: 4096 }],
 		frames: [
-			{ module: "libc.so.6", build_id: "ff", offset: 0x10, raw: "0x7f00" },
+			{ module: "libc.so.6", build_id: "ff", offset: 0x10 },
 			{ module: "game.exe", build_id: BUILD_ID_HEX, offset: 0x1010 },
 			{ module: "game.exe", build_id: BUILD_ID_HEX, offset: 0x2010 },
 			{ module: null, build_id: null, offset: 0x99 },
+			{ module: "javascript:tick", build_id: "0", offset: 0, raw: "    at tick (https://example.com/game.js:12:5)" },
 		],
 		breadcrumbs: [{ t: 1000, th: 1, c: "level", m: "load forest_02" }, { t: 2500, th: 7, c: "render", m: "frame" }],
 		state: { level: "forest_02" },
@@ -319,10 +320,12 @@ describe("crash page", () => {
 		expect(at("<h3>Users</h3>")).toBeLessThan(at("<h3>Exception</h3>"));
 		expect(at("<h3>Files</h3>")).toBeLessThan(at("<h3>Samples</h3>"));
 		// The stack is named from the table; libc is skipped and the two game frames are marked.
-		expect(html).toContain("<th>#</th><th>Function</th><th>Location</th><th>Module</th><th>Offset</th><th>Address</th>");
-		expect(html).toContain("<td>0</td>\n<td><small>unnamed</small></td>\n<td></td>\n<td><code>libc.so.6</code></td>\n<td><code>0x10</code></td>\n<td><code>0x7f00</code></td>");
+		expect(html).toContain("<th>#</th><th>Function</th><th>Location</th><th>Module</th><th>Offset</th></tr>");
+		expect(html).toContain("<td>0</td>\n<td><small>unnamed</small></td>\n<td></td>\n<td><code>libc.so.6</code></td>\n<td><code>0x10</code></td>");
 		// Frame 1 is inside copy_verts inlined into render_mesh: the innermost level first, the caller indented under it.
-		expect(html).toContain("<td>1</td>\n<td><mark>copy_verts</mark></td>\n<td><code>src/mesh.h:12</code></td>\n<td><code>game.exe</code></td>\n<td><code>0x1010</code></td>\n<td></td>");
+		expect(html).toContain("<td>1</td>\n<td><mark>copy_verts</mark></td>\n<td><code>src/mesh.h:12</code></td>\n<td><code>game.exe</code></td>\n<td><code>0x1010</code></td>");
+		// A JavaScript frame has no table; its location is the browser's own trace line.
+		expect(html).toContain("<td>4</td>\n<td><mark>tick</mark></td>\n<td><code>    at tick (https://example.com/game.js:12:5)</code></td>\n<td><code>javascript</code></td>");
 		expect(html).toContain("<td></td>\n<td>&nbsp;&nbsp;&nbsp;&nbsp;↳ <mark>render_mesh(mesh*)</mark></td>\n<td><code>src/render.c:41</code></td>");
 		expect(html).toContain("<td>2</td>\n<td><mark>draw_scene</mark></td>\n<td><code>src/render.c:90</code></td>");
 		// A frame in no module is not noise, so it enters the fingerprint too.
@@ -415,17 +418,19 @@ describe("crash page", () => {
 		expect(data.sample).toMatchObject({
 			report_id: "s-new", version: "1.0.0", channel: "stable", type: "SIGSEGV", thread: 7, message_raw: "read from 0x10",
 			user_key: "u1", sent_at: 1_750_000_000, message_norm: "read from <ADDR>",
-			hashed: [1, 2, 3], state: { level: "forest_02" }, attachments: [{ name: "1_c_s-new.log", size: 8 }],
+			hashed: [1, 2, 3, 4], state: { level: "forest_02" }, attachments: [{ name: "1_c_s-new.log", size: 8 }],
 			declared: { log_tail: true, minidump: true, snapshot: false },
 			breadcrumbs: [{ t: 1000, th: 1, c: "level", m: "load forest_02" }, { t: 2500, th: 7, c: "render", m: "frame" }],
 		});
-		expect((data.sample as { frames: { name: string | null }[] }).frames.map((f) => f.name)).toEqual([null, "render_mesh", "draw_scene", null]);
+		expect((data.sample as { frames: { name: string | null }[] }).frames.map((f) => f.name)).toEqual([null, "render_mesh", "draw_scene", null, "tick"]);
 		expect((data.sample as { locations: unknown }).locations).toEqual([
 			[],
 			[{ function: "copy_verts", file: "src/mesh.h", line: 12 }, { function: "render_mesh(mesh*)", file: "src/render.c", line: 41 }],
 			[{ function: "draw_scene", file: "src/render.c", line: 90 }],
 			[],
+			[],
 		]);
+		expect((data.sample as { trace_line: unknown }).trace_line).toEqual([null, null, null, null, "    at tick (https://example.com/game.js:12:5)"]);
 		expect(data.users).toEqual({ reports: 3, users: 2, top: [{ trust: 0, user_key: "u1", count: 2, last_seen: 1_750_000_000 }] });
 		expect(data.samples).toMatchObject([{ report_id: "s-new", user_key: "u1", user_reports: 2 }, { report_id: "s-old", user_key: "u1", user_reports: 2 }]);
 	});

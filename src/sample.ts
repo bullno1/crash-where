@@ -49,8 +49,12 @@ export interface SampleView extends SampleSummary {
 	 * build's complete table. Empty for a frame no table locates.
 	 */
 	locations: Location[][];
-	/** Absolute address of each frame as the client printed it, aligned with `frames`. */
-	raw: (string | null)[];
+	/**
+	 * The browser's stack trace line each frame was parsed from, aligned
+	 * with `frames`: set for a JavaScript frame of the web build, null
+	 * elsewhere. Kept apart from `locations`, which a table resolves.
+	 */
+	trace_line: (string | null)[];
 	/** Indices into `frames` of those the fingerprint took. */
 	hashed: number[];
 	env: Record<string, string>;
@@ -173,7 +177,7 @@ export async function loadSample(bucket: R2Bucket, app: string, row: SampleSumma
 	const { envelope } = parsed;
 	const frames = await symbolicate(bucket, app, envelope.frames);
 	const locations = await locate(bucket, app, envelope.frames);
-	const raw = Array.isArray(json.frames)
+	const trace_line = Array.isArray(json.frames)
 		? json.frames.map((f: unknown) => (record(f) && typeof f.raw === "string" ? f.raw : null))
 		: [];
 	const exception = record(json.exception) ? json.exception : {};
@@ -194,7 +198,7 @@ export async function loadSample(bucket: R2Bucket, app: string, row: SampleSumma
 			thread: typeof exception.thread === "number" ? exception.thread : null,
 			frames,
 			locations,
-			raw,
+			trace_line,
 			hashed: keptFrames(frames.slice(0, STORED_FRAMES), skip),
 			env: strings(json.env),
 			state: strings(json.state),
