@@ -10,6 +10,7 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
   : ColumnType<T, T | undefined, T>;
 
 export interface Apps {
+  cors_origins: string | null;
   created_at: number;
   created_by: string;
   disabled_at: number | null;

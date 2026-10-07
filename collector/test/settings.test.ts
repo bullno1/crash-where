@@ -10,7 +10,9 @@ const auth = `Basic ${btoa(`alice:${password}`)}`;
 const origin = "https://dash.example";
 const db = createDb(bindings.DB);
 
-const good = { display_name: "Forest Quest", sample_cap_trusted: "7", sample_cap_untrusted: "0", source_link_template: "" };
+const good = {
+	display_name: "Forest Quest", sample_cap_trusted: "7", sample_cap_untrusted: "0", source_link_template: "", cors_origins: "",
+};
 const github = "https://github.com/org/repo/blob/{commit}/{+file}#L{line}";
 
 async function get(path: string, accept?: string): Promise<Response> {
@@ -57,6 +59,15 @@ function input(page: string, name: string): string {
 	return tag!;
 }
 
+/** The CORS controls: the checkbox tag and the textarea with its content. */
+function corsControls(page: string): { checkbox: string; textarea: string } {
+	const checkbox = /<input type="checkbox" id="cors-all"[^>]*>/.exec(page)?.[0];
+	const textarea = /<textarea name="cors_origins"[^>]*>[^<]*<\/textarea>/.exec(page)?.[0];
+	expect(checkbox).toBeDefined();
+	expect(textarea).toBeDefined();
+	return { checkbox: checkbox!, textarea: textarea! };
+}
+
 describe("app settings", () => {
 	it("show the stored values and the kill switch", async () => {
 		await addApp("set-show");
@@ -70,6 +81,10 @@ describe("app settings", () => {
 		expect(input(page, "sample_cap_untrusted")).toContain('value="2"');
 		expect(page).toContain('<h3 id="source-link">Source link</h3>');
 		expect(input(page, "source_link_template")).toMatch(/value=""[^>]*aria-labelledby="source-link"/);
+		expect(page).toContain('<h3 id="cors-origins">Web origins</h3>');
+		const cors = corsControls(page);
+		expect(cors.checkbox).not.toContain("checked");
+		expect(cors.textarea).toMatch(/aria-labelledby="cors-origins"[^>]*><\/textarea>/);
 		expect(page).not.toContain("aria-invalid");
 		expect(page).toContain('action="/dashboard/apps/set-show/settings/disable"');
 		expect(page).not.toContain("/settings/enable");
@@ -94,6 +109,31 @@ describe("app settings", () => {
 		expect((await getApp(db, "set-link"))!.source_link_template).toBe(github);
 		await submit("set-link", good);
 		expect((await getApp(db, "set-link"))!.source_link_template).toBeNull();
+	});
+	it("save the web origins: the checkbox as '*', else the lines, and nothing as none", async () => {
+		await addApp("set-cors");
+		let { page } = await submit("set-cors", { ...good, cors_allow_all: "on", cors_origins: "https://ignored.example" });
+		expect(corsControls(page).checkbox).toContain("checked");
+		expect(corsControls(page).textarea).toContain("></textarea>");
+		expect((await getApp(db, "set-cors"))!.cors_origins).toBe("*");
+		({ page } = await submit("set-cors", { ...good, cors_origins: "HTTPS://Game.Example\r\n\r\nhttps://*.itch.io\n" }));
+		expect(corsControls(page).checkbox).not.toContain("checked");
+		expect(corsControls(page).textarea).toContain(">https://game.example\nhttps://*.itch.io</textarea>");
+		expect((await getApp(db, "set-cors"))!.cors_origins).toBe("https://game.example\nhttps://*.itch.io");
+		await submit("set-cors", good);
+		expect((await getApp(db, "set-cors"))!.cors_origins).toBeNull();
+	});
+	it("mark a bad origin line, keeping the lines typed", async () => {
+		await addApp("set-cors-bad");
+		const { location, page } = await submit("set-cors-bad", { ...good, cors_origins: "https://game.example\ngame.example/" });
+		expect(location).toMatch(/^\/dashboard\/apps\/set-cors-bad\/settings\?/);
+		const { checkbox, textarea } = corsControls(page);
+		expect(checkbox).not.toContain("checked");
+		expect(textarea).toContain('aria-invalid="true"');
+		expect(textarea).toContain(">https://game.example\ngame.example/</textarea>");
+		expect(page).toContain("is not an origin");
+		expect(page.match(/aria-invalid/g)).toHaveLength(1);
+		expect((await getApp(db, "set-cors-bad"))!.cors_origins).toBeNull();
 	});
 	it("mark the field at fault, keep the typed values and store nothing", async () => {
 		await addApp("set-bad");
@@ -160,13 +200,17 @@ describe("app settings as JSON", () => {
 			new Request(`${origin}/dashboard/apps/json-set/settings`, {
 				method: "POST",
 				headers: { Authorization: auth, Accept: "application/json", "Content-Type": "application/json" },
-				body: JSON.stringify({ display_name: "New Name", sample_cap_trusted: "9", sample_cap_untrusted: "3", source_link_template: github }),
+				body: JSON.stringify({
+					display_name: "New Name", sample_cap_trusted: "9", sample_cap_untrusted: "3", source_link_template: github, cors_origins: "*",
+				}),
 			}),
 			env
 		);
 		expect(r.status).toBe(200);
 		expect(r.headers.get("Vary")).toBe("Accept");
-		expect(await r.json()).toMatchObject({ app: { display_name: "New Name", sample_cap_trusted: 9, sample_cap_untrusted: 3, source_link_template: github } });
+		expect(await r.json()).toMatchObject({
+			app: { display_name: "New Name", sample_cap_trusted: 9, sample_cap_untrusted: 3, source_link_template: github, cors_origins: "*" },
+		});
 	});
 	it("name the field at fault", async () => {
 		await addApp("json-bad");

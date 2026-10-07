@@ -4,11 +4,12 @@ import {
 	type AppError, type AppRow, getApp, MAX_DISPLAY_NAME, MAX_SAMPLE_CAP, parseSettings, setDisabled, type SettingsInput,
 	updateSettings,
 } from "../apps";
+import { ALL_ORIGINS, MAX_CORS_ORIGINS } from "../cors";
 import type { App } from "../env";
 import { type Page, render } from "../page";
 import { MAX_SOURCE_LINK_TEMPLATE } from "../source-link";
 import { appPage, settingsPath } from "./app-page";
-import { day, field, fields, wantsJson } from "./common";
+import { day, field, fields, textarea, wantsJson } from "./common";
 
 /** The settings page of an app: its editable columns and the kill switch. */
 export const settings = new Hono<App>();
@@ -16,6 +17,7 @@ export const settings = new Hono<App>();
 function settingsSection(app: AppRow, form: SettingsInput, error: AppError | null): Page {
 	const cap = html`required type="number" inputmode="numeric" min="0" max="${MAX_SAMPLE_CAP}" step="1"`;
 	const path = settingsPath(app.name);
+	const allowAll = form.cors_origins === ALL_ORIGINS;
 	return html`<h2>Settings</h2>
 <form method="post" action="${path}">
 <h3 id="display-name">Display name</h3>
@@ -37,6 +39,13 @@ A location is linked only when every variable the template names is known.
 </p>
 <p><small>GitHub: <code>https://github.com/org/repo/blob/{commit}/{+file}#L{line}</code><br>GitLab: <code>https://gitlab.com/org/repo/-/blob/{commit}/{+file}#L{line}</code></small></p>
 ${field(null, "source_link_template", form.source_link_template, html`maxlength="${MAX_SOURCE_LINK_TEMPLATE}" aria-labelledby="source-link" placeholder="https://github.com/org/repo/blob/{commit}/{+file}#L{line}"`, error)}
+<h3 id="cors-origins">Web origins</h3>
+<p>Which pages may send reports from a web build, as the browser sends them in <code>Origin</code>.
+One origin per line, <code>scheme://host[:port]</code>, where <code>*</code> matches anything.
+Leave empty to accept reports only from native builds.</p>
+<style>label:has(#cors-all:checked) ~ textarea, label:has(#cors-all:checked) ~ small { display: none; }</style>
+<label><input type="checkbox" id="cors-all" name="cors_allow_all" ${allowAll ? "checked" : ""}> Allow all</label>
+${textarea("cors_origins", allowAll ? "" : form.cors_origins, html`rows="4" maxlength="${MAX_CORS_ORIGINS}" aria-labelledby="cors-origins" placeholder="https://game.example.com&#10;https://*.itch.io"`, error)}
 <button>Save</button>
 </form>
 <h3>Kill switch</h3>
@@ -54,6 +63,7 @@ function currentSettings(app: AppRow): SettingsInput {
 		sample_cap_trusted: String(app.sample_cap_trusted),
 		sample_cap_untrusted: String(app.sample_cap_untrusted),
 		source_link_template: app.source_link_template ?? "",
+		cors_origins: app.cors_origins ?? "",
 	};
 }
 
@@ -70,6 +80,7 @@ function formState(query: Record<string, string>, app: AppRow): { form: Settings
 		sample_cap_trusted: query.sample_cap_trusted ?? "",
 		sample_cap_untrusted: query.sample_cap_untrusted ?? "",
 		source_link_template: query.source_link_template ?? "",
+		cors_origins: query.cors_origins ?? "",
 	};
 	const parsed = parseSettings(form);
 	return { form, error: "error" in parsed ? parsed.error : null };
@@ -87,7 +98,8 @@ settings.get("/apps/:name/settings", async (c) => {
 /**
  * Every outcome of the form redirects back to the page, so a refresh never
  * resubmits it. A JSON client gets the updated row, or the error on the
- * field at fault.
+ * field at fault. The "allow all" checkbox stands for the `*` setting,
+ * which a JSON client sends as the field itself.
  */
 settings.post("/apps/:name/settings", async (c) => {
 	const app = await getApp(c.get("db"), c.req.param("name"));
@@ -98,6 +110,7 @@ settings.post("/apps/:name/settings", async (c) => {
 		sample_cap_trusted: body.sample_cap_trusted ?? "",
 		sample_cap_untrusted: body.sample_cap_untrusted ?? "",
 		source_link_template: body.source_link_template ?? "",
+		cors_origins: body.cors_allow_all !== undefined ? ALL_ORIGINS : body.cors_origins ?? "",
 	};
 	const parsed = parseSettings(input);
 	if ("error" in parsed) {

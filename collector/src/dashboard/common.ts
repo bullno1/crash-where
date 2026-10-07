@@ -55,3 +55,10 @@ ${mine ? html`<small id="${name}-error">${error.message}</small>` : ""}`;
 ${input}
 </label>`;
 }
+
+/** A bare multi-line input, marked invalid as `field` does; a heading names it through `attrs`. */
+export function textarea(name: AppError["field"], value: string, attrs: Page, error: AppError | null): Page {
+	const mine = error?.field === name;
+	return html`<textarea name="${name}" ${attrs} ${mine ? html`aria-invalid="true" aria-describedby="${name}-error"` : ""}>${value}</textarea>
+${mine ? html`<small id="${name}-error">${error.message}</small>` : ""}`;
+}

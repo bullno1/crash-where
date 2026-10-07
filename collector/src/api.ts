@@ -1,6 +1,8 @@
 import { type Context, Hono } from "hono";
+import { cors } from "hono/cors";
 import { getApp } from "./apps";
 import { hex } from "./bytes";
+import { originAllowed } from "./cors";
 import { parseHeader } from "./cwsym";
 import type { App } from "./env";
 import { CLIENT_ID, MAX_ENVELOPE_BYTES, parseEnvelope } from "./envelope";
@@ -18,6 +20,24 @@ import { authenticateToken } from "./tokens";
 
 /** The client API, outside the dashboard login. Replies are `key value` text lines. */
 export const api = new Hono<App>();
+
+/**
+ * A page sends reports cross-origin, with a preflight first, which the
+ * app's CORS setting answers. The setting is read only when the request
+ * carries an origin, so a native client costs nothing here; an unknown
+ * app or a disallowed origin gets no allow header, and the browser stops.
+ */
+const ingestCors = cors({
+	origin: async (origin, c) => {
+		if (origin === "") return null;
+		const app = await getApp(c.get("db"), c.req.param("app") ?? "");
+		return app !== undefined && originAllowed(app.cors_origins, origin) ? origin : null;
+	},
+	allowMethods: ["POST"],
+	maxAge: 86400,
+});
+api.use("/:app/report", ingestCors);
+api.use("/:app/attach", ingestCors);
 
 /**
  * Registers a release and stores its symbol table, in one request from the
