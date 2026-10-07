@@ -391,26 +391,27 @@ function where(loc: Location): Page {
 }
 
 /**
- * A stack as a table, the frames the fingerprint took marked. `raw`
- * carries each frame's absolute address when the client printed one.
- * With `locations`, a Location column gives each frame's file and line,
- * the function is its display name, and a frame inside inlined code
- * takes one row per inline level, innermost first, the outer levels
- * indented under it.
+ * A stack as a table, the frames the fingerprint took marked. With
+ * `locations`, a Location column gives each frame's file and line, the
+ * function is its display name, and a frame inside inlined code takes
+ * one row per inline level, innermost first, the outer levels indented
+ * under it. A frame no table locates shows its `traceLine` there when it
+ * has one, which is the browser's own line for a JavaScript frame.
  */
-function stackTable(frames: RawFrame[], hashed: number[], raw: (string | null)[] = [], locations: Location[][] | null = null): Page {
+function stackTable(frames: RawFrame[], hashed: number[], traceLine: (string | null)[] = [], locations: Location[][] | null = null): Page {
 	const marked = new Set(hashed);
 	const rows = frames.flatMap((f, i) => {
 		const locs = locations?.[i] ?? [];
 		const plain = f.name === null ? html`<small>unnamed</small>` : html`${f.name}`;
 		const name = locs.length === 0 ? plain : html`${locs[0]!.function}`;
+		const line = traceLine[i] ?? null;
+		const location = locs.length > 0 ? where(locs[0]!) : line === null ? html`` : html`<code>${line}</code>`;
 		const first = html`<tr>
 <td>${i}</td>
 <td>${marked.has(i) ? html`<mark>${name}</mark>` : name}</td>${locations === null ? "" : html`
-<td>${locs.length === 0 ? "" : where(locs[0]!)}</td>`}
+<td>${location}</td>`}
 <td><code>${f.module}</code></td>
 <td>${f.offset === undefined ? "" : html`<code>${hex(f.offset)}</code>`}</td>
-<td>${raw[i] === null || raw[i] === undefined ? "" : html`<code>${raw[i]}</code>`}</td>
 </tr>`;
 		const outer = locs.slice(1).map((loc) => html`<tr>
 <td></td>
@@ -418,12 +419,11 @@ function stackTable(frames: RawFrame[], hashed: number[], raw: (string | null)[]
 <td>${where(loc)}</td>
 <td></td>
 <td></td>
-<td></td>
 </tr>`);
 		return [first, ...outer];
 	});
 	return html`<table>
-<thead><tr><th>#</th><th>Function</th>${locations === null ? "" : html`<th>Location</th>`}<th>Module</th><th>Offset</th><th>Address</th></tr></thead>
+<thead><tr><th>#</th><th>Function</th>${locations === null ? "" : html`<th>Location</th>`}<th>Module</th><th>Offset</th></tr></thead>
 <tbody>${rows}</tbody>
 </table>`;
 }
@@ -569,7 +569,7 @@ function sampleBody(path: string, s: SampleView, shared: SharedValues | null): P
 ${messageBlock(s.message_raw, s.message_norm)}
 <h3>Stack</h3>
 <p>Marked frames entered the fingerprint.</p>
-${stackTable(s.frames, s.hashed, s.raw, s.locations)}
+${stackTable(s.frames, s.hashed, s.trace_line, s.locations)}
 <h3>Breadcrumbs</h3>
 ${crumbs}
 <h3>State</h3>
