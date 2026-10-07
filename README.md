@@ -37,6 +37,20 @@ Scope the Access application to `<host>/dashboard` so that it guards the same pa
 The Worker verifies the JWT that Access attaches to each request, so a request that reaches the Worker by any other path is refused.
 Moving from the password to Access is setting those two secrets and deleting the password.
 
+### Source links
+
+An app's settings page takes a source link template, a URI template (RFC 6570) that turns each source location on a crash page into a link to the page that holds the file, for example `https://github.com/org/repo/blob/{commit}/{+file}#L{line}` or `https://gitlab.com/org/repo/-/blob/{commit}/{+file}#L{line}`.
+The template may name `{commit}` and `{version}` as the symbol upload recorded them, `{+file}` for the path relative to the checkout root, and `{line}`.
+A location is linked only when every one it names is known.
+For the first two, CI passes the commit and the checkout root to the upload:
+
+```sh
+cwsym upload --endpoint https://crash.example.com --app forest-quest --version 1.4.2 --channel stable \
+  --commit "$GITHUB_SHA" --source-root "$GITHUB_WORKSPACE" game.pdb
+```
+
+A build compiled with `-ffile-prefix-map` already records relative paths and needs no `--source-root`, and a project that tags its versions can write `blob/v{version}/{+file}` and pass no `--commit`.
+
 ### Scripting the dashboard
 
 Every dashboard route answers in JSON when the request prefers it, with the same login.
@@ -52,7 +66,7 @@ curl -u "alice:$PASSWORD" -H 'Accept: application/json' -H 'Content-Type: applic
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' -X POST https://crash.example.com/dashboard/apps/forest-quest/tokens/<token id>/regenerate
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' https://crash.example.com/dashboard/apps/forest-quest/versions
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' -H 'Content-Type: application/json' \
-  -d '{"display_name":"Forest Quest","sample_cap_trusted":"5","sample_cap_untrusted":"2"}' https://crash.example.com/dashboard/apps/forest-quest/settings
+  -d '{"display_name":"Forest Quest","sample_cap_trusted":"5","sample_cap_untrusted":"2","source_link_template":""}' https://crash.example.com/dashboard/apps/forest-quest/settings
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' -X POST https://crash.example.com/dashboard/apps/forest-quest/settings/disable
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' https://crash.example.com/dashboard/apps/forest-quest/crashes/3?sample=<report id>
 ```

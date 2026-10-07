@@ -7,7 +7,8 @@ import { keptFrames } from "../grouping";
 import { type Page, render } from "../page";
 import { loadContext, loadSample, type SampleError, type SampleView, sharedValues, type SharedValues } from "../sample";
 import { attachmentKind, ENVELOPE_OBJECT, sampleKey } from "../samples";
-import type { GroupRelease, GroupUsers, SampleSummary } from "../shard";
+import type { AppShard, GroupRelease, GroupUsers, SampleSummary } from "../shard";
+import { relativeSource, sourceLink } from "../source-link";
 import type { RawFrame } from "../symbols";
 import { appPage, crashPath, versionsPath } from "./app-page";
 import { when, wantsJson } from "./common";
@@ -21,10 +22,40 @@ function hex(n: number): string {
 	return `0x${n.toString(16)}`;
 }
 
-/** A source location as `file:line`, the file alone when the line is unknown, or nothing. */
-function where(loc: Location): Page {
+/** A source location as `file:line`, the file alone when the line is unknown, or nothing; a link when the app has one for it. */
+function where(loc: Location, link: string | null): Page {
 	if (loc.file === null) return html``;
-	return html`<code>${loc.file}${loc.line === 0 ? "" : `:${loc.line}`}</code>`;
+	const text = html`<code>${loc.file}${loc.line === 0 ? "" : `:${loc.line}`}</code>`;
+	return link === null ? text : html`<a href="${link}">${text}</a>`;
+}
+
+/**
+ * Where each location of a sample can be read, aligned with its
+ * `locations`: the app's template filled with the commit and version of
+ * the frame's build, the file relative to the build's source root and the
+ * line. Null for a location the template cannot be filled for, and
+ * everywhere when the app has no template.
+ */
+async function sourceLinks(shard: DurableObjectStub<AppShard>, app: AppRow, sample: SampleView): Promise<(string | null)[][]> {
+	const template = app.source_link_template;
+	if (template === null) return sample.locations.map((locs) => locs.map(() => null));
+	const ids = new Set<string>();
+	for (const [i, f] of sample.frames.entries()) {
+		if (f.buildId != null && sample.locations[i]!.length > 0) ids.add(f.buildId);
+	}
+	const builds = new Map((await shard.getBuilds([...ids])).map((b) => [b.build_id, b]));
+	return sample.locations.map((locs, i) => {
+		const build = builds.get(sample.frames[i]!.buildId ?? "");
+		return locs.map((loc) => {
+			if (build === undefined || loc.file === null) return null;
+			return sourceLink(template, {
+				commit: build.source_commit ?? undefined,
+				version: build.version,
+				file: relativeSource(loc.file, build.source_root),
+				line: loc.line === 0 ? undefined : String(loc.line),
+			});
+		});
+	});
 }
 
 /**
@@ -32,17 +63,22 @@ function where(loc: Location): Page {
  * `locations`, a Location column gives each frame's file and line, the
  * function is its display name, and a frame inside inlined code takes
  * one row per inline level, innermost first, the outer levels indented
- * under it. A frame no table locates shows its `traceLine` there when it
- * has one, which is the browser's own line for a JavaScript frame.
+ * under it, each location a link where `links` has one for it. A frame
+ * no table locates shows its `traceLine` there when it has one, which is
+ * the browser's own line for a JavaScript frame.
  */
-function stackTable(frames: RawFrame[], hashed: number[], traceLine: (string | null)[] = [], locations: Location[][] | null = null): Page {
+function stackTable(
+	frames: RawFrame[], hashed: number[], traceLine: (string | null)[] = [],
+	locations: Location[][] | null = null, links: (string | null)[][] = []
+): Page {
 	const marked = new Set(hashed);
 	const rows = frames.flatMap((f, i) => {
 		const locs = locations?.[i] ?? [];
+		const link = (level: number) => links[i]?.[level] ?? null;
 		const plain = f.name === null ? html`<small>unnamed</small>` : html`${f.name}`;
 		const name = locs.length === 0 ? plain : html`${locs[0]!.function}`;
 		const line = traceLine[i] ?? null;
-		const location = locs.length > 0 ? where(locs[0]!) : line === null ? html`` : html`<code>${line}</code>`;
+		const location = locs.length > 0 ? where(locs[0]!, link(0)) : line === null ? html`` : html`<code>${line}</code>`;
 		const first = html`<tr>
 <td>${i}</td>
 <td>${marked.has(i) ? html`<mark>${name}</mark>` : name}</td>${locations === null ? "" : html`
@@ -50,10 +86,10 @@ function stackTable(frames: RawFrame[], hashed: number[], traceLine: (string | n
 <td><code>${f.module}</code></td>
 <td>${f.offset === undefined ? "" : html`<code>${hex(f.offset)}</code>`}</td>
 </tr>`;
-		const outer = locs.slice(1).map((loc) => html`<tr>
+		const outer = locs.slice(1).map((loc, level) => html`<tr>
 <td></td>
 <td>&nbsp;&nbsp;&nbsp;&nbsp;↳ ${marked.has(i) ? html`<mark>${loc.function}</mark>` : loc.function}</td>
-<td>${where(loc)}</td>
+<td>${where(loc, link(level + 1))}</td>
 <td></td>
 <td></td>
 </tr>`);
@@ -181,7 +217,7 @@ ${spread}
  * fingerprinted frames marked, then what the game recorded around it and
  * the files that came with it.
  */
-function sampleBody(path: string, s: SampleView, shared: SharedValues | null): Page {
+function sampleBody(path: string, s: LinkedSample, shared: SharedValues | null): Page {
 	const last = s.breadcrumbs.at(-1)?.t ?? 0;
 	const thread = (th: number) => (th === s.thread ? html`<mark>${th}</mark>` : html`${th}`);
 	const crumbs = s.breadcrumbs.length === 0
@@ -208,7 +244,7 @@ function sampleBody(path: string, s: SampleView, shared: SharedValues | null): P
 ${messageBlock(s.message_raw, s.message_norm)}
 <h3>Stack</h3>
 <p>Marked frames entered the fingerprint.</p>
-${stackTable(s.frames, s.hashed, s.trace_line, s.locations)}
+${stackTable(s.frames, s.hashed, s.trace_line, s.locations, s.links)}
 <h3>Breadcrumbs</h3>
 ${crumbs}
 <h3>State</h3>
@@ -220,6 +256,9 @@ ${modules}
 <h3>Files</h3>
 <ul><li><a href="${file(ENVELOPE_OBJECT)}">${ENVELOPE_OBJECT}</a></li>${attachments}${awaited}</ul>`;
 }
+
+/** A sample with where each of its locations can be read, aligned with `locations`. */
+type LinkedSample = SampleView & { links: (string | null)[][] };
 
 /** The sidecar extension of each attachment kind the envelope declares. */
 const ATTACHMENT_EXT: Record<string, string> = { log_tail: "log", minidump: "dmp", snapshot: "snap" };
@@ -274,7 +313,8 @@ async function crashOf(c: Context<App>, app: AppRow) {
  * One crash: its facts and the releases it was seen on, then what one of
  * its samples shows, the newest unless the query names another, then the
  * list of every sample the group holds, where the current one links to
- * its permanent URL. The state and env of the other samples are read too,
+ * its permanent URL, each source location linked where the app's template
+ * applies. The state and env of the other samples are read too,
  * so each value can say how many samples share it; with fewer than two
  * envelopes readable the comparison is left out. A group without samples
  * shows its stored frames instead. The permanent link names the sample,
@@ -290,7 +330,8 @@ crash.get("/apps/:name/crashes/:id", async (c) => {
 	const selected = wanted === undefined ? found.samples[0] ?? null : found.samples.find((s) => s.report_id === wanted) ?? null;
 	if (wanted !== undefined && selected === null) return c.text("No such sample", 404);
 	const loaded = selected === null ? null : await loadSample(c.env.BUCKET, app.name, selected, skipList);
-	const sample = loaded?.ok ? loaded.sample : null;
+	const shard = c.env.SHARD.get(c.env.SHARD.idFromName(app.name));
+	const sample: LinkedSample | null = loaded?.ok ? { ...loaded.sample, links: await sourceLinks(shard, app, loaded.sample) } : null;
 	const problem = loaded !== null && !loaded.ok ? loaded.reason : null;
 	let shared: SharedValues | null = null;
 	if (sample !== null) {

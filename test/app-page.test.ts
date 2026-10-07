@@ -353,6 +353,40 @@ describe("crash page", () => {
 		expect(html).toContain(`<td><a href="${CRASH}?sample=s-old"><code>s-old</code></a></td>`);
 		expect(html.indexOf("<small>current</small>")).toBeLessThan(html.indexOf("?sample=s-old"));
 	});
+	it("links each location through the app's template, with the commit of the frame's build", async () => {
+		const app = "crash-links";
+		await crashApp(app);
+		await bindings.DB.prepare("UPDATE apps SET source_link_template = ?2 WHERE name = ?1")
+			.bind(app, "https://github.com/org/repo/blob/{commit}/{+file}#L{line}")
+			.run();
+		const build = { build_id: BUILD_ID_HEX, version: "1.0.0", uploaded_at: 1, source_root: "/home/ci/game" };
+		await inShard(app, (obj) => obj.db.insertInto("builds").values({ ...build, source_commit: "abc123" }).execute());
+		const r = await page(app, "/crashes/3");
+		const html = await r.text();
+		const link = (file: string, line: number) => `<a href="https://github.com/org/repo/blob/abc123/${file}#L${line}"><code>${file}:${line}</code></a>`;
+		expect(html).toContain(`<td>1</td>\n<td><mark>copy_verts</mark></td>\n<td>${link("src/mesh.h", 12)}</td>`);
+		expect(html).toContain(`<td>&nbsp;&nbsp;&nbsp;&nbsp;↳ <mark>render_mesh(mesh*)</mark></td>\n<td>${link("src/render.c", 41)}</td>`);
+		expect(html).toContain(`<td>2</td>\n<td><mark>draw_scene</mark></td>\n<td>${link("src/render.c", 90)}</td>`);
+		// The JavaScript frame's trace line is not a location.
+		expect(html).toContain("<td><code>    at tick (https://example.com/game.js:12:5)</code></td>");
+		const data = await (await page(app, "/crashes/3", "application/json")).json() as { sample: { links: unknown } };
+		expect(data.sample.links).toEqual([
+			[],
+			["https://github.com/org/repo/blob/abc123/src/mesh.h#L12", "https://github.com/org/repo/blob/abc123/src/render.c#L41"],
+			["https://github.com/org/repo/blob/abc123/src/render.c#L90"],
+			[],
+			[],
+		]);
+		// Without a commit the template cannot be filled; one naming the version alone still can.
+		await inShard(app, (obj) => obj.db.updateTable("builds").set({ source_commit: null }).where("build_id", "=", BUILD_ID_HEX).execute());
+		const bare = await (await page(app, "/crashes/3")).text();
+		expect(bare).not.toContain("github.com");
+		expect(bare).toContain("<td><code>src/mesh.h:12</code></td>");
+		await bindings.DB.prepare("UPDATE apps SET source_link_template = ?2 WHERE name = ?1")
+			.bind(app, "https://github.com/org/repo/blob/v{version}/{+file}#L{line}")
+			.run();
+		expect(await (await page(app, "/crashes/3")).text()).toContain('<a href="https://github.com/org/repo/blob/v1.0.0/src/render.c#L90">');
+	});
 	it("shows the sample the query names", async () => {
 		const app = "crash-query";
 		const CRASH = await crashApp(app);

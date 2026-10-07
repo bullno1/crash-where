@@ -2,6 +2,7 @@ import { type Selectable, sql } from "kysely";
 import type { Db } from "./db";
 import type { Apps } from "./db.generated";
 import type { Identity } from "./env";
+import { templateError } from "./source-link";
 
 /** A row of the `apps` table as read back. */
 export type AppRow = Selectable<Apps>;
@@ -17,10 +18,12 @@ export interface SettingsInput {
 	display_name: string;
 	sample_cap_trusted: string;
 	sample_cap_untrusted: string;
+	/** Empty for no links. */
+	source_link_template: string;
 }
 
 /** The settings as stored. */
-export type AppSettings = Pick<AppRow, "display_name" | "sample_cap_trusted" | "sample_cap_untrusted">;
+export type AppSettings = Pick<AppRow, "display_name" | "sample_cap_trusted" | "sample_cap_untrusted" | "source_link_template">;
 
 /** Why an input is unusable, attached to the field at fault. */
 export interface AppError {
@@ -72,7 +75,17 @@ export function parseSettings(input: SettingsInput): { settings: AppSettings } |
 	if ("error" in trusted) return trusted;
 	const untrusted = sampleCap("sample_cap_untrusted", input.sample_cap_untrusted);
 	if ("error" in untrusted) return untrusted;
-	return { settings: { display_name: input.display_name, sample_cap_trusted: trusted.cap, sample_cap_untrusted: untrusted.cap } };
+	const template = input.source_link_template === "" ? null : input.source_link_template;
+	const bad = template === null ? null : templateError(template);
+	if (bad !== null) return { error: { field: "source_link_template", message: bad } };
+	return {
+		settings: {
+			display_name: input.display_name,
+			sample_cap_trusted: trusted.cap,
+			sample_cap_untrusted: untrusted.cap,
+			source_link_template: template,
+		},
+	};
 }
 
 /** Every app, ordered by display name. */

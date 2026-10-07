@@ -136,8 +136,8 @@ describe("sampling", () => {
 		};
 	}
 	async function released(name: string) {
-		await inShard(name, (obj) => obj.registerRelease({ version: "1.0.0", channel: "stable", buildId: "b", now: T0 - 2 }));
-		await inShard(name, (obj) => obj.registerRelease({ version: "2.0.0", channel: "stable", buildId: "c", now: T0 - 1 }));
+		await inShard(name, (obj) => obj.registerRelease({ version: "1.0.0", channel: "stable", buildId: "b", commit: null, sourceRoot: null, now: T0 - 2 }));
+		await inShard(name, (obj) => obj.registerRelease({ version: "2.0.0", channel: "stable", buildId: "c", commit: null, sourceRoot: null, now: T0 - 1 }));
 	}
 	const stored = (name: string) =>
 		inShard(name, (obj) => obj.db.selectFrom("crash_samples").select(["report_id", "r2_key"]).orderBy("id").execute());
@@ -200,7 +200,7 @@ describe("remap", () => {
 		}));
 	}
 	async function seed(name: string) {
-		await inShard(name, (obj) => obj.registerRelease({ version: "1.0.0", channel: "stable", buildId: "b", now: 1 }));
+		await inShard(name, (obj) => obj.registerRelease({ version: "1.0.0", channel: "stable", buildId: "b", commit: null, sourceRoot: null, now: 1 }));
 		await inShard(name, (obj) => obj.ingest(report(1, "a")));
 		await inShard(name, (obj) => obj.ingest(report(2, "b", { now: 86400 * 3 })));
 		await inShard(name, (obj) => obj.ingest(report(3, "b", { now: 86400 * 3 + 1 })));
@@ -256,9 +256,9 @@ describe("purge", () => {
 	}
 	/** 1.0.0 on stable and beta, then 2.0.0 on stable, which closes stable 1.0.0's window at T0 + 21 days. */
 	async function released(name: string) {
-		await inShard(name, (obj) => obj.registerRelease({ version: "1.0.0", channel: "stable", buildId: "b", now: T0 - 2 }));
-		await inShard(name, (obj) => obj.registerRelease({ version: "1.0.0", channel: "beta", buildId: "b", now: T0 - 2 }));
-		await inShard(name, (obj) => obj.registerRelease({ version: "2.0.0", channel: "stable", buildId: "c", now: T0 }));
+		await inShard(name, (obj) => obj.registerRelease({ version: "1.0.0", channel: "stable", buildId: "b", commit: null, sourceRoot: null, now: T0 - 2 }));
+		await inShard(name, (obj) => obj.registerRelease({ version: "1.0.0", channel: "beta", buildId: "b", commit: null, sourceRoot: null, now: T0 - 2 }));
+		await inShard(name, (obj) => obj.registerRelease({ version: "2.0.0", channel: "stable", buildId: "c", commit: null, sourceRoot: null, now: T0 }));
 	}
 	const ingest = (name: string, n: number, over: Partial<Ingest> = {}) =>
 		inShard(name, (obj) => obj.ingest(report(name, n, over)));

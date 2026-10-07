@@ -33,11 +33,16 @@ interface Upload {
 	channel?: string;
 	token?: string;
 	body?: BodyInit | null;
+	commit?: string;
+	source_root?: string;
 }
 
 async function put(u: Upload): Promise<Response> {
 	const path = `/v1/${u.app}/releases/${encodeURIComponent(u.version ?? "1.0.0")}`;
-	const query = u.channel === undefined ? "?channel=stable" : u.channel === "" ? "" : `?channel=${u.channel}`;
+	let query = u.channel === undefined ? "?channel=stable" : u.channel === "" ? "" : `?channel=${u.channel}`;
+	for (const key of ["commit", "source_root"] as const) {
+		if (u[key] !== undefined) query += `${query === "" ? "?" : "&"}${key}=${encodeURIComponent(u[key])}`;
+	}
 	const headers: Record<string, string> = { "Content-Type": "application/octet-stream" };
 	if (u.token !== undefined) headers.Authorization = `Bearer ${u.token}`;
 	return worker.fetch(
@@ -54,7 +59,7 @@ function inShard<T>(name: string, fn: (obj: AppShard) => T | Promise<T>): Promis
 async function rows(name: string) {
 	return inShard(name, async (obj) => ({
 		versions: await obj.db.selectFrom("versions").select("version").orderBy("version").execute(),
-		builds: await obj.db.selectFrom("builds").select(["build_id", "version"]).orderBy("build_id").execute(),
+		builds: await obj.db.selectFrom("builds").select(["build_id", "version", "source_commit", "source_root"]).orderBy("build_id").execute(),
 		releases: await obj.db
 			.selectFrom("releases")
 			.select(["channel", "version", "supported_until"])
@@ -134,6 +139,16 @@ describe("upload validation", () => {
 		expect((await put({ app: "val-channel", token, channel: "" })).status).toBe(400);
 		expect((await put({ app: "val-channel", token, channel: "a%20b" })).status).toBe(400);
 	});
+	it("refuses an odd commit or source root", async () => {
+		const token = await appWithToken("val-source");
+		expect((await put({ app: "val-source", token, commit: "" })).status).toBe(400);
+		expect((await put({ app: "val-source", token, commit: "a b" })).status).toBe(400);
+		expect((await put({ app: "val-source", token, commit: "x".repeat(101) })).status).toBe(400);
+		expect((await put({ app: "val-source", token, source_root: "" })).status).toBe(400);
+		expect((await put({ app: "val-source", token, source_root: "/a\nb" })).status).toBe(400);
+		expect((await put({ app: "val-source", token, source_root: "x".repeat(501) })).status).toBe(400);
+		expect((await rows("val-source")).builds).toEqual([]);
+	});
 	it("refuses bytes that are not a complete table", async () => {
 		const token = await appWithToken("val-table");
 		const foreign = await put({ app: "val-table", token, body: new Uint8Array([1, 2, 3]) });
@@ -158,9 +173,34 @@ describe("upload", () => {
 		expect(new Uint8Array(await object!.arrayBuffer())).toEqual(table);
 		expect(await rows("up-first")).toEqual({
 			versions: [{ version: "1.0.0" }],
-			builds: [{ build_id: BUILD_ID_HEX, version: "1.0.0" }],
+			builds: [{ build_id: BUILD_ID_HEX, version: "1.0.0", source_commit: null, source_root: null }],
 			releases: [{ channel: "stable", version: "1.0.0", supported_until: null }],
 		});
+	});
+	it("records the commit and source root when given", async () => {
+		const token = await appWithToken("up-source");
+		const r = await put({ app: "up-source", token, commit: "release/1.0", source_root: "D:\\a\\game\\game" });
+		expect(r.status).toBe(201);
+		expect((await rows("up-source")).builds).toEqual([
+			{ build_id: BUILD_ID_HEX, version: "1.0.0", source_commit: "release/1.0", source_root: "D:\\a\\game\\game" },
+		]);
+	});
+	it("fills in a commit or root a rerun adds, and refuses one that differs", async () => {
+		const token = await appWithToken("up-source-again");
+		expect((await put({ app: "up-source-again", token })).status).toBe(201);
+		expect((await put({ app: "up-source-again", token, commit: "abc" })).status).toBe(200);
+		expect((await put({ app: "up-source-again", token, source_root: "/home/ci/game" })).status).toBe(200);
+		expect((await put({ app: "up-source-again", token })).status).toBe(200);
+		expect((await put({ app: "up-source-again", token, commit: "abc", source_root: "/home/ci/game" })).status).toBe(200);
+		const other = await put({ app: "up-source-again", token, commit: "def" });
+		expect(other.status).toBe(409);
+		expect(await other.text()).toMatch(/with commit abc$/);
+		const elsewhere = await put({ app: "up-source-again", token, source_root: "/tmp/game" });
+		expect(elsewhere.status).toBe(409);
+		expect(await elsewhere.text()).toMatch(/with source root \/home\/ci\/game$/);
+		expect((await rows("up-source-again")).builds).toEqual([
+			{ build_id: BUILD_ID_HEX, version: "1.0.0", source_commit: "abc", source_root: "/home/ci/game" },
+		]);
 	});
 	it("makes the table known at once where the upload ran", async () => {
 		const token = await appWithToken("up-known");

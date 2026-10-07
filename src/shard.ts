@@ -23,6 +23,10 @@ export interface ReleaseRequest {
 	channel: string;
 	/** Hex, as in the table header. */
 	buildId: string;
+	/** The commit the build was made from, or null when the upload did not say. */
+	commit: string | null;
+	/** The checkout root the build's source paths start with, or null when the upload did not say. */
+	sourceRoot: string | null;
 	/** Unix seconds. */
 	now: number;
 }
@@ -31,8 +35,20 @@ export interface ReleaseRequest {
 export interface ReleaseResult {
 	/** Set when the build id is already recorded under another version, which it names. */
 	conflict?: string;
+	/** Set when the build is already recorded with another value of this field, which `stored` gives. */
+	mismatch?: { field: "commit" | "source root"; stored: string };
 	/** Which rows this call inserted; all false for a repeat of an earlier upload. */
 	created: { version: boolean; build: boolean; release: boolean };
+}
+
+/** Where a build's sources came from, for the links of the crash page. */
+export interface BuildSource {
+	build_id: string;
+	version: string;
+	/** Null when the upload did not say. */
+	source_commit: string | null;
+	/** Null when the upload did not say. */
+	source_root: string | null;
 }
 
 /** A report after the Worker grouped it, ready to count. */
@@ -231,20 +247,38 @@ export class AppShard extends DurableObject<Env> {
 		}));
 	}
 
+	/** The builds among `buildIds` that are recorded, in no order. */
+	async getBuilds(buildIds: string[]): Promise<BuildSource[]> {
+		if (buildIds.length === 0) return [];
+		return this.db
+			.selectFrom("builds")
+			.select(["build_id", "version", "source_commit", "source_root"])
+			.where("build_id", "in", buildIds)
+			.execute();
+	}
+
 	/**
 	 * Records an uploaded build: its version if new, the build itself if
 	 * new, and the release on the channel if new, in which case the channel's
-	 * previous current release gets its support window. Storage queries
-	 * complete without leaving the event loop, so the whole call is atomic.
+	 * previous current release gets its support window. A commit or source
+	 * root given for a build already recorded fills in one it lacks and
+	 * must match one it has. Storage queries complete without leaving the
+	 * event loop, so the whole call is atomic.
 	 */
 	async registerRelease(req: ReleaseRequest): Promise<ReleaseResult> {
 		const created = { version: false, build: false, release: false };
 		const build = await this.db
 			.selectFrom("builds")
-			.select("version")
+			.select(["version", "source_commit", "source_root"])
 			.where("build_id", "=", req.buildId)
 			.executeTakeFirst();
 		if (build && build.version !== req.version) return { conflict: build.version, created };
+		if (build && req.commit !== null && build.source_commit !== null && build.source_commit !== req.commit) {
+			return { mismatch: { field: "commit", stored: build.source_commit }, created };
+		}
+		if (build && req.sourceRoot !== null && build.source_root !== null && build.source_root !== req.sourceRoot) {
+			return { mismatch: { field: "source root", stored: build.source_root }, created };
+		}
 		const version = await this.db
 			.selectFrom("versions")
 			.select("version")
@@ -257,9 +291,20 @@ export class AppShard extends DurableObject<Env> {
 		if (!build) {
 			await this.db
 				.insertInto("builds")
-				.values({ build_id: req.buildId, version: req.version, uploaded_at: req.now })
+				.values({
+					build_id: req.buildId, version: req.version, uploaded_at: req.now,
+					source_commit: req.commit, source_root: req.sourceRoot,
+				})
 				.execute();
 			created.build = true;
+		} else {
+			const fill = {
+				...(req.commit !== null && build.source_commit === null ? { source_commit: req.commit } : {}),
+				...(req.sourceRoot !== null && build.source_root === null ? { source_root: req.sourceRoot } : {}),
+			};
+			if (Object.keys(fill).length > 0) {
+				await this.db.updateTable("builds").set(fill).where("build_id", "=", req.buildId).execute();
+			}
 		}
 		const release = await this.db
 			.selectFrom("releases")

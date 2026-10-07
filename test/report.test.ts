@@ -60,7 +60,7 @@ function inShard<T>(name: string, fn: (obj: AppShard) => T | Promise<T>): Promis
 async function release(name: string, version = "1.0.0", channel = "stable"): Promise<void> {
 	await addApp(name);
 	await bindings.BUCKET.put(symbolKey(name, BUILD_ID_HEX), makeTable({ functions: FUNCTIONS }));
-	await inShard(name, (obj) => obj.registerRelease({ version, channel, buildId: BUILD_ID_HEX, now: 1 }));
+	await inShard(name, (obj) => obj.registerRelease({ version, channel, buildId: BUILD_ID_HEX, commit: null, sourceRoot: null, now: 1 }));
 }
 
 interface FrameSpec {
@@ -331,7 +331,7 @@ describe("report counting", () => {
 	});
 	it("keeps channels and versions apart in the counts", async () => {
 		await release("count-keys");
-		await inShard("count-keys", (obj) => obj.registerRelease({ version: "1.0.0", channel: "beta", buildId: BUILD_ID_HEX, now: 1 }));
+		await inShard("count-keys", (obj) => obj.registerRelease({ version: "1.0.0", channel: "beta", buildId: BUILD_ID_HEX, commit: null, sourceRoot: null, now: 1 }));
 		await report("count-keys");
 		await report("count-keys", { app: { name: "count-keys", version: "1.0.0", channel: "beta" } });
 		const { groups, counts } = await state("count-keys");
