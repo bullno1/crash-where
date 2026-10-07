@@ -4,7 +4,7 @@ import { type AppError, type AppInput, type AppRow, createApp, listApps, validat
 import type { App } from "../env";
 import { layout } from "../layout";
 import { type Page, render } from "../page";
-import { day, fields, wantsJson } from "./common";
+import { day, field, fields, wantsJson } from "./common";
 
 /** The app list, with the form that creates one. */
 export const apps = new Hono<App>();
@@ -12,17 +12,6 @@ export const apps = new Hono<App>();
 /** The message for a name already in use, on the page and in JSON alike. */
 function duplicateName(name: string): AppError {
 	return { field: "name", message: `An app named '${name}' already exists.` };
-}
-
-/** A labelled input, marked invalid with its message when the error is its own. */
-function field(
-	label: string, name: keyof AppInput, value: string, attrs: Page, error: AppError | null
-): Page {
-	const mine = error?.field === name;
-	return html`<label>${label}
-<input name="${name}" value="${value}" ${attrs} ${mine ? html`aria-invalid="true" aria-describedby="${name}-error"` : ""}>
-${mine ? html`<small id="${name}-error">${error.message}</small>` : ""}
-</label>`;
 }
 
 function appsPage(who: string, apps: AppRow[], form: AppInput, error: AppError | null): Page {

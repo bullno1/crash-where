@@ -6,6 +6,7 @@ import type { App } from "../env";
 import { apps } from "./apps";
 import { crash } from "./crash";
 import { crashes } from "./crashes";
+import { settings } from "./settings";
 import { tokens } from "./tokens";
 import { versions } from "./versions";
 
@@ -29,4 +30,5 @@ dashboard.route("/", apps);
 dashboard.route("/", crashes);
 dashboard.route("/", versions);
 dashboard.route("/", tokens);
+dashboard.route("/", settings);
 dashboard.route("/", crash);
