@@ -50,6 +50,9 @@ curl -u "alice:$PASSWORD" -H 'Accept: application/json' https://crash.example.co
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' -H 'Content-Type: application/json' \
   -d '{"label":"GitHub Actions"}' https://crash.example.com/dashboard/apps/forest-quest/tokens
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' https://crash.example.com/dashboard/apps/forest-quest/versions
+curl -u "alice:$PASSWORD" -H 'Accept: application/json' -H 'Content-Type: application/json' \
+  -d '{"display_name":"Forest Quest","sample_cap_trusted":"5","sample_cap_untrusted":"2"}' https://crash.example.com/dashboard/apps/forest-quest/settings
+curl -u "alice:$PASSWORD" -H 'Accept: application/json' -X POST https://crash.example.com/dashboard/apps/forest-quest/settings/disable
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' https://crash.example.com/dashboard/apps/forest-quest/crashes/3?sample=<report id>
 ```
 

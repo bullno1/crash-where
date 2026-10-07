@@ -1,6 +1,9 @@
 import type { Context } from "hono";
 import { accepts } from "hono/accepts";
+import { html } from "hono/html";
+import type { AppError } from "../apps";
 import type { App } from "../env";
+import type { Page } from "../page";
 
 export function day(unix: number): string {
 	return new Date(unix * 1000).toISOString().slice(0, 10);
@@ -35,4 +38,20 @@ export async function fields(c: Context<App>): Promise<Record<string, string>> {
 		}
 	}
 	return out;
+}
+
+/**
+ * A labelled input, marked invalid with its message when the error is its
+ * own. A null label leaves the input bare, for a heading above it to name
+ * through `attrs`.
+ */
+export function field(
+	label: string | null, name: AppError["field"], value: string, attrs: Page, error: AppError | null
+): Page {
+	const mine = error?.field === name;
+	const input = html`<input name="${name}" value="${value}" ${attrs} ${mine ? html`aria-invalid="true" aria-describedby="${name}-error"` : ""}>
+${mine ? html`<small id="${name}-error">${error.message}</small>` : ""}`;
+	return label === null ? input : html`<label>${label}
+${input}
+</label>`;
 }

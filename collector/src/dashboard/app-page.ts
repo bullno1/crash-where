@@ -16,6 +16,10 @@ export function versionsPath(name: string): string {
 	return `${appPath(name)}/versions`;
 }
 
+export function settingsPath(name: string): string {
+	return `${appPath(name)}/settings`;
+}
+
 export function crashPath(name: string, id: number): string {
 	return `${appPath(name)}/crashes/${id}`;
 }
@@ -25,6 +29,7 @@ const APP_PAGES = [
 	{ key: "crashes", label: "Crashes", path: appPath },
 	{ key: "versions", label: "Versions", path: versionsPath },
 	{ key: "tokens", label: "Upload tokens", path: tokensPath },
+	{ key: "settings", label: "Settings", path: settingsPath },
 ] as const;
 
 type AppPageKey = (typeof APP_PAGES)[number]["key"];

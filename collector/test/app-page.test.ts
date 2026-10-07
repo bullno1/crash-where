@@ -31,7 +31,7 @@ function inShard<T>(name: string, fn: (obj: AppShard) => T | Promise<T>): Promis
 
 describe("app page", () => {
 	it("is 404 for an unknown app, on every page", async () => {
-		for (const sub of ["", "/versions", "/tokens"]) expect((await page("nobody", sub)).status).toBe(404);
+		for (const sub of ["", "/versions", "/tokens", "/settings"]) expect((await page("nobody", sub)).status).toBe(404);
 	});
 	it("shows the app's details and links its pages, marking the current one", async () => {
 		await addApp("page-empty", "Page <Empty>", 1_750_000_000);
@@ -45,6 +45,7 @@ describe("app page", () => {
 		expect(html).toContain('<a href="/dashboard/apps/page-empty" aria-current="page">Crashes</a>');
 		expect(html).toContain('<a href="/dashboard/apps/page-empty/versions">Versions</a>');
 		expect(html).toContain('<a href="/dashboard/apps/page-empty/tokens">Upload tokens</a>');
+		expect(html).toContain('<a href="/dashboard/apps/page-empty/settings">Settings</a>');
 		expect(html).toContain("No crashes reported yet");
 		expect(html).not.toContain("No versions yet");
 		const versions = await (await page("page-empty", "/versions")).text();
