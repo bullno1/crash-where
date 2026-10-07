@@ -182,7 +182,7 @@ describe("app page", () => {
 		});
 		expect(await json("/tokens")).toEqual({
 			app: expect.any(Object),
-			tokens: [{ id: expect.any(Number), label: "ci", created_at: 3, created_by: "bob", last_used_at: null, revoked_at: null }],
+			tokens: [{ id: expect.any(Number), label: "ci", created_at: 3, created_by: "bob", last_used_at: null }],
 		});
 	});
 	it("follows the Accept header's quality, then its order", async () => {

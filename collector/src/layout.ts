@@ -15,6 +15,7 @@ export function layout(title: string, who: string, body: Page, canonical: string
 <meta name="color-scheme" content="light dark">
 <title>${title} · crash-where</title>
 <link rel="stylesheet" href="/dashboard/pico.css">
+<style>td form { margin: 0; } td button { padding: 0.25rem 0.75rem; font-size: 0.875em; }</style>
 ${canonical === null ? "" : html`<link rel="canonical" href="${canonical}">`}
 </head>
 <body>

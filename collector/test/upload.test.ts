@@ -5,7 +5,7 @@ import worker from "../src/index";
 import { symbolKey } from "../src/releases";
 import { type AppShard, SUPPORT_WINDOW } from "../src/shard";
 import { symbolicate } from "../src/symbols";
-import { createToken } from "../src/tokens";
+import { authenticateToken, createToken, revokeToken } from "../src/tokens";
 import { BUILD_ID_HEX, makeTable } from "./table";
 
 const env = { DB: bindings.DB, SHARD: bindings.SHARD, BUCKET: bindings.BUCKET };
@@ -81,7 +81,8 @@ describe("upload authorization", () => {
 	});
 	it("refuses a revoked token", async () => {
 		const token = await appWithToken("auth-revoked");
-		await bindings.DB.exec("UPDATE upload_tokens SET revoked_at = 2");
+		const { id, app_id } = (await authenticateToken(db, token, 2))!;
+		expect(await revokeToken(db, app_id, id)).toBe(true);
 		expect((await put({ app: "auth-revoked", token })).status).toBe(401);
 	});
 	it("refuses a token minted for another app", async () => {

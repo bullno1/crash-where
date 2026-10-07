@@ -21,12 +21,19 @@ export async function hashToken(token: string): Promise<string> {
 	return hex(new Uint8Array(await crypto.subtle.digest("SHA-256", new TextEncoder().encode(token))));
 }
 
-/** Mints a token for the app and stores its hash under the label. The token is returned once and never stored. */
-export async function createToken(
-	db: Db, appId: number, label: string, who: Identity, now: number
-): Promise<{ token: string; row: TokenRow }> {
-	const bytes = crypto.getRandomValues(new Uint8Array(32));
-	const token = PREFIX + base64url(bytes);
+/** A token just minted: the clear text, returned once and never stored, and its row. */
+export interface MintedToken {
+	token: string;
+	row: TokenRow;
+}
+
+function mintToken(): string {
+	return PREFIX + base64url(crypto.getRandomValues(new Uint8Array(32)));
+}
+
+/** Mints a token for the app and stores its hash under the label. */
+export async function createToken(db: Db, appId: number, label: string, who: Identity, now: number): Promise<MintedToken> {
+	const token = mintToken();
 	const row = await db
 		.insertInto("upload_tokens")
 		.values({
@@ -41,30 +48,44 @@ export async function createToken(
 	return { token, row };
 }
 
-/** Every token of the app, newest first, revoked ones included. */
+/**
+ * Replaces the app's token with a new one under the same label, for a
+ * token that leaked or whose holder rotates it on a schedule. The old
+ * token stops working the moment the new one exists. The row keeps its id
+ * and becomes the new token's: minted now, by the caller, never used. Null
+ * when the app has no such token.
+ */
+export async function regenerateToken(
+	db: Db, appId: number, id: number, who: Identity, now: number
+): Promise<MintedToken | null> {
+	const token = mintToken();
+	const row = await db
+		.updateTable("upload_tokens")
+		.set({ hash: await hashToken(token), created_at: now, created_by: who.email ?? who.sub, last_used_at: null })
+		.where("app_id", "=", appId)
+		.where("id", "=", id)
+		.returningAll()
+		.executeTakeFirst();
+	return row ? { token, row } : null;
+}
+
+/** Every token of the app, newest first. */
 export function listTokens(db: Db, appId: number): Promise<TokenRow[]> {
 	return db.selectFrom("upload_tokens").selectAll().where("app_id", "=", appId).orderBy("id", "desc").execute();
 }
 
-/** Revokes the app's token; false when there is no such usable token. */
-export async function revokeToken(db: Db, appId: number, id: number, now: number): Promise<boolean> {
-	const result = await db
-		.updateTable("upload_tokens")
-		.set({ revoked_at: now })
-		.where("app_id", "=", appId)
-		.where("id", "=", id)
-		.where("revoked_at", "is", null)
-		.executeTakeFirst();
-	return result.numUpdatedRows > 0n;
+/** Deletes the app's token; false when the app has no such token. */
+export async function revokeToken(db: Db, appId: number, id: number): Promise<boolean> {
+	const result = await db.deleteFrom("upload_tokens").where("app_id", "=", appId).where("id", "=", id).executeTakeFirst();
+	return result.numDeletedRows > 0n;
 }
 
-/** The usable token row the bearer names, with its use recorded, or null. */
+/** The token row the bearer names, with its use recorded, or null. */
 export async function authenticateToken(db: Db, token: string, now: number): Promise<TokenRow | null> {
 	const row = await db
 		.updateTable("upload_tokens")
 		.set({ last_used_at: now })
 		.where("hash", "=", await hashToken(token))
-		.where("revoked_at", "is", null)
 		.returningAll()
 		.executeTakeFirst();
 	return row ?? null;

@@ -1,10 +1,12 @@
-import { Hono } from "hono";
+import { type Context, Hono } from "hono";
 import { deleteCookie, getCookie, setCookie } from "hono/cookie";
 import { html } from "hono/html";
 import { type AppRow, getApp } from "../apps";
 import type { App } from "../env";
 import { type Page, render } from "../page";
-import { createToken, listTokens, MAX_LABEL, revokeToken, type TokenRow, validLabel } from "../tokens";
+import {
+	createToken, listTokens, MAX_LABEL, type MintedToken, regenerateToken, revokeToken, type TokenRow, validLabel,
+} from "../tokens";
 import { appPage, tokensPath } from "./app-page";
 import { day, fields, wantsJson } from "./common";
 
@@ -18,11 +20,10 @@ interface TokenSummary {
 	created_at: number;
 	created_by: string;
 	last_used_at: number | null;
-	revoked_at: number | null;
 }
 
-function summarizeToken({ id, label, created_at, created_by, last_used_at, revoked_at }: TokenRow): TokenSummary {
-	return { id, label, created_at, created_by, last_used_at, revoked_at };
+function summarizeToken({ id, label, created_at, created_by, last_used_at }: TokenRow): TokenSummary {
+	return { id, label, created_at, created_by, last_used_at };
 }
 
 /** The upload tokens of an app, with the one just minted shown in clear. */
@@ -33,9 +34,10 @@ function tokensSection(app: AppRow, tokens: TokenSummary[], fresh: string | null
 <td>${day(t.created_at)}</td>
 <td>${t.created_by}</td>
 <td>${t.last_used_at === null ? html`<small>never</small>` : day(t.last_used_at)}</td>
-<td>${t.revoked_at === null
-	? html`<form method="post" action="${tokensPath(app.name)}/${t.id}/revoke"><button class="secondary">Revoke</button></form>`
-	: html`<small>revoked ${day(t.revoked_at)}</small>`}</td>
+<td><form method="post" action="${tokensPath(app.name)}/${t.id}/revoke">
+<button formaction="${tokensPath(app.name)}/${t.id}/regenerate" class="secondary">Regenerate</button>
+<button class="secondary">Revoke</button>
+</form></td>
 </tr>`
 	);
 	const table =
@@ -80,24 +82,38 @@ tokens.get("/apps/:name/tokens", async (c) => {
 });
 
 /** A browser sees the new token once on the tokens page; a JSON client gets it in the reply. */
+function minted(c: Context<App>, app: AppRow, { token, row }: MintedToken): Response {
+	if (wantsJson(c)) return c.json({ token, ...summarizeToken(row) }, 201);
+	setCookie(c, FRESH_TOKEN_COOKIE, token, {
+		path: tokensPath(app.name), httpOnly: true, secure: true, sameSite: "Strict", maxAge: FRESH_TOKEN_SECONDS,
+	});
+	return c.redirect(tokensPath(app.name), 303);
+}
+
 tokens.post("/apps/:name/tokens", async (c) => {
 	const app = await getApp(c.get("db"), c.req.param("name"));
 	if (!app) return c.text("No such app", 404);
 	const body = await fields(c);
 	const label = validLabel(body.label ?? "");
 	if (label === null) return c.text(`A label of 1 to ${MAX_LABEL} characters is required`, 400);
-	const { token, row } = await createToken(c.get("db"), app.id, label, c.get("identity"), Math.floor(Date.now() / 1000));
-	if (wantsJson(c)) return c.json({ token, ...summarizeToken(row) }, 201);
-	setCookie(c, FRESH_TOKEN_COOKIE, token, {
-		path: tokensPath(app.name), httpOnly: true, secure: true, sameSite: "Strict", maxAge: FRESH_TOKEN_SECONDS,
-	});
-	return c.redirect(tokensPath(app.name), 303);
+	return minted(c, app, await createToken(c.get("db"), app.id, label, c.get("identity"), Math.floor(Date.now() / 1000)));
+});
+
+/** The replacement is shown as a new token is; 404 when the app has no such token. */
+tokens.post("/apps/:name/tokens/:id/regenerate", async (c) => {
+	const app = await getApp(c.get("db"), c.req.param("name"));
+	if (!app) return c.text("No such app", 404);
+	const fresh = await regenerateToken(
+		c.get("db"), app.id, Number(c.req.param("id")), c.get("identity"), Math.floor(Date.now() / 1000)
+	);
+	if (!fresh) return c.text("No such token", 404);
+	return minted(c, app, fresh);
 });
 
 tokens.post("/apps/:name/tokens/:id/revoke", async (c) => {
 	const app = await getApp(c.get("db"), c.req.param("name"));
 	if (!app) return c.text("No such app", 404);
-	const revoked = await revokeToken(c.get("db"), app.id, Number(c.req.param("id")), Math.floor(Date.now() / 1000));
+	const revoked = await revokeToken(c.get("db"), app.id, Number(c.req.param("id")));
 	if (wantsJson(c)) return c.json({ revoked }, revoked ? 200 : 404);
 	return c.redirect(tokensPath(app.name), 303);
 });
