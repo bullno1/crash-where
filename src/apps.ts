@@ -1,5 +1,6 @@
 import { type Selectable, sql } from "kysely";
 import type { Db } from "./db";
+import { parseCorsOrigins } from "./cors";
 import type { Apps } from "./db.generated";
 import type { Identity } from "./env";
 import { templateError } from "./source-link";
@@ -20,10 +21,14 @@ export interface SettingsInput {
 	sample_cap_untrusted: string;
 	/** Empty for no links. */
 	source_link_template: string;
+	/** `*` for every origin, else one per line; empty for none. */
+	cors_origins: string;
 }
 
 /** The settings as stored. */
-export type AppSettings = Pick<AppRow, "display_name" | "sample_cap_trusted" | "sample_cap_untrusted" | "source_link_template">;
+export type AppSettings = Pick<
+	AppRow, "display_name" | "sample_cap_trusted" | "sample_cap_untrusted" | "source_link_template" | "cors_origins"
+>;
 
 /** Why an input is unusable, attached to the field at fault. */
 export interface AppError {
@@ -78,12 +83,15 @@ export function parseSettings(input: SettingsInput): { settings: AppSettings } |
 	const template = input.source_link_template === "" ? null : input.source_link_template;
 	const bad = template === null ? null : templateError(template);
 	if (bad !== null) return { error: { field: "source_link_template", message: bad } };
+	const cors = parseCorsOrigins(input.cors_origins);
+	if ("error" in cors) return { error: { field: "cors_origins", message: cors.error } };
 	return {
 		settings: {
 			display_name: input.display_name,
 			sample_cap_trusted: trusted.cap,
 			sample_cap_untrusted: untrusted.cap,
 			source_link_template: template,
+			cors_origins: cors.origins,
 		},
 	};
 }

@@ -51,6 +51,12 @@ cwsym upload --endpoint https://crash.example.com --app forest-quest --version 1
 
 A build compiled with `-ffile-prefix-map` already records relative paths and needs no `--source-root`, and a project that tags its versions can write `blob/v{version}/{+file}` and pass no `--commit`.
 
+### Web origins
+
+A web build sends its reports from a page on another origin than the collector.
+An app's settings page lists the origins allowed, one per line as the browser sends them in the `Origin`header.
+Each should have the form: `scheme://host[:port]`, with `*` matching any run of characters: `https://game.example.com`, `https://*.itch.io`, `http://localhost:*`.
+
 ### Scripting the dashboard
 
 Every dashboard route answers in JSON when the request prefers it, with the same login.
@@ -66,7 +72,7 @@ curl -u "alice:$PASSWORD" -H 'Accept: application/json' -H 'Content-Type: applic
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' -X POST https://crash.example.com/dashboard/apps/forest-quest/tokens/<token id>/regenerate
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' https://crash.example.com/dashboard/apps/forest-quest/versions
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' -H 'Content-Type: application/json' \
-  -d '{"display_name":"Forest Quest","sample_cap_trusted":"5","sample_cap_untrusted":"2","source_link_template":""}' https://crash.example.com/dashboard/apps/forest-quest/settings
+  -d '{"display_name":"Forest Quest","sample_cap_trusted":"5","sample_cap_untrusted":"2","source_link_template":"","cors_origins":"https://game.example.com"}' https://crash.example.com/dashboard/apps/forest-quest/settings
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' -X POST https://crash.example.com/dashboard/apps/forest-quest/settings/disable
 curl -u "alice:$PASSWORD" -H 'Accept: application/json' https://crash.example.com/dashboard/apps/forest-quest/crashes/3?sample=<report id>
 ```
