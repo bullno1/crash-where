@@ -270,6 +270,18 @@ BTEST(cli, upload) {
 	BTEST_EXPECT(strstr(err_text, "ci-token") == NULL);
 }
 
+BTEST(cli, upload_with_source) {
+	server = test_http_start(NULL);
+	BTEST_ASSERT(server != NULL);
+	BTEST_ASSERT_EQUAL("%d", RUN(
+		"upload", "--endpoint", test_http_url(server), "--app", "forest-quest",
+		"--version", "1.4.2", "--channel", "stable", "--commit", "8f3c2a1", "--source-root", "/home/ci/game", FIXTURE
+	), CWSYM_CLI_OK);
+	BTEST_ASSERT_EQUAL("%d", test_http_count(server), 1);
+	const test_http_request_t* req = test_http_request(server, 0);
+	BTEST_EXPECT_EX(strcmp(req->query, "channel=stable&commit=8f3c2a1&source_root=%2Fhome%2Fci%2Fgame") == 0, "query is %s", req->query);
+}
+
 BTEST(cli, upload_requires_token) {
 	server = test_http_start(NULL);
 	BTEST_ASSERT(server != NULL);

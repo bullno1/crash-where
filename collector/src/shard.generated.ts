@@ -11,6 +11,8 @@ export type Generated<T> = T extends ColumnType<infer S, infer I, infer U>
 
 export interface Builds {
   build_id: string;
+  source_commit: string | null;
+  source_root: string | null;
   uploaded_at: number;
   version: string;
 }

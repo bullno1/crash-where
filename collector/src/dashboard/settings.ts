@@ -6,6 +6,7 @@ import {
 } from "../apps";
 import type { App } from "../env";
 import { type Page, render } from "../page";
+import { MAX_SOURCE_LINK_TEMPLATE } from "../source-link";
 import { appPage, settingsPath } from "./app-page";
 import { day, field, fields, wantsJson } from "./common";
 
@@ -23,6 +24,19 @@ ${field(null, "display_name", form.display_name, html`required maxlength="${MAX_
 <p>How many full reports to keep per crash, version and trust level.</p>
 ${field("Authorized reports", "sample_cap_trusted", form.sample_cap_trusted, cap, error)}
 ${field("Unauthorized reports", "sample_cap_untrusted", form.sample_cap_untrusted, cap, error)}
+<h3 id="source-link">Source link</h3>
+<p>Where a crash's source locations link to. This is a URI template (RFC 6570) with:
+<ul>
+<li><code>{commit}</code>: The commit hash</li>
+<li><code>{version}</code>: The version in the symbol file</li>
+<li><code>{+file}</code>: Relative to the upload's source root</li>
+<li><code>{line}</code>: Resolved line number</li>
+</ul>
+Set to empty for no links.
+A location is linked only when every variable the template names is known.
+</p>
+<p><small>GitHub: <code>https://github.com/org/repo/blob/{commit}/{+file}#L{line}</code><br>GitLab: <code>https://gitlab.com/org/repo/-/blob/{commit}/{+file}#L{line}</code></small></p>
+${field(null, "source_link_template", form.source_link_template, html`maxlength="${MAX_SOURCE_LINK_TEMPLATE}" aria-labelledby="source-link" placeholder="https://github.com/org/repo/blob/{commit}/{+file}#L{line}"`, error)}
 <button>Save</button>
 </form>
 <h3>Kill switch</h3>
@@ -39,6 +53,7 @@ function currentSettings(app: AppRow): SettingsInput {
 		display_name: app.display_name,
 		sample_cap_trusted: String(app.sample_cap_trusted),
 		sample_cap_untrusted: String(app.sample_cap_untrusted),
+		source_link_template: app.source_link_template ?? "",
 	};
 }
 
@@ -54,6 +69,7 @@ function formState(query: Record<string, string>, app: AppRow): { form: Settings
 		display_name: query.display_name ?? "",
 		sample_cap_trusted: query.sample_cap_trusted ?? "",
 		sample_cap_untrusted: query.sample_cap_untrusted ?? "",
+		source_link_template: query.source_link_template ?? "",
 	};
 	const parsed = parseSettings(form);
 	return { form, error: "error" in parsed ? parsed.error : null };
@@ -81,6 +97,7 @@ settings.post("/apps/:name/settings", async (c) => {
 		display_name: body.display_name ?? "",
 		sample_cap_trusted: body.sample_cap_trusted ?? "",
 		sample_cap_untrusted: body.sample_cap_untrusted ?? "",
+		source_link_template: body.source_link_template ?? "",
 	};
 	const parsed = parseSettings(input);
 	if ("error" in parsed) {

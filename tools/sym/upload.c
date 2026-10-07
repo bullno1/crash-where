@@ -73,13 +73,21 @@ cwsym_upload(
 	char app[256];
 	char version[256];
 	char channel[256];
-	char url[1024];
+	char commit[512];
+	char source_root[2048];
+	char url[4096];
 	if (!encode(up->app, app, sizeof(app)) || !encode(up->version, version, sizeof(version))
-		|| !encode(up->channel, channel, sizeof(channel))) {
-		cwsym_logf(log, "upload: app, version, or channel is too long");
+		|| !encode(up->channel, channel, sizeof(channel))
+		|| !encode(up->commit != NULL ? up->commit : "", commit, sizeof(commit))
+		|| !encode(up->source_root != NULL ? up->source_root : "", source_root, sizeof(source_root))) {
+		cwsym_logf(log, "upload: app, version, channel, commit, or source root is too long");
 		return CWSYM_ERR_INVALID;
 	}
-	int n = snprintf(url, sizeof(url), "%s/v1/%s/releases/%s?channel=%s", up->endpoint, app, version, channel);
+	int n = snprintf(
+		url, sizeof(url), "%s/v1/%s/releases/%s?channel=%s%s%s%s%s", up->endpoint, app, version, channel,
+		up->commit != NULL ? "&commit=" : "", commit,
+		up->source_root != NULL ? "&source_root=" : "", source_root
+	);
 	if (n < 0 || (size_t)n >= sizeof(url)) {
 		cwsym_logf(log, "upload: the URL is too long");
 		return CWSYM_ERR_INVALID;

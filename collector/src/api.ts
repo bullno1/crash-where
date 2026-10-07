@@ -12,6 +12,7 @@ import {
 } from "./releases";
 import { remapForBuild } from "./remap";
 import { attachmentKind, deleteSample, ENVELOPE_OBJECT, sampleKey } from "./samples";
+import { COMMIT_GRAMMAR, SOURCE_ROOT_GRAMMAR, validCommit, validSourceRoot } from "./source-link";
 import { forgetTable, symbolicate } from "./symbols";
 import { authenticateToken } from "./tokens";
 
@@ -24,8 +25,10 @@ export const api = new Hono<App>();
  * between the two leaves an object the rerun finds and skips. A rerun of an
  * upload already recorded changes nothing and still succeeds; a build id
  * that already belongs to another version, or to a table with other bytes,
- * is refused. A new table names the frames of its build in the groups that
- * stored them unnamed, which may rename or merge those groups.
+ * is refused. A commit or source root given for a build already recorded
+ * fills in one it lacks and must match one it has. A new table names the
+ * frames of its build in the groups that stored them unnamed, which may
+ * rename or merge those groups.
  */
 api.put("/:app/releases/:version", async (c) => {
 	const auth = c.req.header("Authorization") ?? "";
@@ -44,6 +47,10 @@ api.put("/:app/releases/:version", async (c) => {
 	if (!validVersion(version)) return c.text(`The version must be ${VERSION_GRAMMAR}`, 400);
 	const channel = c.req.query("channel") ?? "";
 	if (!validChannel(channel)) return c.text(`The channel must be ${CHANNEL_GRAMMAR}`, 400);
+	const commit = c.req.query("commit") ?? null;
+	if (commit !== null && !validCommit(commit)) return c.text(`The commit must be ${COMMIT_GRAMMAR}`, 400);
+	const sourceRoot = c.req.query("source_root") ?? null;
+	if (sourceRoot !== null && !validSourceRoot(sourceRoot)) return c.text(`The source root must be ${SOURCE_ROOT_GRAMMAR}`, 400);
 
 	const tooLarge = () => c.text(`The table must be at most ${MAX_TABLE_BYTES} bytes`, 413);
 	if (Number(c.req.header("Content-Length") ?? 0) > MAX_TABLE_BYTES) return tooLarge();
@@ -65,9 +72,12 @@ api.put("/:app/releases/:version", async (c) => {
 	}
 
 	const shard = c.env.SHARD.get(c.env.SHARD.idFromName(app.name));
-	const result = await shard.registerRelease({ version, channel, buildId, now });
+	const result = await shard.registerRelease({ version, channel, buildId, commit, sourceRoot, now });
 	if (result.conflict !== undefined) {
 		return c.text(`Build ${buildId} is already registered under version ${result.conflict}`, 409);
+	}
+	if (result.mismatch !== undefined) {
+		return c.text(`Build ${buildId} is already registered with ${result.mismatch.field} ${result.mismatch.stored}`, 409);
 	}
 	if (!stored) await remapForBuild(c.env.BUCKET, shard, app.name, buildId, skipList);
 	const created = [

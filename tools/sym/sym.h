@@ -431,23 +431,27 @@ void
 cwsym_dump(const cwsym_table_t* table, FILE* out);
 
 /**
- * What the upload step needs. Every string is required.
+ * What the upload step needs. The first five strings are required.
  */
 typedef struct {
-	const char* endpoint; /**< Base URL without a trailing slash. */
-	const char* app;      /**< Application slug, as cw_config_t::app. */
-	const char* token;    /**< CI bearer token. */
-	const char* version;  /**< Release version, as cw_config_t::version. */
-	const char* channel;  /**< Release channel, as cw_config_t::channel. */
+	const char* endpoint;    /**< Base URL without a trailing slash. */
+	const char* app;         /**< Application slug, as cw_config_t::app. */
+	const char* token;       /**< CI bearer token. */
+	const char* version;     /**< Release version, as cw_config_t::version. */
+	const char* channel;     /**< Release channel, as cw_config_t::channel. */
+	const char* commit;      /**< Commit the build was made from, for the dashboard's source links; `NULL` records none. */
+	const char* source_root; /**< Checkout root the build's source paths start with; `NULL` records none. */
 } cwsym_upload_t;
 
 /**
  * Register the release and upload its table in one request.
  *
  * `PUT`s the table's `data` to `<endpoint>/v1/<app>/releases/<version>
- * ?channel=<channel>` with `Authorization: Bearer <token>`; the server
- * reads the build id from the table header. Idempotent: repeating it for
- * the same version and build is a no-op. The tool passes
+ * ?channel=<channel>`, with `&commit=` and `&source_root=` when given,
+ * and `Authorization: Bearer <token>`; the server reads the build id from
+ * the table header. Idempotent: repeating it for the same version and
+ * build is a no-op, and a commit or source root it already has must be
+ * repeated or left out. The tool passes
  * @ref cw_transport_http; a test may pass any transport. There is no
  * retry: a ::CW_RETRY from the transport or a reply outside 2xx is a
  * failure, with the reply text logged.

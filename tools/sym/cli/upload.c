@@ -30,6 +30,16 @@ run(const cwsym_cli_t* cli, int argc, const char* argv[]) {
 			.parser = barg_str(&up.channel),
 		},
 		{
+			.name = "commit", .value_name = "ref",
+			.summary = "Commit the build was made from, for the dashboard's source links",
+			.parser = barg_str(&up.commit),
+		},
+		{
+			.name = "source-root", .value_name = "dir",
+			.summary = "Checkout root the build's source paths start with, such as $GITHUB_WORKSPACE",
+			.parser = barg_str(&up.source_root),
+		},
+		{
 			.name = "out", .short_name = 'o', .value_name = "file",
 			.summary = "Also write the uploaded table to this file",
 			.parser = barg_str(&out_path),
@@ -39,7 +49,7 @@ run(const cwsym_cli_t* cli, int argc, const char* argv[]) {
 	barg_t barg = {
 		.opts = opts, .num_opts = (int)(sizeof(opts) / sizeof(opts[0])),
 		.allow_positional = true,
-		.usage = "cwsym upload --endpoint <url> --app <slug> --version <version> --channel <channel> [-o <file>] <input>",
+		.usage = "cwsym upload --endpoint <url> --app <slug> --version <version> --channel <channel> [--commit <ref>] [--source-root <dir>] [-o <file>] <input>",
 		.summary = "Register the release and upload the input's table in one request.\n"
 			"The bearer token is taken from the CWSYM_TOKEN environment variable.",
 	};

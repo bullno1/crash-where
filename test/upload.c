@@ -102,6 +102,30 @@ BTEST(upload, encodes_version_and_channel) {
 	cwsym_table_free(&t);
 }
 
+BTEST(upload, sends_commit_and_source_root_when_given) {
+	server = test_http_start(NULL);
+	BTEST_ASSERT(server != NULL);
+	cwsym_table_t t;
+	build_table(&t);
+	cwsym_upload_t up = request("1.4.2", "stable");
+	up.commit = "release/1.4";
+	up.source_root = "D:\\a\\game\\game";
+	BTEST_EXPECT_EQUAL("%d", cwsym_upload(&up, &t, &cw_transport_http, &logger), CWSYM_OK);
+	BTEST_ASSERT_EQUAL("%d", test_http_count(server), 1);
+	const test_http_request_t* req = test_http_request(server, 0);
+	BTEST_EXPECT_EX(
+		strcmp(req->query, "channel=stable&commit=release%2F1.4&source_root=D%3A%5Ca%5Cgame%5Cgame") == 0,
+		"query is %s", req->query
+	);
+	/* Either alone is sent alone. */
+	up.commit = NULL;
+	BTEST_EXPECT_EQUAL("%d", cwsym_upload(&up, &t, &cw_transport_http, &logger), CWSYM_OK);
+	BTEST_ASSERT_EQUAL("%d", test_http_count(server), 2);
+	req = test_http_request(server, 1);
+	BTEST_EXPECT_EX(strcmp(req->query, "channel=stable&source_root=D%3A%5Ca%5Cgame%5Cgame") == 0, "query is %s", req->query);
+	cwsym_table_free(&t);
+}
+
 BTEST(upload, reports_server_refusal) {
 	static const char reply[] = "conflict build_id\n";
 	server = test_http_start(&(test_http_reply_t){ .status = 409, .body = reply, .body_len = sizeof(reply) - 1 });

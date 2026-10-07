@@ -10,7 +10,8 @@ const auth = `Basic ${btoa(`alice:${password}`)}`;
 const origin = "https://dash.example";
 const db = createDb(bindings.DB);
 
-const good = { display_name: "Forest Quest", sample_cap_trusted: "7", sample_cap_untrusted: "0" };
+const good = { display_name: "Forest Quest", sample_cap_trusted: "7", sample_cap_untrusted: "0", source_link_template: "" };
+const github = "https://github.com/org/repo/blob/{commit}/{+file}#L{line}";
 
 async function get(path: string, accept?: string): Promise<Response> {
 	const headers: Record<string, string> = { Authorization: auth };
@@ -67,6 +68,8 @@ describe("app settings", () => {
 		expect(input(page, "display_name")).toMatch(/value="Old Name"[^>]*aria-labelledby="display-name"/);
 		expect(input(page, "sample_cap_trusted")).toMatch(/value="5"[^>]*type="number"/);
 		expect(input(page, "sample_cap_untrusted")).toContain('value="2"');
+		expect(page).toContain('<h3 id="source-link">Source link</h3>');
+		expect(input(page, "source_link_template")).toMatch(/value=""[^>]*aria-labelledby="source-link"/);
 		expect(page).not.toContain("aria-invalid");
 		expect(page).toContain('action="/dashboard/apps/set-show/settings/disable"');
 		expect(page).not.toContain("/settings/enable");
@@ -80,9 +83,17 @@ describe("app settings", () => {
 		expect(input(page, "sample_cap_trusted")).toContain('value="7"');
 		expect(input(page, "sample_cap_untrusted")).toContain('value="0"');
 		expect(await getApp(db, "set-save")).toMatchObject({
-			display_name: "Forest <Quest>", sample_cap_trusted: 7, sample_cap_untrusted: 0,
+			display_name: "Forest <Quest>", sample_cap_trusted: 7, sample_cap_untrusted: 0, source_link_template: null,
 		});
 		expect(await (await get("/dashboard")).text()).toContain("Forest &lt;Quest&gt;");
+	});
+	it("save the source link template, and clear it with an empty field", async () => {
+		await addApp("set-link");
+		const { page } = await submit("set-link", { ...good, source_link_template: ` ${github} ` });
+		expect(input(page, "source_link_template")).toContain(`value="${github}"`);
+		expect((await getApp(db, "set-link"))!.source_link_template).toBe(github);
+		await submit("set-link", good);
+		expect((await getApp(db, "set-link"))!.source_link_template).toBeNull();
 	});
 	it("mark the field at fault, keep the typed values and store nothing", async () => {
 		await addApp("set-bad");
@@ -90,6 +101,7 @@ describe("app settings", () => {
 			["display_name", ""], ["display_name", "x".repeat(101)],
 			["sample_cap_trusted", "abc"], ["sample_cap_trusted", "-1"], ["sample_cap_trusted", "1.5"],
 			["sample_cap_untrusted", "101"], ["sample_cap_untrusted", ""],
+			["source_link_template", "https://x.example/{branch}"], ["source_link_template", "org/repo/{+file}"],
 		] as const) {
 			const { location, page } = await submit("set-bad", { ...good, [field]: value });
 			expect(location).toMatch(/^\/dashboard\/apps\/set-bad\/settings\?/);
@@ -99,7 +111,9 @@ describe("app settings", () => {
 			expect(page).toContain("<h1>Old Name</h1>");
 		}
 		expect(input((await submit("set-bad", { ...good, sample_cap_untrusted: "" })).page, "display_name")).toContain('value="Forest Quest"');
-		expect(await getApp(db, "set-bad")).toMatchObject({ display_name: "Old Name", sample_cap_trusted: 5, sample_cap_untrusted: 2 });
+		expect(await getApp(db, "set-bad")).toMatchObject({
+			display_name: "Old Name", sample_cap_trusted: 5, sample_cap_untrusted: 2, source_link_template: null,
+		});
 	});
 	it("disable and enable the app, which ingest honours", async () => {
 		await addApp("set-kill");
@@ -146,13 +160,13 @@ describe("app settings as JSON", () => {
 			new Request(`${origin}/dashboard/apps/json-set/settings`, {
 				method: "POST",
 				headers: { Authorization: auth, Accept: "application/json", "Content-Type": "application/json" },
-				body: JSON.stringify({ display_name: "New Name", sample_cap_trusted: "9", sample_cap_untrusted: "3" }),
+				body: JSON.stringify({ display_name: "New Name", sample_cap_trusted: "9", sample_cap_untrusted: "3", source_link_template: github }),
 			}),
 			env
 		);
 		expect(r.status).toBe(200);
 		expect(r.headers.get("Vary")).toBe("Accept");
-		expect(await r.json()).toMatchObject({ app: { display_name: "New Name", sample_cap_trusted: 9, sample_cap_untrusted: 3 } });
+		expect(await r.json()).toMatchObject({ app: { display_name: "New Name", sample_cap_trusted: 9, sample_cap_untrusted: 3, source_link_template: github } });
 	});
 	it("name the field at fault", async () => {
 		await addApp("json-bad");
