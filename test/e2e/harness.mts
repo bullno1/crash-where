@@ -183,5 +183,5 @@ export interface VersionsPage {
 }
 
 export interface TokensPage {
-	tokens: { id: number; label: string; last_used_at: number | null; revoked_at: number | null }[];
+	tokens: { id: number; label: string; last_used_at: number | null }[];
 }

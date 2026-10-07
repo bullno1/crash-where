@@ -91,17 +91,38 @@ describe("upload tokens", () => {
 		expect(landed.headers.get("Set-Cookie")).toMatch(/^cw_new_token=; Max-Age=0; Path=\/dashboard\/apps\/tok-cookie\/tokens; Secure/);
 		expect((await get("/dashboard/apps/tok-cookie/tokens")).headers.get("Set-Cookie")).toBeNull();
 	});
-	it("can be revoked, after which they no longer authenticate", async () => {
+	it("can be revoked, which deletes them", async () => {
 		await addApp("tok-revoke");
 		const { page, token } = await mint("tok-revoke");
 		const id = /tokens\/(\d+)\/revoke/.exec(page)![1];
 		const r = await post(`/dashboard/apps/tok-revoke/tokens/${id}/revoke`);
 		expect(r.status).toBe(303);
 		expect(r.headers.get("Location")).toBe("/dashboard/apps/tok-revoke/tokens");
-		const after = await (await get("/dashboard/apps/tok-revoke/tokens")).text();
-		expect(after).toContain("revoked");
-		expect(after).not.toContain("Revoke</button>");
+		expect(await (await get("/dashboard/apps/tok-revoke/tokens")).text()).toContain("No upload tokens yet");
 		expect(await authenticateToken(db, token, 5)).toBeNull();
+		expect((await post(`/dashboard/apps/tok-revoke/tokens/${id}/revoke`)).status).toBe(303);
+	});
+	it("can be regenerated, which replaces them in place under the same label", async () => {
+		await addApp("tok-regen");
+		const { page, token } = await mint("tok-regen");
+		const id = /tokens\/(\d+)\/regenerate/.exec(page)![1];
+		await authenticateToken(db, token, 4);
+		const r = await post(`/dashboard/apps/tok-regen/tokens/${id}/regenerate`, { Authorization: auth, Origin: origin }, {});
+		expect(r.status).toBe(303);
+		expect(r.headers.get("Location")).toBe("/dashboard/apps/tok-regen/tokens");
+		const cookie = r.headers.get("Set-Cookie")!.split(";")[0]!;
+		const fresh = cookie.slice("cw_new_token=".length);
+		expect(fresh).toMatch(/^cwu_/);
+		expect(fresh).not.toBe(token);
+		const after = await (await get("/dashboard/apps/tok-regen/tokens", cookie)).text();
+		expect(after).toContain(`<code>${fresh}</code>`);
+		expect(after).toContain("shown only this once");
+		expect(after.match(/<td>GitHub Actions<\/td>/g)).toHaveLength(1);
+		expect(after).toContain("<small>never</small>");
+		expect(await authenticateToken(db, token, 5)).toBeNull();
+		expect(await authenticateToken(db, fresh, 5)).toMatchObject({ id: Number(id), label: "GitHub Actions" });
+		expect(await bindings.DB.prepare("SELECT count(*) AS n FROM upload_tokens").first<{ n: number }>()).toEqual({ n: 1 });
+		expect((await post(`/dashboard/apps/tok-regen/tokens/${Number(id) + 1}/regenerate`, { Authorization: auth, Origin: origin }, {})).status).toBe(404);
 	});
 	it("are 404 for an unknown app and refused without a login or origin", async () => {
 		expect((await post("/dashboard/apps/nobody/tokens")).status).toBe(404);
@@ -124,7 +145,7 @@ describe("upload tokens as JSON", () => {
 		const listed = await worker.fetch(new Request(`${origin}/dashboard/apps/json-mint/tokens`, { headers: json }), env);
 		const data = await listed.json() as { tokens: Record<string, unknown>[] };
 		expect(data.tokens).toEqual([
-			{ id: made.id, label: "agent", created_at: expect.any(Number), created_by: "alice", last_used_at: 2, revoked_at: null },
+			{ id: made.id, label: "agent", created_at: expect.any(Number), created_by: "alice", last_used_at: 2 },
 		]);
 	});
 	it("revoke with a status instead of a redirect", async () => {
@@ -134,5 +155,18 @@ describe("upload tokens as JSON", () => {
 		expect(r.status).toBe(200);
 		expect(await r.json()).toEqual({ revoked: true });
 		expect((await post(`/dashboard/apps/json-revoke/tokens/${made.id}/revoke`, json, {})).status).toBe(404);
+	});
+	it("regenerate with the new token in the reply", async () => {
+		await addApp("json-regen");
+		const made = await (await post("/dashboard/apps/json-regen/tokens", json)).json() as { id: number; token: string };
+		const r = await post(`/dashboard/apps/json-regen/tokens/${made.id}/regenerate`, json, {});
+		expect(r.status).toBe(201);
+		const fresh = await r.json() as { id: number; token: string; label: string; last_used_at: number | null };
+		expect(fresh.token).toMatch(/^cwu_/);
+		expect(fresh.token).not.toBe(made.token);
+		expect(fresh).toMatchObject({ id: made.id, label: "GitHub Actions", last_used_at: null });
+		expect(await authenticateToken(db, made.token, 3)).toBeNull();
+		expect(await authenticateToken(db, fresh.token, 3)).toMatchObject({ id: made.id });
+		expect((await post(`/dashboard/apps/json-regen/tokens/${made.id + 1}/regenerate`, json, {})).status).toBe(404);
 	});
 });

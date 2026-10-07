@@ -28,7 +28,6 @@ export interface UploadTokens {
   id: Generated<number>;
   label: string;
   last_used_at: number | null;
-  revoked_at: number | null;
 }
 
 export interface DB {
