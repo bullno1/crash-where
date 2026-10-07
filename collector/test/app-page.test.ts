@@ -226,9 +226,19 @@ function envelope(app: string, reportId: string, over: Record<string, unknown> =
 /** An app with a group of two samples, `s-new` and `s-old`, and a group without any; returns the path of the first. */
 async function crashApp(app: string): Promise<string> {
 	await addApp(app, "Page Crash");
+	// render_mesh has copy_verts inlined over its first half; draw_scene has lines but no display name.
 	await bindings.BUCKET.put(
 		symbolKey(app, BUILD_ID_HEX),
-		makeTable({ functions: [{ start: 0x1000, size: 0x100, name: "render_mesh" }, { start: 0x2000, size: 0x100, name: "draw_scene" }] })
+		makeTable({
+			functions: [{ start: 0x1000, size: 0x100, name: "render_mesh" }, { start: 0x2000, size: 0x100, name: "draw_scene" }],
+			displays: ["render_mesh(mesh*)"],
+			lines: [
+				{ start: 0x1000, size: 0x80, file: "src/mesh.h", line: 12 },
+				{ start: 0x1080, size: 0x80, file: "src/render.c", line: 44 },
+				{ start: 0x2000, size: 0x100, file: "src/render.c", line: 90 },
+			],
+			sites: [{ start: 0x1000, size: 0x80, callee: "copy_verts", file: "src/render.c", line: 41, parent: null }],
+		})
 	);
 	const frames = [
 		{ module: "libc.so.6", name: null, buildId: "ff", offset: 0x10 },
@@ -309,11 +319,14 @@ describe("crash page", () => {
 		expect(at("<h3>Users</h3>")).toBeLessThan(at("<h3>Exception</h3>"));
 		expect(at("<h3>Files</h3>")).toBeLessThan(at("<h3>Samples</h3>"));
 		// The stack is named from the table; libc is skipped and the two game frames are marked.
-		expect(html).toContain("<td>0</td>\n<td><small>unnamed</small></td>\n<td><code>libc.so.6</code></td>\n<td><code>0x10</code></td>\n<td><code>0x7f00</code></td>");
-		expect(html).toContain("<td>1</td>\n<td><mark>render_mesh</mark></td>\n<td><code>game.exe</code></td>\n<td><code>0x1010</code></td>\n<td></td>");
-		expect(html).toContain("<td>2</td>\n<td><mark>draw_scene</mark></td>");
+		expect(html).toContain("<th>#</th><th>Function</th><th>Location</th><th>Module</th><th>Offset</th><th>Address</th>");
+		expect(html).toContain("<td>0</td>\n<td><small>unnamed</small></td>\n<td></td>\n<td><code>libc.so.6</code></td>\n<td><code>0x10</code></td>\n<td><code>0x7f00</code></td>");
+		// Frame 1 is inside copy_verts inlined into render_mesh: the innermost level first, the caller indented under it.
+		expect(html).toContain("<td>1</td>\n<td><mark>copy_verts</mark></td>\n<td><code>src/mesh.h:12</code></td>\n<td><code>game.exe</code></td>\n<td><code>0x1010</code></td>\n<td></td>");
+		expect(html).toContain("<td></td>\n<td>&nbsp;&nbsp;&nbsp;&nbsp;↳ <mark>render_mesh(mesh*)</mark></td>\n<td><code>src/render.c:41</code></td>");
+		expect(html).toContain("<td>2</td>\n<td><mark>draw_scene</mark></td>\n<td><code>src/render.c:90</code></td>");
 		// A frame in no module is not noise, so it enters the fingerprint too.
-		expect(html).toContain("<td>3</td>\n<td><mark><small>unnamed</small></mark></td>\n<td><code>?</code></td>\n<td><code>0x99</code></td>");
+		expect(html).toContain("<td>3</td>\n<td><mark><small>unnamed</small></mark></td>\n<td></td>\n<td><code>?</code></td>\n<td><code>0x99</code></td>");
 		expect(html).toContain("<tr><td>-1.500 s</td><td>1</td><td>level</td><td>load forest_02</td></tr>");
 		expect(html).toContain("<tr><td>0.000 s</td><td><mark>7</mark></td><td>render</td><td>frame</td></tr>");
 		// The other sample is on another level but the same machine: shared values are bold with their share.
@@ -353,6 +366,8 @@ describe("crash page", () => {
 		expect(html).toContain("<small>no reports counted</small>");
 		expect(html).toContain("<p>0 reports from 0 installs, none of them twice.</p>");
 		expect(html).toContain("No sample is held for this crash");
+		// Stored frames carry no locations, so there is no Location column.
+		expect(html).not.toContain("<th>Location</th>");
 		expect(html).toContain("<td>0</td>\n<td><small>unnamed</small></td>\n<td><code>libc.so.6</code></td>");
 		expect(html).toContain("<td>1</td>\n<td><mark>render_mesh</mark></td>");
 		expect(html).not.toContain("<h3>Samples</h3>");
@@ -405,6 +420,12 @@ describe("crash page", () => {
 			breadcrumbs: [{ t: 1000, th: 1, c: "level", m: "load forest_02" }, { t: 2500, th: 7, c: "render", m: "frame" }],
 		});
 		expect((data.sample as { frames: { name: string | null }[] }).frames.map((f) => f.name)).toEqual([null, "render_mesh", "draw_scene", null]);
+		expect((data.sample as { locations: unknown }).locations).toEqual([
+			[],
+			[{ function: "copy_verts", file: "src/mesh.h", line: 12 }, { function: "render_mesh(mesh*)", file: "src/render.c", line: 41 }],
+			[{ function: "draw_scene", file: "src/render.c", line: 90 }],
+			[],
+		]);
 		expect(data.users).toEqual({ reports: 3, users: 2, top: [{ trust: 0, user_key: "u1", count: 2, last_seen: 1_750_000_000 }] });
 		expect(data.samples).toMatchObject([{ report_id: "s-new", user_key: "u1", user_reports: 2 }, { report_id: "s-old", user_key: "u1", user_reports: 2 }]);
 	});

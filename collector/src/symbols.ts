@@ -1,4 +1,4 @@
-import { CwsymTable, HEADER_SIZE, prefixLength } from "./cwsym";
+import { CwsymTable, HEADER_SIZE, type Location, prefixLength } from "./cwsym";
 import { symbolKey } from "./releases";
 
 /** A frame as the envelope carries it, before symbolication. */
@@ -39,6 +39,18 @@ const CACHE_SIZE = 32;
 /** Milliseconds a build without a table is remembered as such. */
 export const NEGATIVE_LIFETIME = 60_000;
 
+/**
+ * Complete tables kept per isolate for the crash page, most recently used
+ * last, within a byte budget: the line sections are many times the
+ * prefix and are read only when a sample is opened. A table over the
+ * budget is never kept, and its frames resolve to names alone.
+ */
+const fullCache = new Map<string, { table: CwsymTable; bytes: number }>();
+let fullCacheBytes = 0;
+
+/** Bytes of complete tables an isolate holds at once, and the largest one it reads. */
+export const FULL_TABLE_BUDGET = 32 * 1024 * 1024;
+
 /** Prefix of a web frame's module, which names the JavaScript function itself. */
 const JAVASCRIPT = "javascript:";
 
@@ -70,12 +82,52 @@ async function table(bucket: R2Bucket, app: string, buildId: string): Promise<Cw
 }
 
 /**
+ * The complete table of a build, read whole and parsed with its line
+ * sections. Null when the build has no table, or when the object is over
+ * the budget. Goes through the prefix cache first, so a build known to
+ * have no table costs nothing.
+ */
+async function fullTable(bucket: R2Bucket, app: string, buildId: string): Promise<CwsymTable | null> {
+	if ((await table(bucket, app, buildId)) === null) return null;
+	const key = symbolKey(app, buildId);
+	const hit = fullCache.get(key);
+	if (hit !== undefined) {
+		fullCache.delete(key);
+		fullCache.set(key, hit);
+		return hit.table;
+	}
+	const head = await bucket.head(key);
+	if (head === null || head.size > FULL_TABLE_BUDGET) return null;
+	const object = await bucket.get(key);
+	if (object === null) return null;
+	const parsed = CwsymTable.parse(new Uint8Array(await object.arrayBuffer()));
+	if (parsed === null) return null;
+	for (const [k, v] of fullCache) {
+		if (fullCacheBytes + head.size <= FULL_TABLE_BUDGET) break;
+		fullCache.delete(k);
+		fullCacheBytes -= v.bytes;
+	}
+	fullCache.set(key, { table: parsed, bytes: head.size });
+	fullCacheBytes += head.size;
+	return parsed;
+}
+
+/**
  * Forgets what this isolate knows of one build, for the upload route: the
  * isolate that stored the table answers from it at once instead of after
  * the lifetime of a null it may hold. Other isolates wait that long.
  */
 export function forgetTable(app: string, buildId: string): void {
 	cache.delete(symbolKey(app, buildId));
+	dropFull(symbolKey(app, buildId));
+}
+
+function dropFull(key: string): void {
+	const held = fullCache.get(key);
+	if (held !== undefined) {
+		fullCache.delete(key);
+		fullCacheBytes -= held.bytes;
+	}
 }
 
 /**
@@ -85,7 +137,31 @@ export function forgetTable(app: string, buildId: string): void {
  * the function after it.
  */
 function nameAt(t: CwsymTable | null, i: number, offset: number): string | null {
-	return t?.lookup(i === 0 ? offset : Math.max(0, offset - 1)) ?? null;
+	return t?.lookup(lookupOffset(i, offset)) ?? null;
+}
+
+/** The offset looked up for frame `i`: a return address is taken one byte back, as `nameAt` does. */
+function lookupOffset(i: number, offset: number): number {
+	return i === 0 ? offset : Math.max(0, offset - 1);
+}
+
+/**
+ * The source locations of every frame, innermost first, from the complete
+ * tables of the app: display name, file and line, with one entry per
+ * inline level. An empty list for a frame no table covers, a frame in no
+ * module, or a web frame.
+ */
+export async function locate(bucket: R2Bucket, app: string, frames: Frame[]): Promise<Location[][]> {
+	const out: Location[][] = [];
+	for (const [i, f] of frames.entries()) {
+		if (f.module === null || f.buildId === null || f.module.startsWith(JAVASCRIPT)) {
+			out.push([]);
+			continue;
+		}
+		const t = await fullTable(bucket, app, f.buildId);
+		out.push(t === null ? [] : t.symbolize(lookupOffset(i, f.offset)));
+	}
+	return out;
 }
 
 /** Names every frame from the app's symbol tables. */
@@ -119,4 +195,6 @@ export async function resymbolicate(bucket: R2Bucket, app: string, buildId: stri
 /** Forgets every cached table; for tests that replace an object. */
 export function forgetTables(): void {
 	cache.clear();
+	fullCache.clear();
+	fullCacheBytes = 0;
 }

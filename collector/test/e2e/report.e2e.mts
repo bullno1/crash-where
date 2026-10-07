@@ -13,6 +13,27 @@ import { after, before, test } from "node:test";
 import { setTimeout as sleep } from "node:timers/promises";
 import { binary, Collector, type CrashesPage, run, runLogging } from "./harness.mts";
 
+/** The crash page's JSON, as far as this test reads it. */
+interface CrashPage {
+	sample: {
+		frames: { module: string; offset?: number }[];
+		locations: { function: string; file: string | null; line: number }[][];
+	} | null;
+}
+
+/** `cwsym symbolize` on the sample's own binary, parsed: one location per indented line. */
+function symbolize(offset: number): { function: string; file: string | null; line: number }[] {
+	const r = run(binary("cwsym"), ["symbolize", binary("crashme"), `0x${offset.toString(16)}`]);
+	assert.equal(r.status, 0, r.output);
+	return r.output
+		.split("\n")
+		.filter((l) => l.startsWith("  "))
+		.map((l) => {
+			const m = /^  (.*?)(?: at (.*):(\d+))?$/.exec(l)!;
+			return { function: m[1]!, file: m[2] ?? null, line: m[3] === undefined ? 0 : Number(m[3]) };
+		});
+}
+
 // The slug, version and channel the sample is built with.
 const APP = "crashme";
 const VERSION = "0.0.1";
@@ -96,4 +117,23 @@ it("lists both crashes by their frames and message", async () => {
 	for (const g of page.crashes) {
 		assert.ok(g.frames.some((f) => f.module === "crashme"), `${g.title} keeps a raw frame in the sample`);
 	}
+});
+it("locates the sample's frames as the tool does", async () => {
+	const list = await collector.json<CrashesPage>(`/dashboard/apps/${APP}`, 200);
+	const memory = list.crashes.find((g) => g.fault === "memory")!;
+	const page = await collector.json<CrashPage>(`/dashboard/apps/${APP}/crashes/${memory.id}`, 200);
+	assert.ok(page.sample, "the report was sampled");
+	let compared = 0;
+	let located = 0;
+	for (const [i, f] of page.sample.frames.entries()) {
+		if (f.module !== "crashme" || f.offset === undefined) continue;
+		// Frames past the first hold return addresses and are looked up one byte back.
+		const expected = symbolize(i === 0 ? f.offset : f.offset - 1);
+		assert.deepEqual(page.sample.locations[i], expected, `frame ${i} at 0x${f.offset.toString(16)}`);
+		compared += 1;
+		// The executable's start-up code has no lines; the sample's own functions do.
+		if (expected[0]!.file !== null) located += 1;
+	}
+	assert.ok(compared >= 2, "at least crash_here and level_two were compared");
+	assert.ok(located >= 2, "the sample's own frames have a file and line");
 });
