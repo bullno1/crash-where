@@ -127,10 +127,34 @@ export interface SampleSummary {
 	trust: number;
 	/** Who crashed, in the key space `trust` names: the install id for 0, the token's sub for 1. */
 	user_key: string;
+	/** Reports of the group from the same user, this one included. */
+	user_reports: number;
 	received_at: number;
 	/** R2 prefix of the envelope and attachments. */
 	r2_key: string;
 }
+
+/** A user with more than one report of a group. */
+export interface RepeatUser {
+	trust: number;
+	user_key: string;
+	count: number;
+	/** Unix seconds of the latest report. */
+	last_seen: number;
+}
+
+/** How a group's reports spread over its users. */
+export interface GroupUsers {
+	/** Reports the group has rows for. */
+	reports: number;
+	/** Distinct users those came from. */
+	users: number;
+	/** The users with the most reports, those with more than one only, most first. */
+	top: RepeatUser[];
+}
+
+/** How many repeat users `getGroup` lists. */
+export const TOP_USERS = 5;
 
 /** What one run of the purge removed. */
 export interface PurgeResult {
@@ -600,12 +624,12 @@ export class AppShard extends DurableObject<Env> {
 
 	/**
 	 * One group with its totals, the releases it was reported on, most
-	 * reported first, and the samples it holds, newest first; null when
-	 * there is no such group.
+	 * reported first, how its reports spread over users, and the samples
+	 * it holds, newest first; null when there is no such group.
 	 */
 	async getGroup(
 		id: number, now: number
-	): Promise<{ group: GroupSummary; releases: GroupRelease[]; samples: SampleSummary[] } | null> {
+	): Promise<{ group: GroupSummary; releases: GroupRelease[]; users: GroupUsers; samples: SampleSummary[] } | null> {
 		const [group] = await this.summarize(id, now);
 		if (group === undefined) return null;
 		const releases = (
@@ -618,18 +642,49 @@ export class AppShard extends DurableObject<Env> {
 		)
 			.map((r) => ({ ...r, count: Number(r.count) }))
 			.sort((a, b) => b.count - a.count || b.version.localeCompare(a.version) || a.channel.localeCompare(b.channel));
-		const samples = await this.db
-			.selectFrom("crash_samples")
-			.innerJoin("reports", "reports.report_id", "crash_samples.report_id")
-			.select([
-				"crash_samples.report_id", "crash_samples.version", "reports.channel", "crash_samples.trust",
-				"reports.user_key", "crash_samples.received_at", "crash_samples.r2_key",
+		const spread = await this.db
+			.selectFrom("reports")
+			.select((eb) => [
+				eb.fn.countAll<number>().as("reports"),
+				sql<number>`count(DISTINCT trust || ':' || user_key)`.as("users"),
 			])
-			.where("crash_samples.group_id", "=", id)
-			.orderBy("crash_samples.received_at", "desc")
-			.orderBy("crash_samples.id", "desc")
+			.where("group_id", "=", id)
+			.executeTakeFirstOrThrow();
+		const top = await this.db
+			.selectFrom("reports")
+			.select((eb) => ["trust", "user_key", eb.fn.countAll<number>().as("count"), eb.fn.max("received_at").as("last_seen")])
+			.where("group_id", "=", id)
+			.groupBy(["trust", "user_key"])
+			.having((eb) => eb.fn.countAll(), ">", 1)
+			.orderBy("count", "desc")
+			.orderBy("last_seen", "desc")
+			.limit(TOP_USERS)
 			.execute();
-		return { group, releases, samples };
+		const users: GroupUsers = {
+			reports: Number(spread.reports),
+			users: Number(spread.users),
+			top: top.map((r) => ({ ...r, count: Number(r.count), last_seen: Number(r.last_seen) })),
+		};
+		const samples = (
+			await this.db
+				.selectFrom("crash_samples")
+				.innerJoin("reports", "reports.report_id", "crash_samples.report_id")
+				.select((eb) => [
+					"crash_samples.report_id", "crash_samples.version", "reports.channel", "crash_samples.trust",
+					"reports.user_key", "crash_samples.received_at", "crash_samples.r2_key",
+					eb.selectFrom("reports as r")
+						.select((e2) => e2.fn.countAll<number>().as("n"))
+						.where("r.group_id", "=", id)
+						.whereRef("r.trust", "=", "reports.trust")
+						.whereRef("r.user_key", "=", "reports.user_key")
+						.as("user_reports"),
+				])
+				.where("crash_samples.group_id", "=", id)
+				.orderBy("crash_samples.received_at", "desc")
+				.orderBy("crash_samples.id", "desc")
+				.execute()
+		).map((s) => ({ ...s, user_reports: Number(s.user_reports) }));
+		return { group, releases, users, samples };
 	}
 
 	/** The summaries of every group, or of the one named, in the order `listGroups` gives. */

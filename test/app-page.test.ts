@@ -248,9 +248,13 @@ async function crashApp(app: string): Promise<string> {
 			.insertInto("crash_counts")
 			.values({ group_id: 3, version: "1.0.0", channel: "stable", trust: 0, day: 20_000, count: 5 })
 			.execute();
-		const row = (id: string, channel: string, received_at: number) =>
-			({ report_id: id, group_id: 3, version: "1.0.0", channel, trust: 0, user_key: "u1", received_at });
-		await obj.db.insertInto("reports").values([row("s-new", "stable", 1_750_000_000), row("s-old", "beta", 1_740_000_000)]).execute();
+		// Install u1 crashed twice, both sampled; u2 once, not sampled.
+		const row = (id: string, channel: string, user_key: string, received_at: number) =>
+			({ report_id: id, group_id: 3, version: "1.0.0", channel, trust: 0, user_key, received_at });
+		await obj.db
+			.insertInto("reports")
+			.values([row("s-new", "stable", "u1", 1_750_000_000), row("s-old", "beta", "u1", 1_740_000_000), row("r3", "stable", "u2", 1_745_000_000)])
+			.execute();
 		await obj.db
 			.insertInto("crash_samples")
 			.values([
@@ -291,13 +295,18 @@ describe("crash page", () => {
 		expect(html).toContain("<code>memory</code> · first seen 2025-02-19 21:20:00 UTC · last seen 2025-06-15 15:06:40 UTC");
 		expect(html).toContain("5 reports in total");
 		expect(html).toContain("<tr><td><code>1.0.0</code></td><td>stable</td><td>5</td></tr>");
+		// One install repeats, and it has a sample to link to; the other does not repeat.
+		expect(html).toContain("<p>3 reports from 2 installs.</p>");
+		expect(html).toContain(`<td><code>u1</code></td>\n<td>2</td>\n<td>2025-06-15 15:06:40 UTC</td>\n<td><a href="${CRASH}?sample=s-new"><code>s-new</code></a></td>`);
+		expect(html).not.toContain("<code>u2</code>");
 		expect(html).toContain("<code>SIGSEGV</code> on thread 7");
 		// The address the normalizer replaces is underlined in the raw message.
 		expect(html).toContain('<pre>read from <u title="&lt;ADDR&gt;">0x10</u></pre>');
 		expect(html).not.toContain("Normalized:");
 		const at = (s: string) => { const i = html.indexOf(s); expect(i, s).toBeGreaterThan(-1); return i; };
 		expect(at("<h2>memory in")).toBeLessThan(at("<h3>Versions</h3>"));
-		expect(at("<h3>Versions</h3>")).toBeLessThan(at("<h3>Exception</h3>"));
+		expect(at("<h3>Versions</h3>")).toBeLessThan(at("<h3>Users</h3>"));
+		expect(at("<h3>Users</h3>")).toBeLessThan(at("<h3>Exception</h3>"));
 		expect(at("<h3>Files</h3>")).toBeLessThan(at("<h3>Samples</h3>"));
 		// The stack is named from the table; libc is skipped and the two game frames are marked.
 		expect(html).toContain("<td>0</td>\n<td><small>unnamed</small></td>\n<td><code>libc.so.6</code></td>\n<td><code>0x10</code></td>\n<td><code>0x7f00</code></td>");
@@ -318,7 +327,7 @@ describe("crash page", () => {
 		expect(html).toContain('<li><s title="Not received">minidump</s></li>');
 		expect(html).not.toContain("<s title=\"Not received\">log_tail</s>");
 		// Every sample is listed, newest first; an arrow marks the current one, whose link is its permanent URL.
-		expect(html).toContain(`<td>→ <a href="${CRASH}?sample=s-new" aria-current="page"><code>s-new</code></a><br><small>install <code>u1</code></small></td>\n<td><code>1.0.0</code></td>\n<td>stable</td>\n<td>2025-06-15 15:06:40 UTC</td>`);
+		expect(html).toContain(`<td>→ <a href="${CRASH}?sample=s-new" aria-current="page"><code>s-new</code></a><br><small>install <code>u1</code> · 2 reports</small></td>\n<td><code>1.0.0</code></td>\n<td>stable</td>\n<td>2025-06-15 15:06:40 UTC</td>`);
 		expect(html).toContain(`<td><a href="${CRASH}?sample=s-old"><code>s-old</code></a></td>`);
 		expect(html.indexOf("<small>current</small>")).toBeLessThan(html.indexOf("?sample=s-old"));
 	});
@@ -331,7 +340,7 @@ describe("crash page", () => {
 		// A normalized message the page cannot overlay on the raw one is shown beside it.
 		expect(html).toContain("<pre>read 16 bytes at 0x10</pre>");
 		expect(html).toContain("<p>Normalized: <code>read &lt;N&gt; bytes</code></p>");
-		expect(html).toContain(`<td>→ <a href="${CRASH}?sample=s-old" aria-current="page"><code>s-old</code></a><br><small>install <code>u1</code></small></td>`);
+		expect(html).toContain(`<td>→ <a href="${CRASH}?sample=s-old" aria-current="page"><code>s-old</code></a><br><small>install <code>u1</code> · 2 reports</small></td>`);
 		expect(html).toContain(`<td><a href="${CRASH}?sample=s-new"><code>s-new</code></a></td>`);
 		expect(html).toContain(`<td><a href="${CRASH}?sample=s-new"><code>s-new</code></a></td>`);
 	});
@@ -342,6 +351,7 @@ describe("crash page", () => {
 		expect(html).toContain("<h2>abort in render_mesh: oops</h2>");
 		expect(html).toContain(`<link rel="canonical" href="https://dash.example/dashboard/apps/${app}/crashes/4">`);
 		expect(html).toContain("<small>no reports counted</small>");
+		expect(html).toContain("<p>0 reports from 0 installs, none of them twice.</p>");
 		expect(html).toContain("No sample is held for this crash");
 		expect(html).toContain("<td>0</td>\n<td><small>unnamed</small></td>\n<td><code>libc.so.6</code></td>");
 		expect(html).toContain("<td>1</td>\n<td><mark>render_mesh</mark></td>");
@@ -395,6 +405,7 @@ describe("crash page", () => {
 			breadcrumbs: [{ t: 1000, th: 1, c: "level", m: "load forest_02" }, { t: 2500, th: 7, c: "render", m: "frame" }],
 		});
 		expect((data.sample as { frames: { name: string | null }[] }).frames.map((f) => f.name)).toEqual([null, "render_mesh", "draw_scene", null]);
-		expect(data.samples).toMatchObject([{ report_id: "s-new", user_key: "u1" }, { report_id: "s-old", user_key: "u1" }]);
+		expect(data.users).toEqual({ reports: 3, users: 2, top: [{ trust: 0, user_key: "u1", count: 2, last_seen: 1_750_000_000 }] });
+		expect(data.samples).toMatchObject([{ report_id: "s-new", user_key: "u1", user_reports: 2 }, { report_id: "s-old", user_key: "u1", user_reports: 2 }]);
 	});
 });
