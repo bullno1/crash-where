@@ -1,8 +1,9 @@
+import type { Location } from "./cwsym";
 import { parseEnvelope } from "./envelope";
 import { keptFrames, type SkipList, STORED_FRAMES } from "./grouping";
 import { ENVELOPE_OBJECT } from "./samples";
 import type { SampleSummary } from "./shard";
-import { type RawFrame, symbolicate } from "./symbols";
+import { locate, type RawFrame, symbolicate } from "./symbols";
 
 /** A breadcrumb as the client wrote it: monotonic milliseconds, thread, category, message. */
 export interface Crumb {
@@ -42,6 +43,12 @@ export interface SampleView extends SampleSummary {
 	/** Id of the crashing thread. */
 	thread: number | null;
 	frames: RawFrame[];
+	/**
+	 * Source locations of each frame, innermost first, aligned with
+	 * `frames`: display name, file and line per inline level, from the
+	 * build's complete table. Empty for a frame no table locates.
+	 */
+	locations: Location[][];
 	/** Absolute address of each frame as the client printed it, aligned with `frames`. */
 	raw: (string | null)[];
 	/** Indices into `frames` of those the fingerprint took. */
@@ -165,6 +172,7 @@ export async function loadSample(bucket: R2Bucket, app: string, row: SampleSumma
 	if (!parsed.ok || !record(json)) return { ok: false, reason: "malformed" };
 	const { envelope } = parsed;
 	const frames = await symbolicate(bucket, app, envelope.frames);
+	const locations = await locate(bucket, app, envelope.frames);
 	const raw = Array.isArray(json.frames)
 		? json.frames.map((f: unknown) => (record(f) && typeof f.raw === "string" ? f.raw : null))
 		: [];
@@ -185,6 +193,7 @@ export async function loadSample(bucket: R2Bucket, app: string, row: SampleSumma
 			message_norm: envelope.message,
 			thread: typeof exception.thread === "number" ? exception.thread : null,
 			frames,
+			locations,
 			raw,
 			hashed: keptFrames(frames.slice(0, STORED_FRAMES), skip),
 			env: strings(json.env),

@@ -9,6 +9,7 @@ import { requireLogin } from "./auth";
 import type { App } from "./env";
 import { layout } from "./layout";
 import { type Page, render } from "./page";
+import type { Location } from "./cwsym";
 import { compileSkipList, DEFAULT_SKIP_LIST, groupTitle, keptFrames } from "./grouping";
 import { loadContext, loadSample, type SampleError, type SampleView, sharedValues, type SharedValues } from "./sample";
 import { attachmentKind, ENVELOPE_OBJECT, sampleKey } from "./samples";
@@ -383,24 +384,46 @@ function hex(n: number): string {
 	return `0x${n.toString(16)}`;
 }
 
+/** A source location as `file:line`, the file alone when the line is unknown, or nothing. */
+function where(loc: Location): Page {
+	if (loc.file === null) return html``;
+	return html`<code>${loc.file}${loc.line === 0 ? "" : `:${loc.line}`}</code>`;
+}
+
 /**
  * A stack as a table, the frames the fingerprint took marked. `raw`
  * carries each frame's absolute address when the client printed one.
+ * With `locations`, a Location column gives each frame's file and line,
+ * the function is its display name, and a frame inside inlined code
+ * takes one row per inline level, innermost first, the outer levels
+ * indented under it.
  */
-function stackTable(frames: RawFrame[], hashed: number[], raw: (string | null)[] = []): Page {
+function stackTable(frames: RawFrame[], hashed: number[], raw: (string | null)[] = [], locations: Location[][] | null = null): Page {
 	const marked = new Set(hashed);
-	const rows = frames.map((f, i) => {
-		const name = f.name === null ? html`<small>unnamed</small>` : f.name;
-		return html`<tr>
+	const rows = frames.flatMap((f, i) => {
+		const locs = locations?.[i] ?? [];
+		const plain = f.name === null ? html`<small>unnamed</small>` : html`${f.name}`;
+		const name = locs.length === 0 ? plain : html`${locs[0]!.function}`;
+		const first = html`<tr>
 <td>${i}</td>
-<td>${marked.has(i) ? html`<mark>${name}</mark>` : name}</td>
+<td>${marked.has(i) ? html`<mark>${name}</mark>` : name}</td>${locations === null ? "" : html`
+<td>${locs.length === 0 ? "" : where(locs[0]!)}</td>`}
 <td><code>${f.module}</code></td>
 <td>${f.offset === undefined ? "" : html`<code>${hex(f.offset)}</code>`}</td>
 <td>${raw[i] === null || raw[i] === undefined ? "" : html`<code>${raw[i]}</code>`}</td>
 </tr>`;
+		const outer = locs.slice(1).map((loc) => html`<tr>
+<td></td>
+<td>&nbsp;&nbsp;&nbsp;&nbsp;↳ ${marked.has(i) ? html`<mark>${loc.function}</mark>` : loc.function}</td>
+<td>${where(loc)}</td>
+<td></td>
+<td></td>
+<td></td>
+</tr>`);
+		return [first, ...outer];
 	});
 	return html`<table>
-<thead><tr><th>#</th><th>Function</th><th>Module</th><th>Offset</th><th>Address</th></tr></thead>
+<thead><tr><th>#</th><th>Function</th>${locations === null ? "" : html`<th>Location</th>`}<th>Module</th><th>Offset</th><th>Address</th></tr></thead>
 <tbody>${rows}</tbody>
 </table>`;
 }
@@ -546,7 +569,7 @@ function sampleBody(path: string, s: SampleView, shared: SharedValues | null): P
 ${messageBlock(s.message_raw, s.message_norm)}
 <h3>Stack</h3>
 <p>Marked frames entered the fingerprint.</p>
-${stackTable(s.frames, s.hashed, s.raw)}
+${stackTable(s.frames, s.hashed, s.raw, s.locations)}
 <h3>Breadcrumbs</h3>
 ${crumbs}
 <h3>State</h3>
