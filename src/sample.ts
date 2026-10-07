@@ -107,6 +107,45 @@ function modules(v: unknown): Module[] {
 	return out;
 }
 
+/** The key-value maps a sample's envelope carries, for comparing samples. */
+export interface SampleContext {
+	state: Record<string, string>;
+	env: Record<string, string>;
+}
+
+/**
+ * How many of a group's samples share each of the current sample's
+ * values. `total` counts the samples whose envelope could be read, the
+ * current one included; a key maps to how many of them carry the same
+ * value as the current sample.
+ */
+export interface SharedValues {
+	total: number;
+	state: Record<string, number>;
+	env: Record<string, number>;
+}
+
+/** Reads only the state and env of a sample's envelope; null when it is gone or not an envelope. */
+export async function loadContext(bucket: R2Bucket, row: SampleSummary): Promise<SampleContext | null> {
+	const object = await bucket.get(row.r2_key + ENVELOPE_OBJECT);
+	if (object === null) return null;
+	let json: unknown;
+	try {
+		json = await object.json();
+	} catch {
+		return null;
+	}
+	if (!record(json)) return null;
+	return { state: strings(json.state), env: strings(json.env) };
+}
+
+/** Counts, over `others` and the current sample itself, the samples that carry each of the current sample's values. */
+export function sharedValues(current: SampleContext, others: SampleContext[]): SharedValues {
+	const count = (pairs: Record<string, string>, pick: (c: SampleContext) => Record<string, string>) =>
+		Object.fromEntries(Object.entries(pairs).map(([k, v]) => [k, 1 + others.filter((c) => pick(c)[k] === v).length]));
+	return { total: 1 + others.length, state: count(current.state, (c) => c.state), env: count(current.env, (c) => c.env) };
+}
+
 /**
  * Loads one sample from the bucket: its envelope, parsed as ingest did,
  * every frame named from the app's tables, and the objects beside it.

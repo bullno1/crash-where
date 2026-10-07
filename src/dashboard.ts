@@ -10,7 +10,7 @@ import type { App } from "./env";
 import { layout } from "./layout";
 import { type Page, render } from "./page";
 import { compileSkipList, DEFAULT_SKIP_LIST, groupTitle, keptFrames } from "./grouping";
-import { loadSample, type SampleError, type SampleView } from "./sample";
+import { loadContext, loadSample, type SampleError, type SampleView, sharedValues, type SharedValues } from "./sample";
 import { attachmentKind, ENVELOPE_OBJECT, sampleKey } from "./samples";
 import type { GroupRelease, GroupSummary, SampleSummary, VersionSummary } from "./shard";
 import type { RawFrame } from "./symbols";
@@ -405,12 +405,24 @@ function stackTable(frames: RawFrame[], hashed: number[], raw: (string | null)[]
 </table>`;
 }
 
-/** Key-value pairs the game set, as a table, or a note that it set none. */
-function pairsTable(pairs: Record<string, string>): Page {
+/**
+ * Key-value pairs the game set, as a table, or a note that it set none.
+ * With `shared`, a third column says how many of the group's samples
+ * carry the same value, and a row every sample agrees on is bold.
+ */
+function pairsTable(pairs: Record<string, string>, shared: { total: number; counts: Record<string, number> } | null): Page {
 	const entries = Object.entries(pairs);
 	if (entries.length === 0) return html`<p><small>none</small></p>`;
+	const rows = entries.map(([k, v]) => {
+		if (shared === null) return html`<tr><th scope="row">${k}</th><td>${v}</td></tr>`;
+		const n = shared.counts[k] ?? 1;
+		return n === shared.total
+			? html`<tr><th scope="row"><strong>${k}</strong></th><td><strong>${v}</strong></td><td>${n} of ${shared.total}</td></tr>`
+			: html`<tr><th scope="row">${k}</th><td>${v}</td><td>${n} of ${shared.total}</td></tr>`;
+	});
 	return html`<table>
-<tbody>${entries.map(([k, v]) => html`<tr><th scope="row">${k}</th><td>${v}</td></tr>`)}</tbody>
+${shared === null ? "" : html`<thead><tr><th>Key</th><th>Value</th><th>Samples</th></tr></thead>`}
+<tbody>${rows}</tbody>
 </table>`;
 }
 
@@ -480,7 +492,7 @@ function versionsBlock(releases: GroupRelease[]): Page {
  * fingerprinted frames marked, then what the game recorded around it and
  * the files that came with it.
  */
-function sampleBody(path: string, s: SampleView): Page {
+function sampleBody(path: string, s: SampleView, shared: SharedValues | null): Page {
 	const last = s.breadcrumbs.at(-1)?.t ?? 0;
 	const thread = (th: number) => (th === s.thread ? html`<mark>${th}</mark>` : html`${th}`);
 	const crumbs = s.breadcrumbs.length === 0
@@ -511,9 +523,9 @@ ${stackTable(s.frames, s.hashed, s.raw)}
 <h3>Breadcrumbs</h3>
 ${crumbs}
 <h3>State</h3>
-${pairsTable(s.state)}
+${pairsTable(s.state, shared === null ? null : { total: shared.total, counts: shared.state })}
 <h3>Environment</h3>
-${pairsTable(s.env)}
+${pairsTable(s.env, shared === null ? null : { total: shared.total, counts: shared.env })}
 <h3>Modules</h3>
 ${modules}
 <h3>Files</h3>
@@ -573,8 +585,11 @@ async function crashOf(c: Context<App>, app: AppRow) {
  * One crash: its facts and the releases it was seen on, then what one of
  * its samples shows, the newest unless the query names another, then the
  * list of every sample the group holds, where the current one links to
- * its permanent URL. A group without samples shows its stored frames
- * instead. The permanent link names the sample, since the newest changes.
+ * its permanent URL. The state and env of the other samples are read too,
+ * so each value can say how many samples share it; with fewer than two
+ * envelopes readable the comparison is left out. A group without samples
+ * shows its stored frames instead. The permanent link names the sample,
+ * since the newest changes.
  */
 dashboard.get("/apps/:name/crashes/:id", async (c) => {
 	const app = await getApp(c.get("db"), c.req.param("name"));
@@ -588,10 +603,18 @@ dashboard.get("/apps/:name/crashes/:id", async (c) => {
 	const loaded = selected === null ? null : await loadSample(c.env.BUCKET, app.name, selected, skipList);
 	const sample = loaded?.ok ? loaded.sample : null;
 	const problem = loaded !== null && !loaded.ok ? loaded.reason : null;
+	let shared: SharedValues | null = null;
+	if (sample !== null) {
+		const others = await Promise.all(
+			found.samples.filter((s) => s.report_id !== sample.report_id).map((s) => loadContext(c.env.BUCKET, s))
+		);
+		const read = others.filter((o) => o !== null);
+		if (read.length > 0) shared = sharedValues(sample, read);
+	}
 	const path = crashPath(app.name, crash.id);
 	const permalink = new URL(c.req.url).origin + path + (selected === null ? "" : `?sample=${selected.report_id}`);
-	if (wantsJson(c)) return c.json({ app, crash, permalink, releases: found.releases, sample, problem, samples: found.samples });
-	const body = sample !== null ? sampleBody(path, sample) : problem !== null ? sampleProblem(problem) : storedFrames(crash);
+	if (wantsJson(c)) return c.json({ app, crash, permalink, releases: found.releases, sample, shared, problem, samples: found.samples });
+	const body = sample !== null ? sampleBody(path, sample, shared) : problem !== null ? sampleProblem(problem) : storedFrames(crash);
 	const who = c.get("identity");
 	return render(c, appPage(who.email ?? who.sub, app, "crashes", html`${crashHeader(crash)}
 ${versionsBlock(found.releases)}

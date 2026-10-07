@@ -307,8 +307,10 @@ describe("crash page", () => {
 		expect(html).toContain("<td>3</td>\n<td><mark><small>unnamed</small></mark></td>\n<td><code>?</code></td>\n<td><code>0x99</code></td>");
 		expect(html).toContain("<tr><td>-1.500 s</td><td>1</td><td>level</td><td>load forest_02</td></tr>");
 		expect(html).toContain("<tr><td>0.000 s</td><td><mark>7</mark></td><td>render</td><td>frame</td></tr>");
-		expect(html).toContain('<tr><th scope="row">level</th><td>forest_02</td></tr>');
-		expect(html).toContain('<tr><th scope="row">gpu_vendor</th><td>intel</td></tr>');
+		// The other sample is on another level but the same machine: shared values are bold with their share.
+		expect(html).toContain('<tr><th scope="row">level</th><td>forest_02</td><td>1 of 2</td></tr>');
+		expect(html).toContain('<tr><th scope="row"><strong>os</strong></th><td><strong>linux</strong></td><td>2 of 2</td></tr>');
+		expect(html).toContain('<tr><th scope="row"><strong>gpu_vendor</strong></th><td><strong>intel</strong></td><td>2 of 2</td></tr>');
 		expect(html).toContain("<tr><td><code>game.exe</code></td><td><code>" + BUILD_ID_HEX + "</code></td><td><code>0x400000</code></td><td>4096</td></tr>");
 		expect(html).toContain(`<li><a href="${CRASH}/samples/s-new/envelope.json">envelope.json</a></li>`);
 		expect(html).toContain(`<li><a href="${CRASH}/samples/s-new/1_c_s-new.log">1_c_s-new.log</a> <small>8 bytes</small></li>`);
@@ -325,7 +327,7 @@ describe("crash page", () => {
 		const CRASH = await crashApp(app);
 		const html = await (await page(app, "/crashes/3?sample=s-old")).text();
 		expect(html).toContain(`<link rel="canonical" href="https://dash.example${CRASH}?sample=s-old">`);
-		expect(html).toContain('<tr><th scope="row">level</th><td>cave_01</td></tr>');
+		expect(html).toContain('<tr><th scope="row">level</th><td>cave_01</td><td>1 of 2</td></tr>');
 		// A normalized message the page cannot overlay on the raw one is shown beside it.
 		expect(html).toContain("<pre>read 16 bytes at 0x10</pre>");
 		expect(html).toContain("<p>Normalized: <code>read &lt;N&gt; bytes</code></p>");
@@ -352,6 +354,10 @@ describe("crash page", () => {
 		const html = await (await page(app, "/crashes/3")).text();
 		expect(html).toContain("The envelope of this sample is no longer stored.");
 		expect(html).toContain(`<td><a href="${CRASH}?sample=s-old"><code>s-old</code></a></td>`);
+		// The other sample alone is readable, so it has nothing to compare with.
+		const other = await (await page(app, "/crashes/3?sample=s-old")).text();
+		expect(other).toContain('<tr><th scope="row">level</th><td>cave_01</td></tr>');
+		expect(other).not.toContain("<th>Samples</th>");
 	});
 	it("serves the sample's files as stored, attachments as downloads", async () => {
 		const app = "crash-files";
@@ -380,6 +386,7 @@ describe("crash page", () => {
 		expect(data.permalink).toBe(`https://dash.example${CRASH}?sample=s-new`);
 		expect(data.releases).toEqual([{ version: "1.0.0", channel: "stable", count: 5 }]);
 		expect(data.problem).toBeNull();
+		expect(data.shared).toEqual({ total: 2, state: { level: 1 }, env: { os: 2, gpu_vendor: 2 } });
 		expect(data.sample).toMatchObject({
 			report_id: "s-new", version: "1.0.0", channel: "stable", type: "SIGSEGV", thread: 7, message_raw: "read from 0x10",
 			user_key: "u1", sent_at: 1_750_000_000, message_norm: "read from <ADDR>",
