@@ -12,7 +12,7 @@ import { type Page, render } from "./page";
 import { compileSkipList, DEFAULT_SKIP_LIST, groupTitle, keptFrames } from "./grouping";
 import { loadContext, loadSample, type SampleError, type SampleView, sharedValues, type SharedValues } from "./sample";
 import { attachmentKind, ENVELOPE_OBJECT, sampleKey } from "./samples";
-import type { GroupRelease, GroupSummary, SampleSummary, VersionSummary } from "./shard";
+import type { GroupRelease, GroupSummary, GroupUsers, SampleSummary, VersionSummary } from "./shard";
 import type { RawFrame } from "./symbols";
 import { createToken, listTokens, MAX_LABEL, revokeToken, type TokenRow, validLabel } from "./tokens";
 
@@ -488,6 +488,33 @@ function versionsBlock(releases: GroupRelease[]): Page {
 }
 
 /**
+ * How the group's reports spread over installs: one line when every
+ * report came from another one, else the installs that repeat, each
+ * with a link to a sample of its own when the group holds one.
+ */
+function usersBlock(path: string, users: GroupUsers, samples: SampleSummary[]): Page {
+	const noun = (n: number, one: string, many: string) => `${n} ${n === 1 ? one : many}`;
+	const spread = html`<p>${noun(users.reports, "report", "reports")} from ${noun(users.users, "install", "installs")}${users.top.length === 0 ? ", none of them twice" : ""}.</p>`;
+	if (users.top.length === 0) return html`<h3>Users</h3>
+${spread}`;
+	const rows = users.top.map((u) => {
+		const sample = samples.find((s) => s.trust === u.trust && s.user_key === u.user_key);
+		return html`<tr>
+<td><code>${u.user_key}</code></td>
+<td>${u.count}</td>
+<td>${when(u.last_seen)}</td>
+<td>${sample === undefined ? html`<small>none</small>` : html`<a href="${path}?sample=${sample.report_id}"><code>${sample.report_id}</code></a>`}</td>
+</tr>`;
+	});
+	return html`<h3>Users</h3>
+${spread}
+<table>
+<thead><tr><th>Install</th><th>Reports</th><th>Last seen</th><th>Sample</th></tr></thead>
+<tbody>${rows}</tbody>
+</table>`;
+}
+
+/**
  * What a sample tells about the crash: the exception, the stack with the
  * fingerprinted frames marked, then what the game recorded around it and
  * the files that came with it.
@@ -559,7 +586,7 @@ function samplesSection(path: string, samples: SampleSummary[], shown: string | 
 	const rows = samples.map(
 		(s) => html`<tr>
 <td>${s.report_id === shown
-	? html`→ <a href="${path}?sample=${s.report_id}" aria-current="page"><code>${s.report_id}</code></a><br><small>install <code>${s.user_key}</code></small>`
+	? html`→ <a href="${path}?sample=${s.report_id}" aria-current="page"><code>${s.report_id}</code></a><br><small>install <code>${s.user_key}</code>${s.user_reports > 1 ? html` · ${s.user_reports} reports` : ""}</small>`
 	: html`<a href="${path}?sample=${s.report_id}"><code>${s.report_id}</code></a>`}</td>
 <td><code>${s.version}</code></td>
 <td>${s.channel}</td>
@@ -613,11 +640,14 @@ dashboard.get("/apps/:name/crashes/:id", async (c) => {
 	}
 	const path = crashPath(app.name, crash.id);
 	const permalink = new URL(c.req.url).origin + path + (selected === null ? "" : `?sample=${selected.report_id}`);
-	if (wantsJson(c)) return c.json({ app, crash, permalink, releases: found.releases, sample, shared, problem, samples: found.samples });
+	if (wantsJson(c)) {
+		return c.json({ app, crash, permalink, releases: found.releases, users: found.users, sample, shared, problem, samples: found.samples });
+	}
 	const body = sample !== null ? sampleBody(path, sample, shared) : problem !== null ? sampleProblem(problem) : storedFrames(crash);
 	const who = c.get("identity");
 	return render(c, appPage(who.email ?? who.sub, app, "crashes", html`${crashHeader(crash)}
 ${versionsBlock(found.releases)}
+${usersBlock(path, found.users, found.samples)}
 ${body}
 ${samplesSection(path, found.samples, selected?.report_id ?? null)}`, permalink));
 });
