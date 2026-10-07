@@ -124,10 +124,15 @@ describe("app page", () => {
 		});
 		const html = await (await page("page-full", "/versions")).text();
 		expect(html.indexOf("<code>1.1.0</code>")).toBeLessThan(html.indexOf("<code>1.0.0</code>"));
-		expect(html).toContain("beta <small>current</small>");
-		expect(html).toContain("stable <small>until 2025-06-15</small>");
+		expect(html).toContain("<div>beta</div>");
+		expect(html).toContain("<div>stable <small>until 2025-06-15</small></div>");
 		expect(html).toContain("<code>lin2</code>");
 		expect(html.indexOf("<code>lin2</code>")).toBeLessThan(html.indexOf("<code>win2</code>"));
+		// A link from a crash names a version, which the page marks.
+		const marked = await (await page("page-full", "/versions?version=1.0.0")).text();
+		expect(marked).toContain("<td>→ <code>1.0.0</code></td>");
+		expect(marked).toContain("<td><code>1.1.0</code></td>");
+		expect(html).not.toContain("→ ");
 	});
 	it("serves each page's data as JSON when asked", async () => {
 		await addApp("page-json", "Page JSON");
@@ -305,7 +310,7 @@ describe("crash page", () => {
 		expect(html).toContain("<h2>memory in render_mesh, from draw_scene</h2>");
 		expect(html).toContain("<code>memory</code> · first seen 2025-02-19 21:20:00 UTC · last seen 2025-06-15 15:06:40 UTC");
 		expect(html).toContain("5 reports in total");
-		expect(html).toContain("<tr><td><code>1.0.0</code></td><td>stable</td><td>5</td></tr>");
+		expect(html).toContain(`<tr><td><a href="/dashboard/apps/${app}/versions?version=1.0.0">1.0.0</a></td><td>stable</td><td>5</td></tr>`);
 		// One install repeats, and it has a sample to link to; the other does not repeat.
 		expect(html).toContain("<p>3 reports from 2 installs.</p>");
 		expect(html).toContain(`<td><code>u1</code></td>\n<td>2</td>\n<td>2025-06-15 15:06:40 UTC</td>\n<td><a href="${CRASH}?sample=s-new"><code>s-new</code></a></td>`);
